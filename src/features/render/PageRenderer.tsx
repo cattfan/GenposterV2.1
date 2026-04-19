@@ -161,7 +161,7 @@ function SlotRenderer({
             style={{
               width: "100%",
               height: "100%",
-              objectFit: slot.style?.fit ?? "cover",
+              objectFit: (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"],
               opacity: slot.style?.opacity ?? 1,
               display: "block",
             }}
