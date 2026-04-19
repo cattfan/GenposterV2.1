@@ -10,7 +10,12 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as TemplatesRouteImport } from './routes/templates'
+import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as PacksRouteImport } from './routes/packs'
+import { Route as HistoryRouteImport } from './routes/history'
+import { Route as GenerateRouteImport } from './routes/generate'
+import { Route as DataRouteImport } from './routes/data'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as TemplatesIdEditRouteImport } from './routes/templates.$id.edit'
 
@@ -19,9 +24,34 @@ const TemplatesRoute = TemplatesRouteImport.update({
   path: '/templates',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReportsRoute = ReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PacksRoute = PacksRouteImport.update({
   id: '/packs',
   path: '/packs',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HistoryRoute = HistoryRouteImport.update({
+  id: '/history',
+  path: '/history',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GenerateRoute = GenerateRouteImport.update({
+  id: '/generate',
+  path: '/generate',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DataRoute = DataRouteImport.update({
+  id: '/data',
+  path: '/data',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -37,34 +67,82 @@ const TemplatesIdEditRoute = TemplatesIdEditRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/data': typeof DataRoute
+  '/generate': typeof GenerateRoute
+  '/history': typeof HistoryRoute
   '/packs': typeof PacksRoute
+  '/reports': typeof ReportsRoute
+  '/settings': typeof SettingsRoute
   '/templates': typeof TemplatesRouteWithChildren
   '/templates/$id/edit': typeof TemplatesIdEditRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/data': typeof DataRoute
+  '/generate': typeof GenerateRoute
+  '/history': typeof HistoryRoute
   '/packs': typeof PacksRoute
+  '/reports': typeof ReportsRoute
+  '/settings': typeof SettingsRoute
   '/templates': typeof TemplatesRouteWithChildren
   '/templates/$id/edit': typeof TemplatesIdEditRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/data': typeof DataRoute
+  '/generate': typeof GenerateRoute
+  '/history': typeof HistoryRoute
   '/packs': typeof PacksRoute
+  '/reports': typeof ReportsRoute
+  '/settings': typeof SettingsRoute
   '/templates': typeof TemplatesRouteWithChildren
   '/templates/$id/edit': typeof TemplatesIdEditRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/packs' | '/templates' | '/templates/$id/edit'
+  fullPaths:
+    | '/'
+    | '/data'
+    | '/generate'
+    | '/history'
+    | '/packs'
+    | '/reports'
+    | '/settings'
+    | '/templates'
+    | '/templates/$id/edit'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/packs' | '/templates' | '/templates/$id/edit'
-  id: '__root__' | '/' | '/packs' | '/templates' | '/templates/$id/edit'
+  to:
+    | '/'
+    | '/data'
+    | '/generate'
+    | '/history'
+    | '/packs'
+    | '/reports'
+    | '/settings'
+    | '/templates'
+    | '/templates/$id/edit'
+  id:
+    | '__root__'
+    | '/'
+    | '/data'
+    | '/generate'
+    | '/history'
+    | '/packs'
+    | '/reports'
+    | '/settings'
+    | '/templates'
+    | '/templates/$id/edit'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DataRoute: typeof DataRoute
+  GenerateRoute: typeof GenerateRoute
+  HistoryRoute: typeof HistoryRoute
   PacksRoute: typeof PacksRoute
+  ReportsRoute: typeof ReportsRoute
+  SettingsRoute: typeof SettingsRoute
   TemplatesRoute: typeof TemplatesRouteWithChildren
 }
 
@@ -77,11 +155,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TemplatesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reports': {
+      id: '/reports'
+      path: '/reports'
+      fullPath: '/reports'
+      preLoaderRoute: typeof ReportsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/packs': {
       id: '/packs'
       path: '/packs'
       fullPath: '/packs'
       preLoaderRoute: typeof PacksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/history': {
+      id: '/history'
+      path: '/history'
+      fullPath: '/history'
+      preLoaderRoute: typeof HistoryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/generate': {
+      id: '/generate'
+      path: '/generate'
+      fullPath: '/generate'
+      preLoaderRoute: typeof GenerateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/data': {
+      id: '/data'
+      path: '/data'
+      fullPath: '/data'
+      preLoaderRoute: typeof DataRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -115,7 +228,12 @@ const TemplatesRouteWithChildren = TemplatesRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DataRoute: DataRoute,
+  GenerateRoute: GenerateRoute,
+  HistoryRoute: HistoryRoute,
   PacksRoute: PacksRoute,
+  ReportsRoute: ReportsRoute,
+  SettingsRoute: SettingsRoute,
   TemplatesRoute: TemplatesRouteWithChildren,
 }
 export const routeTree = rootRouteImport
