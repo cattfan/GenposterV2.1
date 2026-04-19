@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db } from "@/storage/db";
+import { db, saveBlob, getBlobURL } from "@/storage/db";
 import { nanoid } from "nanoid";
 import type { PageTemplate, Slot, Section } from "@/models";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,7 @@ import {
   ZoomOut,
   Save,
   ArrowLeft,
+  Upload,
 } from "lucide-react";
 import { toast } from "sonner";
 
