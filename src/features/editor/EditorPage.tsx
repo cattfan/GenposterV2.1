@@ -216,6 +216,10 @@ export function EditorPage() {
   const duplicateSlot = (slotId: string) => {
     const orig = draft.slots.find((s) => s.slotId === slotId);
     if (!orig) return;
+    if (orig.isUploadedBackground) {
+      toast.error("Không thể nhân bản ảnh nền upload");
+      return;
+    }
     const copy: Slot = { ...orig, slotId: nanoid(), x: orig.x + 24, y: orig.y + 24 };
     updateDraft((d) => d.slots.push(copy));
     setSelectedSlotId(copy.slotId);
@@ -261,8 +265,14 @@ export function EditorPage() {
 
   const save = async () => {
     if (!draft) return;
-    await db.pageTemplates.put({ ...draft, updatedAt: Date.now() });
-    toast.success("Đã lưu template");
+    // Khi lưu: bỏ nền canvas trắng để export trong suốt (chỉ giữ ảnh + block trên).
+    const toSave: PageTemplate = {
+      ...draft,
+      canvas: { ...draft.canvas, background: undefined, backgroundImage: undefined },
+      updatedAt: Date.now(),
+    };
+    await db.pageTemplates.put(toSave);
+    toast.success("Đã lưu template (nền canvas trong suốt)");
   };
 
   return (
