@@ -304,7 +304,25 @@ function EditorPage() {
             <Save className="size-4 mr-2" /> Lưu
           </Button>
         </div>
-        <div className="flex-1 overflow-auto p-8 grid place-items-center">
+        <div
+          className="flex-1 overflow-auto p-8 grid place-items-center relative"
+          onDragOver={(e) => {
+            if (Array.from(e.dataTransfer.types).includes("Files")) {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+            }
+          }}
+          onDrop={async (e) => {
+            const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
+            if (files.length === 0) return;
+            e.preventDefault();
+            let offset = 0;
+            for (const f of files) {
+              await addImageFromFile(f, 80 + offset, 80 + offset);
+              offset += 30;
+            }
+          }}
+        >
           <Canvas
             template={draft}
             zoom={zoom}
@@ -312,6 +330,15 @@ function EditorPage() {
             onSelect={setSelectedSlotId}
             onUpdateSlot={updateSlot}
           />
+          {draft.slots.length === 0 && (
+            <div className="absolute inset-8 pointer-events-none border-2 border-dashed border-muted-foreground/30 rounded-xl grid place-items-center">
+              <div className="text-center text-muted-foreground">
+                <Upload className="size-10 mx-auto mb-2 opacity-50" />
+                <p className="font-medium">Kéo & thả ảnh vào đây</p>
+                <p className="text-xs">hoặc bấm "Tải ảnh từ máy" ở thanh trái</p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
