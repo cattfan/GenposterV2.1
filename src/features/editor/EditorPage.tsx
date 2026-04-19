@@ -236,55 +236,118 @@ export function EditorPage() {
   };
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen relative">
+      {/* Left toggle (when collapsed) */}
+      {!leftOpen && (
+        <button
+          onClick={() => setLeftOpen(true)}
+          className="absolute left-0 top-1/2 -translate-y-1/2 z-20 bg-card border border-l-0 border-border rounded-r-md p-2 hover:bg-muted shadow"
+          title="Mở panel trái"
+        >
+          <PanelLeftOpen className="size-4" />
+        </button>
+      )}
+
       {/* Left: blocks panel */}
-      <aside className="w-56 border-r border-border bg-card flex flex-col">
-        <div className="p-3 border-b">
-          <Button asChild variant="ghost" size="sm" className="w-full justify-start">
-            <Link to="/templates">
-              <ArrowLeft className="size-4 mr-2" /> Quay lại
-            </Link>
-          </Button>
-        </div>
-        <div className="p-3 space-y-2">
-          <div className="text-xs font-semibold text-muted-foreground uppercase">Thêm block</div>
-          <Button variant="outline" size="sm" className="w-full justify-start" onClick={() => addSlot("text")}>
-            <Type className="size-4 mr-2" /> Text
-          </Button>
-          <Button variant="outline" size="sm" className="w-full justify-start" onClick={() => addSlot("image")}>
-            <ImageIcon className="size-4 mr-2" /> Image (placeholder)
-          </Button>
-          <Button variant="default" size="sm" className="w-full justify-start" onClick={handleUploadClick}>
-            <Upload className="size-4 mr-2" /> Tải ảnh từ máy
-          </Button>
-          <Button variant="outline" size="sm" className="w-full justify-start" onClick={() => addSlot("shape")}>
-            <Square className="size-4 mr-2" /> Shape
-          </Button>
-          <Button variant="outline" size="sm" className="w-full justify-start" onClick={() => addSlot("section")}>
-            <LayersIcon className="size-4 mr-2" /> Section
-          </Button>
-        </div>
-        <div className="p-3 border-t flex-1 overflow-y-auto">
-          <div className="text-xs font-semibold text-muted-foreground uppercase mb-2">Layers</div>
-          <div className="space-y-1">
-            {draft.slots
-              .slice()
-              .sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0))
-              .map((s) => (
-                <button
-                  key={s.slotId}
-                  onClick={() => setSelectedSlotId(s.slotId)}
-                  className={
-                    "w-full text-left px-2 py-1 text-xs rounded " +
-                    (s.slotId === selectedSlotId ? "bg-primary text-primary-foreground" : "hover:bg-muted")
-                  }
-                >
-                  [{s.kind}] {s.staticText?.slice(0, 18) ?? s.slotId.slice(0, 6)}
-                </button>
-              ))}
+      {leftOpen && (
+        <aside className="w-56 border-r border-border bg-card flex flex-col shrink-0">
+          <div className="p-3 border-b flex items-center gap-1">
+            <Button asChild variant="ghost" size="sm" className="flex-1 justify-start">
+              <Link to="/templates">
+                <ArrowLeft className="size-4 mr-2" /> Quay lại
+              </Link>
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8 shrink-0"
+              onClick={() => setLeftOpen(false)}
+              title="Thu gọn"
+            >
+              <PanelLeftClose className="size-4" />
+            </Button>
           </div>
-        </div>
-      </aside>
+          <div className="p-3 space-y-2">
+            <div className="text-xs font-semibold text-muted-foreground uppercase">Thêm block</div>
+            <Button variant="outline" size="sm" className="w-full justify-start" onClick={() => addSlot("text")}>
+              <Type className="size-4 mr-2" /> Text
+            </Button>
+            <Button variant="outline" size="sm" className="w-full justify-start" onClick={() => addSlot("image")}>
+              <ImageIcon className="size-4 mr-2" /> Image (placeholder)
+            </Button>
+            <Button variant="default" size="sm" className="w-full justify-start" onClick={handleUploadClick}>
+              <Upload className="size-4 mr-2" /> Tải ảnh từ máy
+            </Button>
+
+            <div className="text-xs font-semibold text-muted-foreground uppercase pt-2">Shapes</div>
+            <div className="grid grid-cols-2 gap-1">
+              <Button variant="outline" size="sm" onClick={() => addSlot("shape", "rectangle")} title="Hình vuông">
+                <Square className="size-4 mr-1" /> Vuông
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => addSlot("shape", "circle")} title="Hình tròn">
+                <Circle className="size-4 mr-1" /> Tròn
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => addSlot("shape", "triangle")} title="Tam giác">
+                <Triangle className="size-4 mr-1" /> Tam giác
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => addSlot("shape", "line")} title="Đường kẻ">
+                <Minus className="size-4 mr-1" /> Line
+              </Button>
+            </div>
+
+            <Button variant="outline" size="sm" className="w-full justify-start mt-2" onClick={() => addSlot("section")}>
+              <LayersIcon className="size-4 mr-2" /> Section
+            </Button>
+          </div>
+          <div className="p-3 border-t flex-1 overflow-y-auto">
+            <div className="text-xs font-semibold text-muted-foreground uppercase mb-2">
+              Layers ({draft.slots.length})
+            </div>
+            <div className="space-y-1">
+              {draft.slots
+                .slice()
+                .sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0))
+                .map((s) => {
+                  const isSel = s.slotId === selectedSlotId;
+                  return (
+                    <div
+                      key={s.slotId}
+                      className={
+                        "group flex items-center gap-1 px-2 py-1 text-xs rounded " +
+                        (isSel ? "bg-primary text-primary-foreground" : "hover:bg-muted")
+                      }
+                    >
+                      <button
+                        onClick={() => setSelectedSlotId(s.slotId)}
+                        className="flex-1 text-left truncate"
+                      >
+                        [{s.kind}
+                        {s.kind === "shape" && s.shapeKind ? `:${s.shapeKind}` : ""}]{" "}
+                        {s.staticText?.slice(0, 14) ?? s.slotId.slice(0, 6)}
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteSlot(s.slotId);
+                        }}
+                        className={
+                          "opacity-0 group-hover:opacity-100 p-0.5 rounded " +
+                          (isSel ? "hover:bg-primary-foreground/20" : "hover:bg-destructive hover:text-destructive-foreground")
+                        }
+                        title="Xoá layer"
+                      >
+                        <Trash2 className="size-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+              {draft.slots.length === 0 && (
+                <p className="text-xs text-muted-foreground italic">Chưa có layer nào</p>
+              )}
+            </div>
+          </div>
+        </aside>
+      )}
 
       {/* Center: canvas */}
       <div className="flex-1 flex flex-col bg-muted/30">
