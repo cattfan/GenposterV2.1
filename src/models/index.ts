@@ -130,6 +130,8 @@ export interface Slot {
   repeaterGap?: number;
   // section ref
   sectionRefId?: ID;
+  // ảnh upload từ máy → mặc định là layer nền, không cho nhân bản
+  isUploadedBackground?: boolean;
 }
 
 export type PartnerMode = "strict_partner" | "priority_partner" | "balanced_partner";

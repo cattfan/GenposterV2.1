@@ -183,9 +183,8 @@ export function EditorPage() {
       zIndex: 0,
       staticImage: url,
       style: { fit: "cover", borderRadius: 0 },
-      // Đánh dấu đây là ảnh nền upload, dùng để chặn nhân bản
-      metadata: { uploadedBackground: true } as any,
-    } as Slot;
+      isUploadedBackground: true,
+    };
     updateDraft((d) => d.slots.push(newSlot));
     setSelectedSlotId(newSlot.slotId);
     toast.success(`Đã thêm ảnh: ${file.name}`);
