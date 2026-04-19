@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/storage/db";
 import { Button } from "@/components/ui/button";
@@ -13,8 +13,13 @@ export const Route = createFileRoute("/templates")({
 });
 
 function TemplatesPage() {
+  const location = useLocation();
   const navigate = useNavigate();
   const tpls = useLiveQuery(() => db.pageTemplates.orderBy("updatedAt").reverse().toArray(), []);
+
+  if (location.pathname !== "/templates") {
+    return <Outlet />;
+  }
 
   const createNew = async () => {
     const id = nanoid();
