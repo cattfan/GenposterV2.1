@@ -1,8 +1,9 @@
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, saveBlob, getBlobURL } from "@/storage/db";
 import { nanoid } from "nanoid";
+import { Canvas, NumField } from "@/features/editor/EditorCanvas";
 import type { PageTemplate, Slot, Section } from "@/models";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
