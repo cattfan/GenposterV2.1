@@ -674,8 +674,8 @@ export function EditorPage() {
                       )}
                     </div>
                     <Select
-                      value={selectedSlot.bindingPath ?? ""}
-                      onValueChange={(v) => updateSlot(selectedSlot.slotId, { bindingPath: v || undefined })}
+                      value={selectedSlot.bindingPath ?? "_static"}
+                      onValueChange={(v) => updateSlot(selectedSlot.slotId, { bindingPath: v === "_static" ? undefined : v })}
                     >
                       <SelectTrigger className="h-8"><SelectValue placeholder="Cố định" /></SelectTrigger>
                       <SelectContent>
