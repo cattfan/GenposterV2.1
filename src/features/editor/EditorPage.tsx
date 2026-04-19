@@ -528,6 +528,12 @@ export function EditorPage() {
           <Button variant="ghost" size="icon" onClick={() => setZoom((z) => Math.min(3, z + 0.1))} title="Zoom in (Ctrl + scroll)">
             <ZoomIn className="size-4" />
           </Button>
+          <Button variant="ghost" size="icon" onClick={undo} title="Hoàn tác (Ctrl+Z)">
+            <Undo2 className="size-4" />
+          </Button>
+          <Button variant="ghost" size="icon" onClick={redo} title="Làm lại (Ctrl+Shift+Z)">
+            <Redo2 className="size-4" />
+          </Button>
           <Button onClick={save} size="sm">
             <Save className="size-4 mr-2" /> Lưu
           </Button>
