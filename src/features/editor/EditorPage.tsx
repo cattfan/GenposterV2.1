@@ -624,6 +624,74 @@ export function EditorPage() {
                   <NumField label="Z" value={selectedSlot.zIndex ?? 0} onChange={(v) => updateSlot(selectedSlot.slotId, { zIndex: v })} />
                 </div>
 
+                {/* Transform: rotate 90°, flip, opacity */}
+                <div className="border-t pt-2 space-y-2">
+                  <Label className="text-xs uppercase text-muted-foreground">Biến đổi</Label>
+                  <div className="flex gap-1">
+                    <Button size="sm" variant="outline" className="flex-1"
+                      onClick={() => updateSlot(selectedSlot.slotId, { rotation: ((selectedSlot.rotation ?? 0) - 90 + 360) % 360 })}
+                      title="Xoay -90°">
+                      <RotateCcw className="size-3" />
+                    </Button>
+                    <Button size="sm" variant="outline" className="flex-1"
+                      onClick={() => updateSlot(selectedSlot.slotId, { rotation: ((selectedSlot.rotation ?? 0) + 90) % 360 })}
+                      title="Xoay +90°">
+                      <RotateCw className="size-3" />
+                    </Button>
+                    <Button size="sm" variant={selectedSlot.style?.flipH ? "default" : "outline"} className="flex-1"
+                      onClick={() => updateSlotStyle(selectedSlot.slotId, { flipH: !selectedSlot.style?.flipH })}
+                      title="Lật ngang">
+                      <FlipHorizontal className="size-3" />
+                    </Button>
+                    <Button size="sm" variant={selectedSlot.style?.flipV ? "default" : "outline"} className="flex-1"
+                      onClick={() => updateSlotStyle(selectedSlot.slotId, { flipV: !selectedSlot.style?.flipV })}
+                      title="Lật dọc">
+                      <FlipVertical className="size-3" />
+                    </Button>
+                  </div>
+                  <div>
+                    <Label className="text-xs">Opacity ({Math.round((selectedSlot.style?.opacity ?? 1) * 100)}%)</Label>
+                    <Slider
+                      value={[(selectedSlot.style?.opacity ?? 1) * 100]}
+                      min={0} max={100} step={1}
+                      onValueChange={(v) => updateSlotStyle(selectedSlot.slotId, { opacity: v[0] / 100 })}
+                    />
+                  </div>
+                </div>
+
+                {/* Bind data — chỉ cho text & image */}
+                {(selectedSlot.kind === "text" || selectedSlot.kind === "image") && (
+                  <div className="border-t pt-2 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs uppercase text-muted-foreground">
+                        {slotHasBinding(selectedSlot) ? <><Link2 className="size-3 inline mr-1 text-purple-500" /> Đã liên kết</> : "Nguồn dữ liệu"}
+                      </Label>
+                      {slotHasBinding(selectedSlot) && (
+                        <Button size="sm" variant="ghost" className="h-6 px-2 text-xs"
+                          onClick={() => updateSlot(selectedSlot.slotId, { bindingPath: undefined })}>
+                          <Link2Off className="size-3 mr-1" /> Xoá liên kết
+                        </Button>
+                      )}
+                    </div>
+                    <Select
+                      value={selectedSlot.bindingPath ?? ""}
+                      onValueChange={(v) => updateSlot(selectedSlot.slotId, { bindingPath: v || undefined })}
+                    >
+                      <SelectTrigger className="h-8"><SelectValue placeholder="Cố định" /></SelectTrigger>
+                      <SelectContent>
+                        {(selectedSlot.kind === "text" ? TEXT_BINDING_OPTIONS : IMAGE_BINDING_OPTIONS).map((o) => (
+                          <SelectItem key={o.value || "_static"} value={o.value || "_static"}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[10px] text-muted-foreground italic">
+                      Block không liên kết = giữ nội dung tĩnh khi generate. Block đã liên kết = nhận dữ liệu từ entity.
+                    </p>
+                  </div>
+                )}
+
                 {selectedSlot.kind === "text" && (
                   <div className="space-y-2">
                     <Label>Văn bản</Label>
