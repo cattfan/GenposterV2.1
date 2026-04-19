@@ -117,6 +117,8 @@ export function EditorPage() {
 
   const addSlot = (kind: Slot["kind"], shapeKind?: NonNullable<Slot["shapeKind"]>) => {
     const isLine = kind === "shape" && (shapeKind === "line" || shapeKind === "divider");
+    // Mọi block (text/shape/section/image-placeholder) đều ở cùng tầng zIndex = 1.
+    // Ảnh upload từ máy mới là layer nền (zIndex = 0).
     const newSlot: Slot = {
       slotId: nanoid(),
       kind,
@@ -124,7 +126,7 @@ export function EditorPage() {
       y: 100,
       width: kind === "text" ? 600 : isLine ? 400 : 300,
       height: kind === "text" ? 80 : isLine ? 20 : 300,
-      zIndex: (draft.slots.length || 0) + 1,
+      zIndex: 1,
       ...(kind === "text" ? { staticText: "Văn bản mới", style: { fontSize: 48, fontWeight: 700, color: "#0f172a" } } : {}),
       ...(kind === "image" ? { staticImage: "", style: { fit: "cover", borderRadius: 12 } } : {}),
       ...(kind === "shape"
@@ -170,6 +172,7 @@ export function EditorPage() {
     const h = Math.max(20, Math.round(dim.h * scale));
     const x = dropX ?? Math.max(0, Math.round((cw - w) / 2));
     const y = dropY ?? Math.max(0, Math.round((ch - h) / 2));
+    // Ảnh upload từ máy = layer NỀN, luôn nằm dưới mọi block khác.
     const newSlot: Slot = {
       slotId: nanoid(),
       kind: "image",
@@ -177,10 +180,12 @@ export function EditorPage() {
       y,
       width: w,
       height: h,
-      zIndex: (draft.slots.length || 0) + 1,
+      zIndex: 0,
       staticImage: url,
-      style: { fit: "cover", borderRadius: 8 },
-    };
+      style: { fit: "cover", borderRadius: 0 },
+      // Đánh dấu đây là ảnh nền upload, dùng để chặn nhân bản
+      metadata: { uploadedBackground: true } as any,
+    } as Slot;
     updateDraft((d) => d.slots.push(newSlot));
     setSelectedSlotId(newSlot.slotId);
     toast.success(`Đã thêm ảnh: ${file.name}`);
