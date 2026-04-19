@@ -94,6 +94,7 @@ function SlotEditor({
   const startMove = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
+      e.preventDefault();
       onSelect();
       const startX = e.clientX;
       const startY = e.clientY;
@@ -192,6 +193,8 @@ function SlotEditor({
       <img
         src={slot.staticImage}
         alt=""
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
         style={{
           width: "100%",
           height: "100%",
@@ -199,6 +202,8 @@ function SlotEditor({
             ? "fill"
             : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"],
           borderRadius: (slot.style?.borderRadius ?? 0) * zoom,
+          userSelect: "none",
+          pointerEvents: "none",
         }}
       />
     ) : (
