@@ -1,96 +1,73 @@
+## Mục tiêu
 
-# Kế hoạch xây dựng — Content Pack Generator (tiếng Việt, local-first)
+1. **Editor mạnh như công cụ chỉnh sửa ảnh**: thêm crop ảnh, filters (brightness/contrast/saturation/blur), flip, rotate nhanh, opacity, drop shadow, align/distribute, group, lock/unlock, undo/redo, snap/guideline.
+2. **Đổ dữ liệu theo kiểu "click-to-bind"**: trên editor, người dùng click vào block muốn nhận data → gán "trường data" (vd: `entity.name`, `entity.address`, `asset.image`). Block nào không gán thì giữ nguyên nội dung tĩnh khi generate. Bỏ flow "section" phức tạp cho luồng cơ bản (vẫn giữ song song).
 
-## 1. Định hướng tổng thể
-- **Stack**: React + TypeScript + TanStack Router (đã có sẵn), TailwindCSS, shadcn/ui, Zustand cho state, Dexie cho IndexedDB.
-- **Render PNG**: HTML/CSS + `html-to-image` (WYSIWYG editor = renderer, đảm bảo preview giống ảnh xuất).
-- **Editor**: Canvas kéo thả tự do (free-form), zoom/pan, snap guide, resize/rotate/group, property panel.
-- **Khổ ảnh**: cho phép tự nhập khi tạo template; gợi ý preset 1080×1350, 1080×1920, 1080×1080.
-- **Caption**: chỉ generator local rules tiếng Việt; màn Cài đặt vẫn để chỗ trống cho API key sau này.
-- **Không auth, không backend, không cloud DB.** Toàn bộ dữ liệu trong IndexedDB; export/import JSON.
-- **UI 100% tiếng Việt.**
+## Thay đổi chính
 
-## 2. Kiến trúc thư mục
+### A. Editor — bổ sung thao tác ảnh chuyên nghiệp
+
+**File: `src/features/editor/EditorCanvas.tsx`, `EditorPage.tsx`, `src/models/index.ts**`
+
+- **Mở rộng `SlotStyle**`: thêm `brightness`, `contrast`, `saturate`, `blur`, `hueRotate`, `grayscale`, `flipH`, `flipV`, `shadowColor`, `shadowBlur`, `shadowX`, `shadowY`. Render bằng CSS `filter` + `transform: scale(±1, ±1)`.
+- **Crop ảnh**: thêm field `crop?: { x, y, w, h }` (% so với ảnh gốc). Double-click ảnh → mở mode crop với khung kéo riêng, ESC/Enter để thoát.
+- **Rotate nhanh**: nút 90° trái/phải trong panel phải; thanh kéo rotate khi block được chọn (handle ở phía trên block).
+- **Opacity slider** cho mọi block.
+- **Align tools**: align left/center/right/top/middle/bottom so với canvas (toolbar nổi khi chọn block).
+- **Snap & guideline**: khi kéo block, hiển thị đường gióng đỏ khi cạnh/tâm trùng cạnh/tâm canvas hoặc block khác (ngưỡng ±6px / zoom).
+- **Lock/unlock layer** (icon trong layer list); block lock không kéo/resize được.
+- **Undo/Redo** (`Ctrl+Z`, `Ctrl+Shift+Z`): lưu lịch sử `draft` dạng stack tối đa 50 bước.
+- **Group/ungroup**: chọn nhiều block (Shift+click) → `Ctrl+G` để group; di chuyển/xoá đồng bộ.
+
+### B. Click-to-bind data
+
+**File mới: `src/engines/binding/dataBinding.ts**` + sửa `EditorCanvas.tsx`, `PageRenderer.tsx`, `generate.ts`
+
+- **Mô hình**: dùng lại field có sẵn `slot.bindingPath`. Không bind = giữ `staticText`/`staticImage`. Có bind = render từ entity.
+- **UI bind trong panel phải**:
+  - Khi chọn block `text`: dropdown "Nguồn dữ liệu" gồm `Cố định | entity.name | entity.address | entity.phone | entity.priceRange | entity.style | entity.openingHours | entity.categoryMain`. Chọn → hiện badge tím "🔗 entity.name" trên block và preview placeholder `{{entity.name}}`.
+  - Khi chọn block `image`: dropdown "Nguồn ảnh" gồm `Cố định (URL/upload) | Ảnh chính của entity | Ảnh role: cover/facade/food_closeup/...`. Lưu vào `slot.bindingPath = "asset.byRole:cover"` và `slot.allowedAssetRoles`.
+  - Nút **"Xoá liên kết"** để quay lại tĩnh.
+- **Visual cue trên canvas**: block đã bind viền tím nét đứt + chip "🔗 field" góc trên trái; block tĩnh giữ outline cũ.
+- **Generate flow mới (`generate.ts`)**:
+  - Mỗi page template + 1 entity (lặp qua danh sách entity active đã filter) → 1 page render.
+  - Khi render block có `bindingPath`, lấy giá trị từ entity tương ứng; block không bind → giữ nguyên `staticText`/`staticImage`.
+  - Nếu page không có block nào bind → render đúng 1 lần (template tĩnh).
+- **PageRenderer**: thêm prop `entity?: Entity` + `entityAssets?: Asset[]`; resolver `resolveSlotValue(slot, entity, assets)` xử lý `entity.<field>` và `asset.byRole:<role>` / `asset.cover`.
+- **Trang `/generate**`:
+  - Bỏ yêu cầu chọn pack phức tạp cho luồng cơ bản: thêm chế độ **"Generate theo entity"** — chọn 1 page template (hoặc pack) + filter entities (category, partner) → preview tất cả page tạo ra.
+  - Mỗi card page hiển thị tên entity tương ứng.
+
+### C. Tinh chỉnh nhỏ
+
+- Layer list hiển thị icon 🔗 nếu block có `bindingPath`.
+- Lưu template không xoá `bindingPath`.
+- Hotkey: `R` = rotate 15°, `[`/`]` = z-index, `Ctrl+D` = duplicate (trừ ảnh nền).
+
+## Sơ đồ luồng đổ dữ liệu
+
+```text
+[Editor]
+  Block text "Tên quán" ──click──▶ Dropdown chọn entity.name ──▶ slot.bindingPath="entity.name"
+  Block image hero ─────click──▶ Dropdown chọn asset role:cover ──▶ slot.bindingPath="asset.byRole:cover"
+  Block "Liên hệ" (tĩnh) ──────────────────────────────────▶ giữ nguyên staticText
+
+[Generate]
+  entities (đã filter) ──▶ for each entity:
+                            renderPage(template, entity, assets[entity])
+                            ▼
+                          Slot có bindingPath → resolve(entity)
+                          Slot không bind   → giữ static
 ```
-src/
-  models/           # types: Entity, Asset, Slot, Section, PageTemplate, PackTemplate, Job, Manifest, Caption
-  storage/          # Dexie DB, repositories, import/export project JSON
-  features/
-    editor/         # canvas free-form, blocks, property panel, snap, zoom
-    templates/      # CRUD page templates
-    packs/          # pack builder
-    data/           # CSV/JSON import, Google Sheets CSV fetch, normalize, mapping UI, entity/asset viewer
-    generate/       # selection engine, scoring, anti-repeat, asset-safe binding, preview, health score
-    reports/        # manifest, partners summary/csv
-    captions/       # rules-based VN caption generator
-    history/        # job history
-  engines/
-    selection/      # PartnerAwareSelectionEngine (priorityShuffleV2)
-    scoring/
-    binding/        # asset-safe binding
-    render/         # html-to-image + ZIP
-    normalize/      # field aliases
-  utils/
-  routes/           # TanStack routes
-  components/ui/    # shadcn
-```
 
-## 3. Data model (TypeScript) — các entity chính
-Entity, Asset (gắn entityId), Slot, Section, PageTemplate (canvas+elements+slots+sections), PackTemplate (orderedPages, captionProfile), GenerationJob, RenderManifest (preview vs final), CaptionVariant — đúng theo spec bạn đã liệt kê.
+## Files dự kiến chỉnh / tạo
 
-## 4. Các màn hình (routes)
-1. `/` Dashboard — danh sách project local, tạo mới, mở demo, import/export project JSON.
-2. `/templates` — list page templates, tạo/sửa/duplicate/xóa.
-3. `/templates/$id/edit` — Page Template Editor (canvas free-form).
-4. `/packs` — list & builder ghép page templates thành pack.
-5. `/data` — import CSV/JSON/ảnh, paste Google Sheet link, mapping fields, xem entities/assets normalize.
-6. `/generate` — chọn pack, cấu hình, chạy engine, preview pages với health score, pin/exclude/regenerate, tick chọn export.
-7. `/reports` — partners summary/CSV, manifest preview vs final, caption variants, copy/export.
-8. `/history` — danh sách job local.
-9. `/settings` — caption provider (chỉ local Phase 1, có chỗ cho API key), reset data, import/export.
+- Chỉnh: `src/models/index.ts`, `src/features/editor/EditorPage.tsx`, `src/features/editor/EditorCanvas.tsx`, `src/features/render/PageRenderer.tsx`, `src/engines/selection/generate.ts`, `src/routes/generate.tsx`.
+- Tạo: `src/engines/binding/dataBinding.ts` (resolver), `src/features/editor/CropOverlay.tsx`, `src/features/editor/useHistory.ts`.
 
-## 5. Page Template Editor (free-form)
-- Canvas SVG/HTML với zoom (Ctrl+wheel), pan (space-drag).
-- Blocks: Text, Image, Shape (rect/circle/line), Badge, Icon, Divider, Group, Section container, Slot repeater, Section list repeater, Card panel, Section title pill, Price badge, Bullet list.
-- Thao tác: select, multi-select, drag, resize 8 handle, rotate, snap-to-edge/center, align, z-index, lock, group/ungroup, duplicate, delete.
-- Property panel: text style đầy đủ (font, size, weight, color, line-height, letter-spacing, align, shadow, stroke, max-lines, overflow), image style (cover/contain, radius, shadow, overlay, allowedAssetRoles), binding path tới data field.
-- Component preset có sẵn: Cover title, Subtitle, Price badge, Rounded thumb, Itinerary item, Section title pill, Board panel, Bullet list item, Hotline row, Address row.
+## Phạm vi ưu tiên (đề xuất chia 2 đợt)
 
-## 6. Data import & Normalize
-- Parser CSV (papaparse), JSON, ảnh local → IndexedDB blob.
-- Google Sheets: nhận link share → tự convert sang `export?format=csv` & `gviz/tq?tqx=out:csv`; nếu fail hiển thị hướng dẫn publish CSV bằng tiếng Việt.
-- Normalize: field alias map (partner/name/address/image/category…), tách asset theo entityId, gán role mặc định, phát hiện ảnh URL/local.
-- Mapping UI: bảng cột nguồn ↔ field chuẩn, preview 5 dòng đầu.
+- **Đợt 1 (làm trước)**: filters/opacity/rotate-nhanh/flip + crop cơ bản + undo-redo + click-to-bind (text + image) + generate theo entity.
+- **Đợt 2 (sau)**: snap/guideline, group/ungroup, align toolbar, lock layer, hotkey nâng cao.
 
-## 7. Engines (logic thật, không mock)
-- **PartnerAwareSelectionEngine (priorityShuffleV2)**: filter theo pack/page/section intent → scoring → áp partner mode (`strict_partner` / `priority_partner` / `balanced_partner`) → anti-repeat 4 mức (entity trong page, giữa pages, asset, semantic) → trả về kèm reason codes.
-- **Scoring**: partner boost, category/subcategory match, section match, campaign match, asset quality, diversity, repetition penalty, conflict penalty.
-- **Asset-safe binding**: chọn entity TRƯỚC, asset chỉ được lấy trong pool thuộc entityId đó. Mọi binding log assetId. Có debug overlay hiện entityId/assetId/partner.
-- **Validation & Health Score**: data/image/layout validation, overflow policy (shrink/ellipsis/max-lines/hard-fail), health 0–100 và trạng thái accepted/rejected/needs_fix.
-
-## 8. Preview & Export
-- 2 lớp preview: Structural (data/section/partner đủ chưa) + Visual (thumbnail thật).
-- Filter: tất cả / đang chọn / có lỗi / có đối tác. Tick từng page hoặc tất cả. Regenerate riêng từng page.
-- Manual override: pin/exclude entity & asset, lock section.
-- Export: PNG từng page (html-to-image), ZIP tất cả selected (jszip), project JSON, reports, captions.
-
-## 9. Reports & Captions
-- `partners_summary.txt` (đọc nhanh), `partners_detailed.csv`, `render_manifest.json` (preview), `final_export_manifest.json` (chỉ pages selected).
-- Caption generator local rules tiếng Việt: 4 mode (`save_post`, `newbie_guide`, `review_pack`, `partner_soft`). Headline UPPERCASE <90 ký tự, body <300, đúng 5 hashtag (3 cố định: #riviudalat #dalat #dalatreview + 2 động từ pack). Đọc từ `final_export_manifest`, **không** đọc raw sheet. 3–5 variants/lần.
-
-## 10. Demo seed
-- 1 project demo với: 3 page template (cover, itinerary day, board mixed-section), 1 pack template, ~12 entities (quán ăn/cafe/homestay/thuê xe/checkin) trong đó 4 entity là đối tác, ~30 assets có entityId. Mở app là generate được ngay.
-
-## 11. Phase build
-- **Phase 1** (lớn nhất): models + Dexie storage + seed demo + page editor free-form + pack builder + data import/normalize + entity/asset viewer.
-- **Phase 2**: selection engine + partner logic + asset-safe binding + preview + health score + export PNG/ZIP.
-- **Phase 3**: reports/manifests + caption generator + manual overrides + job history + polish.
-
-## 12. Rủi ro & quyết định đã chốt
-- Editor free-form là phần nặng nhất → dùng cấu trúc element-tree đơn giản (absolute positioning) thay vì SVG phức tạp; đủ cho social image, vẫn export pixel-perfect qua html-to-image.
-- Google Sheets không OAuth → chỉ hoạt động với sheet đã publish/public; có hướng dẫn rõ ràng tiếng Việt khi fail.
-- html-to-image cần font load xong trước khi snapshot → preload + `document.fonts.ready` trước export.
-- IndexedDB blob ảnh có thể lớn → có nút "Dọn dẹp dữ liệu" trong Cài đặt.
-
-## 13. Tiêu chí hoàn thành
-Đáp ứng đủ 13 tiêu chí trong spec: tạo/sửa template, ghép pack, import data + Google Sheet, normalize, generate preview nhiều page, partner priority chạy đúng, không lệch ảnh entity, chọn page export, xuất PNG/ZIP/report/captions, UI tiếng Việt, không auth, lưu local, có demo sẵn.
+Xác nhận để mình bắt đầu Đợt 1 nhé.
