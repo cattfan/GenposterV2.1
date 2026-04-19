@@ -27,7 +27,6 @@ import {
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/templates/$id/edit")({
-  codeSplitGroupings: [],
   component: EditorPage,
 });
 
