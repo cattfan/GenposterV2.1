@@ -594,6 +594,7 @@ export function EditorPage() {
                       <SelectContent>
                         <SelectItem value="rectangle">rectangle</SelectItem>
                         <SelectItem value="circle">circle</SelectItem>
+                        <SelectItem value="triangle">triangle</SelectItem>
                         <SelectItem value="line">line</SelectItem>
                         <SelectItem value="badge">badge</SelectItem>
                       </SelectContent>
