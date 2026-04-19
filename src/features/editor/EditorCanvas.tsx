@@ -203,8 +203,7 @@ function SlotEditor({
             : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"],
           borderRadius: (slot.style?.borderRadius ?? 0) * zoom,
           userSelect: "none",
-          WebkitUserDrag: "none",
-        }}
+          pointerEvents: "none",
       />
     ) : (
       <div className="w-full h-full bg-muted/50 grid place-items-center text-xs text-muted-foreground">
