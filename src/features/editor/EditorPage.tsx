@@ -47,6 +47,27 @@ export function EditorPage() {
     if (tpl) setDraft(JSON.parse(JSON.stringify(tpl)));
   }, [tpl]);
 
+  // Keyboard: Delete/Backspace removes selected slot
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!selectedSlotId) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        setDraft((prev) => {
+          if (!prev) return prev;
+          const next = JSON.parse(JSON.stringify(prev)) as PageTemplate;
+          next.slots = next.slots.filter((s) => s.slotId !== selectedSlotId);
+          return next;
+        });
+        setSelectedSlotId(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedSlotId]);
+
   if (!draft) {
     return <div className="p-8 text-muted-foreground">Đang tải...</div>;
   }
