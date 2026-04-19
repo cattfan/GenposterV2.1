@@ -924,3 +924,29 @@ export function EditorPage() {
     </div>
   );
 }
+
+function FilterSlider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div>
+      <Label className="text-xs flex justify-between">
+        <span>{label}</span>
+        <span className="text-muted-foreground">{value.toFixed(2)}</span>
+      </Label>
+      <Slider value={[value]} min={min} max={max} step={step} onValueChange={(v) => onChange(v[0])} />
+    </div>
+  );
+}
