@@ -1,0 +1,411 @@
+// PageRenderer: render 1 page template + dữ liệu thực ra HTML pixel-chuẩn (1080x...)
+// Dùng cho cả preview thumbnail và export PNG (html-to-image)
+
+import { useMemo } from "react";
+import type {
+  Asset,
+  Entity,
+  PageTemplate,
+  RenderedPage,
+  Section,
+  Slot,
+} from "@/models";
+
+interface Props {
+  template: PageTemplate;
+  page?: RenderedPage;
+  entities: Entity[];
+  assets: Asset[];
+  scale?: number;
+  debug?: boolean;
+  innerRef?: React.Ref<HTMLDivElement>;
+}
+
+export function PageRenderer({
+  template,
+  page,
+  entities,
+  assets,
+  scale = 1,
+  debug = false,
+  innerRef,
+}: Props) {
+  const entityMap = useMemo(() => new Map(entities.map((e) => [e.entityId, e])), [entities]);
+  const assetMap = useMemo(() => new Map(assets.map((a) => [a.assetId, a])), [assets]);
+
+  const { width, height, background, backgroundImage } = template.canvas;
+
+  const sectionItemsMap = useMemo(() => {
+    const m = new Map<string, Array<{ entityId?: string; assetId?: string }>>();
+    if (!page) return m;
+    for (const it of page.items) {
+      if (!it.sectionId) continue;
+      const arr = m.get(it.sectionId) ?? [];
+      arr.push({ entityId: it.entityId, assetId: it.assetId });
+      m.set(it.sectionId, arr);
+    }
+    return m;
+  }, [page]);
+
+  const slotEntityOverride = useMemo(() => {
+    const m = new Map<string, { entityId?: string; assetId?: string }>();
+    if (!page) return m;
+    for (const it of page.items) {
+      if (it.slotId) m.set(it.slotId, { entityId: it.entityId, assetId: it.assetId });
+    }
+    return m;
+  }, [page]);
+
+  return (
+    <div
+      ref={innerRef}
+      data-cpg-page
+      style={{
+        width: width * scale,
+        height: height * scale,
+        position: "relative",
+        background: background ?? "#fff",
+        backgroundImage: backgroundImage ? `url(${backgroundImage})` : undefined,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        overflow: "hidden",
+        fontFamily: "'Be Vietnam Pro', system-ui, sans-serif",
+      }}
+    >
+      {template.slots
+        .slice()
+        .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))
+        .map((slot) => (
+          <SlotRenderer
+            key={slot.slotId}
+            slot={slot}
+            scale={scale}
+            template={template}
+            entityMap={entityMap}
+            assetMap={assetMap}
+            sectionItemsMap={sectionItemsMap}
+            slotOverride={slotEntityOverride.get(slot.slotId)}
+            debug={debug}
+          />
+        ))}
+    </div>
+  );
+}
+
+function SlotRenderer({
+  slot,
+  scale,
+  template,
+  entityMap,
+  assetMap,
+  sectionItemsMap,
+  slotOverride,
+  debug,
+}: {
+  slot: Slot;
+  scale: number;
+  template: PageTemplate;
+  entityMap: Map<string, Entity>;
+  assetMap: Map<string, Asset>;
+  sectionItemsMap: Map<string, Array<{ entityId?: string; assetId?: string }>>;
+  slotOverride?: { entityId?: string; assetId?: string };
+  debug?: boolean;
+}) {
+  const baseStyle: React.CSSProperties = {
+    position: "absolute",
+    left: slot.x * scale,
+    top: slot.y * scale,
+    width: slot.width * scale,
+    height: slot.height * scale,
+    transform: slot.rotation ? `rotate(${slot.rotation}deg)` : undefined,
+    transformOrigin: "center",
+  };
+
+  if (slot.kind === "shape") {
+    return (
+      <div
+        style={{
+          ...baseStyle,
+          background: slot.style?.fill ?? "#000",
+          borderRadius:
+            slot.shapeKind === "circle" ? "50%" : (slot.style?.borderRadius ?? 0) * scale,
+          border: slot.style?.stroke
+            ? `${(slot.style?.strokeWidth ?? 1) * scale}px solid ${slot.style.stroke}`
+            : undefined,
+          opacity: slot.style?.opacity ?? 1,
+        }}
+      >
+        <DebugBadge debug={debug} text={`shape`} />
+      </div>
+    );
+  }
+
+  if (slot.kind === "image") {
+    let src = slot.staticImage;
+    let entityIdLog: string | undefined;
+    let assetIdLog: string | undefined;
+    if (!src && slotOverride?.assetId) {
+      const a = assetMap.get(slotOverride.assetId);
+      if (a) {
+        src = a.sourceValue;
+        assetIdLog = a.assetId;
+        entityIdLog = a.entityId;
+      }
+    }
+    return (
+      <div style={{ ...baseStyle, overflow: "hidden", borderRadius: (slot.style?.borderRadius ?? 0) * scale }}>
+        {src ? (
+          <img
+            src={src}
+            crossOrigin="anonymous"
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"],
+              opacity: slot.style?.opacity ?? 1,
+              display: "block",
+            }}
+            alt=""
+          />
+        ) : (
+          <div
+            style={{
+              width: "100%",
+              height: "100%",
+              background: "rgba(0,0,0,0.05)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#94a3b8",
+              fontSize: 14 * scale,
+            }}
+          >
+            (chưa có ảnh)
+          </div>
+        )}
+        {slot.style?.overlayColor && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: slot.style.overlayColor,
+            }}
+          />
+        )}
+        <DebugBadge debug={debug} text={`img ${entityIdLog?.slice(0, 4) ?? ""} ${assetIdLog?.slice(0, 4) ?? ""}`} />
+      </div>
+    );
+  }
+
+  if (slot.kind === "text") {
+    const s = slot.style ?? {};
+    return (
+      <div
+        style={{
+          ...baseStyle,
+          color: s.color ?? "#0f172a",
+          fontFamily: s.fontFamily ?? "'Be Vietnam Pro', sans-serif",
+          fontSize: (s.fontSize ?? 24) * scale,
+          fontWeight: s.fontWeight ?? 500,
+          lineHeight: s.lineHeight ?? 1.2,
+          letterSpacing: (s.letterSpacing ?? 0) * scale,
+          textAlign: s.textAlign ?? "left",
+          textTransform: s.textTransform ?? "none",
+          textShadow: s.textShadow,
+          WebkitTextStroke: s.textStroke,
+          padding: (s.padding ?? 0) * scale,
+          background: s.background,
+          display: "flex",
+          alignItems: "flex-start",
+          flexDirection: "column",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          overflow: "hidden",
+        }}
+      >
+        {slot.staticText ?? "Văn bản"}
+        <DebugBadge debug={debug} text="text" />
+      </div>
+    );
+  }
+
+  if (slot.kind === "section") {
+    if (!slot.sectionRefId) return null;
+    const section = template.sections.find((s) => s.sectionId === slot.sectionRefId);
+    if (!section) return null;
+    const items = sectionItemsMap.get(section.sectionId) ?? [];
+    return (
+      <div style={baseStyle}>
+        <SectionView
+          section={section}
+          items={items}
+          entityMap={entityMap}
+          assetMap={assetMap}
+          scale={scale}
+          width={slot.width}
+          height={slot.height}
+          debug={debug}
+        />
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function SectionView({
+  section,
+  items,
+  entityMap,
+  assetMap,
+  scale,
+  width,
+  height,
+  debug,
+}: {
+  section: Section;
+  items: Array<{ entityId?: string; assetId?: string }>;
+  entityMap: Map<string, Entity>;
+  assetMap: Map<string, Asset>;
+  scale: number;
+  width: number;
+  height: number;
+  debug?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        width: width * scale,
+        height: height * scale,
+        background: "rgba(255,255,255,0.85)",
+        borderRadius: 24 * scale,
+        padding: 24 * scale,
+        boxShadow: "0 4px 20px rgba(0,0,0,0.06)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 12 * scale,
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          fontWeight: 800,
+          fontSize: 28 * scale,
+          color: "#0f172a",
+          marginBottom: 4 * scale,
+        }}
+      >
+        {section.title}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 * scale, flex: 1 }}>
+        {items.length === 0 ? (
+          <div style={{ color: "#94a3b8", fontSize: 16 * scale }}>(không có dữ liệu)</div>
+        ) : (
+          items.map((it, idx) => {
+            const ent = it.entityId ? entityMap.get(it.entityId) : undefined;
+            const asset = it.assetId ? assetMap.get(it.assetId) : undefined;
+            if (!ent) return null;
+            return (
+              <div
+                key={idx}
+                style={{
+                  display: "flex",
+                  gap: 12 * scale,
+                  alignItems: "center",
+                  padding: 8 * scale,
+                  background: ent.partnerFlag ? "rgba(253, 224, 71, 0.25)" : "transparent",
+                  borderRadius: 12 * scale,
+                }}
+              >
+                {asset && (
+                  <img
+                    src={asset.sourceValue}
+                    crossOrigin="anonymous"
+                    style={{
+                      width: 80 * scale,
+                      height: 80 * scale,
+                      objectFit: "cover",
+                      borderRadius: 12 * scale,
+                      flexShrink: 0,
+                    }}
+                    alt=""
+                  />
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      fontSize: 22 * scale,
+                      color: "#0f172a",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {section.listStyle === "number" ? `${idx + 1}. ` : section.listStyle === "dot" ? "• " : ""}
+                    {ent.name}
+                    {ent.partnerFlag && (
+                      <span
+                        style={{
+                          marginLeft: 8 * scale,
+                          fontSize: 12 * scale,
+                          background: "#facc15",
+                          color: "#1f2937",
+                          padding: `${2 * scale}px ${6 * scale}px`,
+                          borderRadius: 4 * scale,
+                        }}
+                      >
+                        ĐỐI TÁC
+                      </span>
+                    )}
+                  </div>
+                  {ent.address && (
+                    <div
+                      style={{
+                        fontSize: 16 * scale,
+                        color: "#475569",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      📍 {ent.address}
+                    </div>
+                  )}
+                  {ent.priceRange && (
+                    <div style={{ fontSize: 15 * scale, color: "#0f766e", fontWeight: 600 }}>
+                      💰 {ent.priceRange}
+                    </div>
+                  )}
+                </div>
+                <DebugBadge debug={debug} text={`${ent.entityId.slice(0, 4)}/${asset?.assetId.slice(0, 4) ?? "-"}`} />
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DebugBadge({ debug, text }: { debug?: boolean; text: string }) {
+  if (!debug) return null;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 2,
+        left: 2,
+        background: "rgba(0,0,0,0.65)",
+        color: "#fff",
+        fontSize: 9,
+        padding: "1px 4px",
+        borderRadius: 3,
+        pointerEvents: "none",
+        zIndex: 9999,
+      }}
+    >
+      {text}
+    </div>
+  );
+}
