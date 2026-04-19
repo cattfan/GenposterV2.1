@@ -215,7 +215,10 @@ function EditorPage() {
             <Type className="size-4 mr-2" /> Text
           </Button>
           <Button variant="outline" size="sm" className="w-full justify-start" onClick={() => addSlot("image")}>
-            <ImageIcon className="size-4 mr-2" /> Image
+            <ImageIcon className="size-4 mr-2" /> Image (placeholder)
+          </Button>
+          <Button variant="default" size="sm" className="w-full justify-start" onClick={handleUploadClick}>
+            <Upload className="size-4 mr-2" /> Tải ảnh từ máy
           </Button>
           <Button variant="outline" size="sm" className="w-full justify-start" onClick={() => addSlot("shape")}>
             <Square className="size-4 mr-2" /> Shape
