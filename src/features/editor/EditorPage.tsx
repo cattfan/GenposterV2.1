@@ -42,6 +42,25 @@ export function EditorPage() {
   const [zoom, setZoom] = useState(0.4);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
+  const canvasScrollRef = useRef<HTMLDivElement>(null);
+
+  // Ctrl/Cmd + wheel = zoom (native listener vì React onWheel là passive)
+  useEffect(() => {
+    const el = canvasScrollRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const delta = -e.deltaY;
+      setZoom((z) => {
+        const factor = delta > 0 ? 1.1 : 1 / 1.1;
+        const next = Math.min(3, Math.max(0.05, z * factor));
+        return Math.round(next * 1000) / 1000;
+      });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   useEffect(() => {
     if (tpl) setDraft(JSON.parse(JSON.stringify(tpl)));
