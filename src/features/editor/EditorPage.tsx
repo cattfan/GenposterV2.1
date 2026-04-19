@@ -117,6 +117,8 @@ export function EditorPage() {
 
   const addSlot = (kind: Slot["kind"], shapeKind?: NonNullable<Slot["shapeKind"]>) => {
     const isLine = kind === "shape" && (shapeKind === "line" || shapeKind === "divider");
+    // Mọi block (text/shape/section/image-placeholder) đều ở cùng tầng zIndex = 1.
+    // Ảnh upload từ máy mới là layer nền (zIndex = 0).
     const newSlot: Slot = {
       slotId: nanoid(),
       kind,
@@ -124,7 +126,7 @@ export function EditorPage() {
       y: 100,
       width: kind === "text" ? 600 : isLine ? 400 : 300,
       height: kind === "text" ? 80 : isLine ? 20 : 300,
-      zIndex: (draft.slots.length || 0) + 1,
+      zIndex: 1,
       ...(kind === "text" ? { staticText: "Văn bản mới", style: { fontSize: 48, fontWeight: 700, color: "#0f172a" } } : {}),
       ...(kind === "image" ? { staticImage: "", style: { fit: "cover", borderRadius: 12 } } : {}),
       ...(kind === "shape"
@@ -170,6 +172,7 @@ export function EditorPage() {
     const h = Math.max(20, Math.round(dim.h * scale));
     const x = dropX ?? Math.max(0, Math.round((cw - w) / 2));
     const y = dropY ?? Math.max(0, Math.round((ch - h) / 2));
+    // Ảnh upload từ máy = layer NỀN, luôn nằm dưới mọi block khác.
     const newSlot: Slot = {
       slotId: nanoid(),
       kind: "image",
@@ -177,9 +180,10 @@ export function EditorPage() {
       y,
       width: w,
       height: h,
-      zIndex: (draft.slots.length || 0) + 1,
+      zIndex: 0,
       staticImage: url,
-      style: { fit: "cover", borderRadius: 8 },
+      style: { fit: "cover", borderRadius: 0 },
+      isUploadedBackground: true,
     };
     updateDraft((d) => d.slots.push(newSlot));
     setSelectedSlotId(newSlot.slotId);
@@ -212,6 +216,10 @@ export function EditorPage() {
   const duplicateSlot = (slotId: string) => {
     const orig = draft.slots.find((s) => s.slotId === slotId);
     if (!orig) return;
+    if (orig.isUploadedBackground) {
+      toast.error("Không thể nhân bản ảnh nền upload");
+      return;
+    }
     const copy: Slot = { ...orig, slotId: nanoid(), x: orig.x + 24, y: orig.y + 24 };
     updateDraft((d) => d.slots.push(copy));
     setSelectedSlotId(copy.slotId);
@@ -257,8 +265,14 @@ export function EditorPage() {
 
   const save = async () => {
     if (!draft) return;
-    await db.pageTemplates.put({ ...draft, updatedAt: Date.now() });
-    toast.success("Đã lưu template");
+    // Khi lưu: bỏ nền canvas trắng để export trong suốt (chỉ giữ ảnh + block trên).
+    const toSave: PageTemplate = {
+      ...draft,
+      canvas: { ...draft.canvas, background: undefined, backgroundImage: undefined },
+      updatedAt: Date.now(),
+    };
+    await db.pageTemplates.put(toSave);
+    toast.success("Đã lưu template (nền canvas trong suốt)");
   };
 
   return (
@@ -493,9 +507,11 @@ export function EditorPage() {
             {selectedSlot && (
               <>
                 <div className="flex gap-1">
-                  <Button size="sm" variant="outline" onClick={() => duplicateSlot(selectedSlot.slotId)}>
-                    <Copy className="size-3 mr-1" /> Copy
-                  </Button>
+                  {!selectedSlot.isUploadedBackground && (
+                    <Button size="sm" variant="outline" onClick={() => duplicateSlot(selectedSlot.slotId)}>
+                      <Copy className="size-3 mr-1" /> Copy
+                    </Button>
+                  )}
                   <Button size="sm" variant="outline" onClick={() => moveZ(selectedSlot.slotId, 1)}>
                     <ArrowUp className="size-3" />
                   </Button>
@@ -506,6 +522,11 @@ export function EditorPage() {
                     <Trash2 className="size-3" />
                   </Button>
                 </div>
+                {selectedSlot.isUploadedBackground && (
+                  <p className="text-xs text-muted-foreground italic">
+                    🖼 Ảnh nền upload — luôn ở layer dưới cùng, không nhân bản được.
+                  </p>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   <NumField label="X" value={selectedSlot.x} onChange={(v) => updateSlot(selectedSlot.slotId, { x: v })} />
                   <NumField label="Y" value={selectedSlot.y} onChange={(v) => updateSlot(selectedSlot.slotId, { y: v })} />
