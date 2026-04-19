@@ -419,11 +419,11 @@ export function EditorPage() {
             />
           </div>
           <div className="flex-1" />
-          <Button variant="ghost" size="icon" onClick={() => setZoom((z) => Math.max(0.1, z - 0.1))}>
+          <Button variant="ghost" size="icon" onClick={() => setZoom((z) => Math.max(0.05, z - 0.1))} title="Zoom out (Ctrl + scroll)">
             <ZoomOut className="size-4" />
           </Button>
-          <span className="text-xs w-12 text-center">{Math.round(zoom * 100)}%</span>
-          <Button variant="ghost" size="icon" onClick={() => setZoom((z) => Math.min(2, z + 0.1))}>
+          <span className="text-xs w-12 text-center" title="Ctrl/⌘ + lăn chuột để zoom">{Math.round(zoom * 100)}%</span>
+          <Button variant="ghost" size="icon" onClick={() => setZoom((z) => Math.min(3, z + 0.1))} title="Zoom in (Ctrl + scroll)">
             <ZoomIn className="size-4" />
           </Button>
           <Button onClick={save} size="sm">
