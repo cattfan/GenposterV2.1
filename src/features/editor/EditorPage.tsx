@@ -403,6 +403,14 @@ export function EditorPage() {
           <Button onClick={save} size="sm">
             <Save className="size-4 mr-2" /> Lưu
           </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setRightOpen((v) => !v)}
+            title={rightOpen ? "Thu gọn panel phải" : "Mở panel phải"}
+          >
+            {rightOpen ? <PanelRightClose className="size-4" /> : <PanelRightOpen className="size-4" />}
+          </Button>
         </div>
         <div
           className="flex-1 overflow-auto p-8 grid place-items-center relative"
@@ -429,6 +437,7 @@ export function EditorPage() {
             selectedSlotId={selectedSlotId}
             onSelect={setSelectedSlotId}
             onUpdateSlot={updateSlot}
+            onDeleteSlot={deleteSlot}
           />
           {draft.slots.length === 0 && (
             <div className="absolute inset-8 pointer-events-none border-2 border-dashed border-muted-foreground/30 rounded-xl grid place-items-center">
@@ -443,7 +452,8 @@ export function EditorPage() {
       </div>
 
       {/* Right: properties */}
-      <aside className="w-80 border-l border-border bg-card overflow-y-auto">
+      {rightOpen && (
+        <aside className="w-80 border-l border-border bg-card overflow-y-auto shrink-0">
         <Tabs defaultValue="props" className="w-full">
           <TabsList className="w-full rounded-none border-b">
             <TabsTrigger value="props" className="flex-1">Thuộc tính</TabsTrigger>
