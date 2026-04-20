@@ -403,15 +403,20 @@ function SlotEditor({
               color: "white",
               border: "none",
               borderRadius: 4,
-              padding: "2px 8px",
-              fontSize: 11,
+              padding: "4px 6px",
               cursor: "pointer",
               zIndex: 11,
               boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 11,
+              lineHeight: 1,
             }}
             title="Xoá block (Delete)"
           >
-            ✕ Xoá
+            <X className="size-3" />
+            <span>Xoá</span>
           </button>
         </>
       )}
