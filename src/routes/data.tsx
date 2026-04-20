@@ -111,6 +111,17 @@ function DataPage() {
           <Card>
             <CardHeader><CardTitle>1. Chọn nguồn</CardTitle></CardHeader>
             <CardContent className="space-y-3">
+              <div>
+                <Label>Tên sheet (để gom nhóm dữ liệu, vd: Quan_an, Cafe)</Label>
+                <Input
+                  value={sheetName}
+                  onChange={(e) => setSheetName(e.target.value)}
+                  placeholder="Quan_an"
+                />
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Mỗi tab dữ liệu nên có 1 tên sheet riêng. Trang Tạo nội dung sẽ cho lọc theo tên này.
+                </p>
+              </div>
               <div className="flex gap-2">
                 <Button onClick={() => fileRef.current?.click()} disabled={busy}>Upload CSV / JSON</Button>
                 <input
