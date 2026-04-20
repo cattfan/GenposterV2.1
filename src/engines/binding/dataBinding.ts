@@ -100,3 +100,82 @@ export function buildFlipTransform(style: Slot["style"]): string {
   if (sx === 1 && sy === 1) return "";
   return ` scale(${sx}, ${sy})`;
 }
+
+/** Build linear-gradient CSS từ style. Trả về undefined nếu không bật. */
+export function buildGradient(style: Slot["style"]): string | undefined {
+  if (!style?.gradientEnabled) return undefined;
+  const from = style.gradientFrom ?? "#000000";
+  const to = style.gradientTo ?? "#ffffff";
+  const angle = style.gradientAngle ?? 90;
+  return `linear-gradient(${angle}deg, ${from}, ${to})`;
+}
+
+/** Build CSS border từ borderColor/Width/Style. */
+export function buildBorder(style: Slot["style"], scale = 1): string | undefined {
+  if (!style?.borderColor || !style.borderWidth) return undefined;
+  return `${style.borderWidth * scale}px ${style.borderStyle ?? "solid"} ${style.borderColor}`;
+}
+
+/** Build CSS style chuẩn cho text — dùng chung 3 nơi (Editor/Bind/Render). */
+export function buildTextStyle(style: Slot["style"] | undefined, scale = 1): React.CSSProperties {
+  const s = style ?? {};
+  const css: React.CSSProperties = {
+    color: s.color ?? "#0f172a",
+    fontFamily: s.fontFamily ? `'${s.fontFamily}', sans-serif` : "'Be Vietnam Pro', sans-serif",
+    fontSize: (s.fontSize ?? 24) * scale,
+    fontWeight: s.fontWeight ?? 500,
+    fontStyle: s.fontStyle ?? "normal",
+    textDecoration: s.textDecoration ?? "none",
+    lineHeight: s.lineHeight ?? 1.2,
+    letterSpacing: (s.letterSpacing ?? 0) * scale,
+    textAlign: s.textAlign ?? "left",
+    textTransform: s.textTransform ?? "none",
+    textShadow: s.textShadow,
+    padding: (s.padding ?? 0) * scale,
+    background: s.background,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    overflow: "hidden",
+  };
+  // Text stroke (webkit)
+  if (s.textStrokeWidth && s.textStrokeColor) {
+    (css as React.CSSProperties & { WebkitTextStroke?: string }).WebkitTextStroke =
+      `${s.textStrokeWidth * scale}px ${s.textStrokeColor}`;
+  } else if (s.textStroke) {
+    (css as React.CSSProperties & { WebkitTextStroke?: string }).WebkitTextStroke = s.textStroke;
+  }
+  // Gradient text
+  if (s.gradientEnabled && s.gradientFrom && s.gradientTo) {
+    const grad = buildGradient(s)!;
+    css.backgroundImage = grad;
+    (css as React.CSSProperties & { WebkitBackgroundClip?: string }).WebkitBackgroundClip = "text";
+    css.backgroundClip = "text";
+    css.color = "transparent";
+    (css as React.CSSProperties & { WebkitTextFillColor?: string }).WebkitTextFillColor = "transparent";
+    css.background = undefined;
+  }
+  // Max lines (line clamp)
+  if (s.maxLines && s.maxLines > 0) {
+    css.display = "-webkit-box";
+    (css as React.CSSProperties & { WebkitLineClamp?: number }).WebkitLineClamp = s.maxLines;
+    (css as React.CSSProperties & { WebkitBoxOrient?: string }).WebkitBoxOrient = "vertical";
+  }
+  return css;
+}
+
+/** Clip-path CSS theo shapeKind, cho ảnh nằm trong shape. */
+export function shapeClipPath(shapeKind: NonNullable<Slot["shapeKind"]>): string | undefined {
+  if (shapeKind === "triangle") return "polygon(50% 0%, 100% 100%, 0% 100%)";
+  return undefined;
+}
+
+/** Border radius CSS theo shapeKind (cho rectangle/circle/badge). */
+export function shapeBorderRadius(
+  shapeKind: NonNullable<Slot["shapeKind"]> | undefined,
+  borderRadius: number | undefined,
+  scale = 1,
+): number | string | undefined {
+  if (shapeKind === "circle") return "50%";
+  if (shapeKind === "badge") return 9999;
+  return (borderRadius ?? 0) * scale;
+}
