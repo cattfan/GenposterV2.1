@@ -1,77 +1,75 @@
 
 
-## Mục tiêu
+## Đã hiểu sheet của bạn
 
-1. **Bỏ icon emoji màu mè**: thay 🔗 / ⚡ / 📦 / ✕ / ⚠ / 🪧 / 1️⃣ / 📷 / 🟦 ... bằng icon Lucide đơn sắc (`Link2`, `Sparkles`, `Package`, `X`, `AlertTriangle`, `Image`, `Square`, `Circle`, `Triangle`, `Minus`, `MousePointerClick` ...).
-2. **Trang Tạo nội dung phải có canvas tương tác**: hiện canvas template thật như editor; user click vào block → chọn trường data → preview cập nhật. Bind chỉ tạm thời cho lần generate, **không** ghi đè template.
-3. **Bỏ UI bind trong editor** (theo yêu cầu): editor chỉ dùng để chỉnh hình ảnh/layout, không còn dropdown bind.
+**Cột thực tế (sheet `gid=1236724598`)**: `STT | Ten_quan | Mo_hinh | Dia_chi | Gio_mo_cua | Phong_cach | Doi_tac | Mon_an_noi_bat`
 
-## Thay đổi chính
+- **`Mo_hinh`** = bữa ăn (`Ăn Sáng / Ăn Trưa / Ăn Tối`) → đây sẽ là "danh mục" để lọc.
+- **`Phong_cach`** = `Vintage / Hiện đại / Hàn Quốc / Nhật Bản / Châu Âu / Tây nguyên`.
+- **`Doi_tac`** = `X` nghĩa là đối tác (rỗng = không). Ví dụ: STT 33, 34, 35, 46.
+- **`Mon_an_noi_bat`** = trường mô tả/highlight món.
+- Tổng ~98 quán, không có cột giá / SĐT.
 
-### A. Trang `/generate` — canvas click-to-bind tạm thời
+## Điều chỉnh plan (so với plan trước)
 
-**File chỉnh: `src/routes/generate.tsx`** + tạo mới `src/features/generate/BindCanvas.tsx`, `src/features/generate/useBindOverrides.ts`.
+### A. Mapping & alias (`src/engines/normalize/aliases.ts`, `normalizer.ts`)
+Bổ sung alias để auto-map đúng cột tiếng Việt:
+- `Ten_quan → name`
+- `Mo_hinh → categoryMain` (bữa ăn)
+- `Phong_cach → categorySub` (phong cách)
+- `Dia_chi → address`
+- `Gio_mo_cua → openingHours`
+- `Doi_tac → partnerFlag` (đã hỗ trợ `X / x / 1 / true`)
+- `Mon_an_noi_bat → metadata.signatureDish` (trường tự do, dùng cho bind text)
 
-- **Layout 3 cột (tab "Theo entity")**:
-  ```
-  ┌──────────────┬──────────────────────┬──────────────┐
-  │ Cấu hình     │ Canvas tương tác     │ Panel binding│
-  │ - Template   │ (template scale fit) │ (block đang  │
-  │ - Lọc entity │ click block ở đây    │  chọn)       │
-  │ - Preview    │                      │              │
-  │   entity     │                      │              │
-  └──────────────┴──────────────────────┴──────────────┘
-  ```
-- **`BindCanvas`**: render template ở scale ~0.5, mỗi slot là 1 div bắt `onClick`; slot đang chọn có viền primary, slot đã có override-binding có viền dashed. Không cho kéo/resize — chỉ chọn.
-- **Panel binding bên phải**:
-  - Nếu slot là `text`: `Select` các trường `entity.name / address / phone / priceRange / style / openingHours / categoryMain / categorySub` + nút "Xoá liên kết".
-  - Nếu slot là `image`: `Select` `Ảnh chính | Ảnh role: facade / food_closeup / space / portrait / square_thumb / section_image` + nút "Xoá liên kết".
-  - Hiển thị preview giá trị thực tế với entity đang preview.
-- **`useBindOverrides`**: state `Record<slotId, bindingPath>` lưu trong React state (không vào DB). Hàm `applyOverrides(template, overrides)` trả về 1 template ảo có `bindingPath` đã merge để truyền vào `PageRenderer` & generate.
-- **Preview entity**: dropdown "Xem trước với entity" để chọn 1 entity từ `filteredEntities`, canvas + panel preview update theo entity đó.
-- **Generate**: dùng template-ảo (đã merge overrides) → render từng card cho mỗi entity (giữ logic hiện tại).
-- **Empty state mới**: bỏ "1️⃣ 2️⃣ 3️⃣"; dùng card hướng dẫn đơn giản với 3 step rõ ràng kèm icon Lucide (`MousePointerClick`, `Filter`, `Sparkles`).
+### B. Sheet name & nguồn dữ liệu
+- Thêm `Entity.sheetName?: string` trong `models/index.ts`.
+- Trang `/data` (import): thêm input **"Tên sheet"** (mặc định = `gid` hoặc tên file, ví dụ `Quan_an`). Ghi vào mọi entity của lần import đó.
+- Bảng entities thêm cột "Sheet". Append theo sheet (dedupe `name + sheetName`), không xoá sheet khác.
 
-### B. Bỏ UI bind trong editor
+### C. Trang `/generate` — chọn sheet + ưu tiên đối tác
+Trong cột "Cấu hình":
+1. `Select` **Nguồn dữ liệu (sheet)**: `Tất cả | Quan_an | <các sheet đã import>`.
+2. `Select` **Lọc theo `Mo_hinh`**: `Tất cả | Ăn Sáng | Ăn Trưa | Ăn Tối` (lấy từ `categoryMain` distinct).
+3. `Select` **Lọc theo `Phong_cach`** (optional).
+4. Switch **Ưu tiên đối tác** (mặc định ON).
+5. Switch **Chỉ đối tác**.
+6. Input **Số trang tối đa**.
 
-**File chỉnh: `src/features/editor/EditorPage.tsx`, `EditorCanvas.tsx`.**
-
-- Xoá dropdown "Nguồn dữ liệu / Nguồn ảnh" trong panel phải của editor.
-- Xoá viền tím dashed + chip "🔗" trên canvas editor và icon 🔗 trong layer list.
-- `bindingPath` đã có sẵn trong template vẫn được tôn trọng khi render generate (làm override mặc định), nhưng editor không tạo mới được.
-- Giữ nguyên các tính năng hình ảnh: filter, crop, flip, rotate, undo/redo.
-
-### C. Quét sạch icon emoji → Lucide đơn sắc
-
-| Vị trí cũ | Mới |
-|---|---|
-| `🔗 entity.name` chip | `<Link2 className="size-3" />` + text |
-| `⚡ Generate theo entity` | `<Zap className="size-4" />` |
-| `📦 Pack template` / Export | `<Package />` |
-| `✕ Xoá` button trên slot | `<X />` |
-| `⚠` cảnh báo | `<AlertTriangle />` |
-| `📷` placeholder ảnh | `<ImageIcon />` |
-| `🪧 / 🟦 / ⚪ / 🔺 / ➖` shape buttons | `<Image>` `<Square>` `<Circle>` `<Triangle>` `<Minus>` |
-| `1️⃣ 2️⃣ 3️⃣` step | bullet số đơn sắc + icon hành động |
-
-Quét cả `EditorPage.tsx`, `EditorCanvas.tsx`, `generate.tsx`, `PageRenderer.tsx`, `routes/templates.tsx`, `routes/data.tsx`.
-
-## Files dự kiến chỉnh / tạo
-
-- **Chỉnh**: `src/routes/generate.tsx`, `src/features/editor/EditorPage.tsx`, `src/features/editor/EditorCanvas.tsx`, `src/features/render/PageRenderer.tsx`, `src/routes/templates.tsx` (nếu có emoji), `src/routes/data.tsx` (nếu có emoji).
-- **Tạo**: `src/features/generate/BindCanvas.tsx`, `src/features/generate/useBindOverrides.ts`.
-
-## Sơ đồ luồng mới
-
+**Thuật toán hiển thị**:
 ```text
-[Editor]   chỉ chỉnh hình/layout, không bind
-   │
-   ▼ lưu template
-[Tạo nội dung]
-   ├─ chọn template + lọc entity
-   ├─ canvas tương tác: click block → panel chọn trường data
-   │     (overrides trong RAM, KHÔNG lưu lại template)
-   ├─ chọn 1 entity để preview real-time
-   └─ Generate → for each entity: render(template + overrides, entity)
+filteredEntities = entities
+  .filter(status=active
+        + sheetName == selectedSheet (nếu khác Tất cả)
+        + categoryMain == Mo_hinh (nếu chọn)
+        + categorySub == Phong_cach (nếu chọn)
+        + partnerFlag (nếu Chỉ đối tác))
+  .sort( ưu-tiên-đối-tác ?
+            partnerFlag desc → partnerPriority desc → name asc
+          : name asc )
+  .slice(0, maxPages)
+
+For each entity → render(template + bindOverrides, entity)
 ```
+
+### D. Bind panel — thêm field mới
+Dropdown "Nguồn dữ liệu" cho text bổ sung:
+- `entity.name` (Ten_quan)
+- `entity.categoryMain` (Mo_hinh)
+- `entity.categorySub` (Phong_cach)
+- `entity.address` (Dia_chi)
+- `entity.openingHours` (Gio_mo_cua)
+- **`entity.signatureDish`** (Mon_an_noi_bat) — resolver lấy từ `metadata.signatureDish`.
+
+### E. UI hiển thị đối tác
+- Badge `<Star className="size-3" />` + chữ "Đối tác" trước tên entity trong dropdown preview & card kết quả.
+- Trong canvas BindCanvas, không đổi gì.
+
+## Files đụng tới
+- Sửa: `src/models/index.ts`, `src/engines/normalize/aliases.ts`, `src/engines/normalize/normalizer.ts`, `src/routes/data.tsx`, `src/routes/generate.tsx`, `src/engines/binding/dataBinding.ts` (thêm resolver `entity.signatureDish`).
+- Không cần file mới.
+
+## Lưu ý cho bạn
+- Sheet hiện tại chỉ chứa **1 tab** (`Quan_an`). Khi có thêm tab `Cafe`, bạn import lần nữa với "Tên sheet" = `Cafe` → dropdown Nguồn dữ liệu sẽ tự xuất hiện thêm lựa chọn.
+- Hiện sheet không có cột `priceRange / phone` → 2 field này khi bind sẽ trống. Nếu cần, bạn thêm cột vào sheet và import lại.
 
