@@ -186,6 +186,18 @@ function GeneratePage() {
   const boundCount = effectiveTpl?.slots.filter((s) => !!s.bindingPath).length ?? 0;
   const hasAnyBinding = boundCount > 0;
 
+  // Text-binding đã bị slot khác chiếm — KHÔNG cho chọn trùng (theo yêu cầu user).
+  const usedTextBindings = useMemo(() => {
+    const set = new Set<string>();
+    if (!effectiveTpl || !selectedSlot) return set;
+    for (const s of effectiveTpl.slots) {
+      if (s.kind !== "text") continue;
+      if (s.slotId === selectedSlot.slotId) continue;
+      if (s.bindingPath) set.add(s.bindingPath);
+    }
+    return set;
+  }, [effectiveTpl, selectedSlot]);
+
   const generateByEntity = () => {
     if (!effectiveTpl) return toast.error("Chưa chọn template");
     if (!hasAnyBinding) {
@@ -429,13 +441,26 @@ function GeneratePage() {
                       >
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          {(selectedSlot.kind === "text" ? TEXT_BINDING_OPTIONS : IMAGE_BINDING_OPTIONS).map((o) => (
-                            <SelectItem key={o.value || "_static"} value={o.value || "_static"}>
-                              {o.label}
-                            </SelectItem>
-                          ))}
+                          {(selectedSlot.kind === "text" ? TEXT_BINDING_OPTIONS : IMAGE_BINDING_OPTIONS).map((o) => {
+                            const isUsed = selectedSlot.kind === "text" && o.value !== "" && usedTextBindings.has(o.value);
+                            return (
+                              <SelectItem
+                                key={o.value || "_static"}
+                                value={o.value || "_static"}
+                                disabled={isUsed}
+                              >
+                                {o.label}
+                                {isUsed && <span className="ml-2 text-[10px] text-muted-foreground">(đã dùng)</span>}
+                              </SelectItem>
+                            );
+                          })}
                         </SelectContent>
                       </Select>
+                      {selectedSlot.kind === "image" && (
+                        <p className="text-[11px] text-muted-foreground mt-1 italic">
+                          Hệ thống tự gán ảnh khác nhau cho mỗi block (anti-trùng) khi entity có nhiều ảnh.
+                        </p>
+                      )}
                     </div>
                     {selectedSlot.bindingPath && (
                       <Button
