@@ -1,13 +1,17 @@
 // Canvas read-only, chỉ để chọn block và bind data ở trang Tạo nội dung.
 // Render giống PageRenderer nhưng cho phép click + outline khi chọn / đã bind.
-import { useMemo } from "react";
 import type { Asset, Entity, PageTemplate, Slot } from "@/models";
 import {
   buildBoxShadow,
   buildCssFilter,
   buildFlipTransform,
+  buildBorder,
+  buildGradient,
+  buildTextStyle,
   resolveImageBinding,
   resolveTextBinding,
+  shapeBorderRadius,
+  shapeClipPath,
 } from "@/engines/binding/dataBinding";
 
 export function BindCanvas({
@@ -82,7 +86,7 @@ function BindSlot({
   const rot = slot.rotation ? `rotate(${slot.rotation}deg)` : "";
   const transform = (rot + flip).trim() || undefined;
   const hasBinding = !!slot.bindingPath;
-  const isBindable = slot.kind === "text" || slot.kind === "image";
+  const isBindable = slot.kind === "text" || slot.kind === "image" || slot.kind === "shape";
 
   const outline = selected
     ? "2px solid hsl(var(--primary))"
@@ -114,15 +118,57 @@ function BindSlot({
   };
 
   if (slot.kind === "shape") {
+    let src = slot.staticImage;
+    if (slot.bindingPath && entity) {
+      const r = resolveImageBinding(slot.bindingPath, entity, assets, src);
+      if (r.src) src = r.src;
+    }
+    const fit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
+    const filter = buildCssFilter(slot.style);
+    const radius = shapeBorderRadius(slot.shapeKind, slot.style?.borderRadius, scale);
+    const clip = slot.shapeKind ? shapeClipPath(slot.shapeKind) : undefined;
+    const gradient = buildGradient(slot.style);
+    const border = buildBorder(slot.style, scale);
+    const isLine = slot.shapeKind === "line" || slot.shapeKind === "divider";
+
+    if (isLine) {
+      return (
+        <div
+          onMouseDown={onClick}
+          style={{
+            ...baseStyle,
+            background: gradient ?? slot.style?.fill ?? "#000",
+          }}
+        />
+      );
+    }
+
     return (
       <div
         onMouseDown={onClick}
         style={{
           ...baseStyle,
-          background: slot.style?.fill ?? "#000",
-          borderRadius: slot.shapeKind === "circle" ? "50%" : (slot.style?.borderRadius ?? 0) * scale,
+          background: src ? undefined : gradient ?? slot.style?.fill ?? "#e5e7eb",
+          borderRadius: radius,
+          clipPath: clip,
+          border: src ? undefined : border,
+          overflow: "hidden",
         }}
-      />
+      >
+        {src ? (
+          <>
+            <img
+              src={src}
+              alt=""
+              draggable={false}
+              style={{ width: "100%", height: "100%", objectFit: fit, filter, pointerEvents: "none" }}
+            />
+            {slot.style?.overlayColor && (
+              <div style={{ position: "absolute", inset: 0, background: slot.style.overlayColor, pointerEvents: "none" }} />
+            )}
+          </>
+        ) : null}
+      </div>
     );
   }
 
@@ -184,27 +230,16 @@ function BindSlot({
   }
 
   if (slot.kind === "text") {
-    const s = slot.style ?? {};
     const text = slot.bindingPath
       ? resolveTextBinding(slot.bindingPath, entity, slot.staticText)
       : (slot.staticText ?? "Văn bản");
+    const textCss = buildTextStyle(slot.style, scale);
     return (
       <div
         onMouseDown={onClick}
         style={{
           ...baseStyle,
-          color: s.color ?? "#0f172a",
-          fontSize: (s.fontSize ?? 24) * scale,
-          fontWeight: s.fontWeight ?? 500,
-          lineHeight: s.lineHeight ?? 1.2,
-          textAlign: s.textAlign ?? "left",
-          textTransform: s.textTransform ?? "none",
-          letterSpacing: (s.letterSpacing ?? 0) * scale,
-          padding: (s.padding ?? 0) * scale,
-          background: s.background,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-          overflow: "hidden",
+          ...textCss,
         }}
       >
         {text}
