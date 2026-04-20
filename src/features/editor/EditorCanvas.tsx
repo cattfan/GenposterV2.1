@@ -461,3 +461,38 @@ function SlotEditor({
   }
   return slotEl;
 }
+
+function CropContainer({
+  slot,
+  zoom,
+  onCommit,
+  onCancel,
+}: {
+  slot: Slot;
+  zoom: number;
+  onCommit: (crop: { x: number; y: number; w: number; h: number }) => void;
+  onCancel: () => void;
+}) {
+  const resolved = useResolvedImageSrc(slot.staticImage) ?? slot.staticImage ?? "";
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: slot.x * zoom,
+        top: slot.y * zoom,
+        width: slot.width * zoom,
+        height: slot.height * zoom,
+      }}
+    >
+      <CropOverlay
+        src={resolved}
+        initial={slot.crop}
+        zoom={zoom}
+        width={slot.width}
+        height={slot.height}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />
+    </div>
+  );
+}
