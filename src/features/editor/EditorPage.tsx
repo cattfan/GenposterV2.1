@@ -386,11 +386,115 @@ export function EditorPage() {
   };
 
   const moveZ = (slotId: string, dir: 1 | -1) => {
+    orderSlot(slotId, dir > 0 ? "forward" : "backward");
+  };
+
+  // Z-order chuẩn (4 thao tác Figma/Canva)
+  const orderSlot = (slotId: string, mode: "forward" | "backward" | "front" | "back") => {
     updateDraft((d) => {
-      const s = d.slots.find((x) => x.slotId === slotId);
-      if (s) s.zIndex = (s.zIndex ?? 0) + dir;
+      const fn =
+        mode === "forward" ? bringForward
+        : mode === "backward" ? sendBackward
+        : mode === "front" ? bringToFront
+        : sendToBack;
+      d.slots = fn(d.slots, slotId);
     });
   };
+
+  const toggleHidden = (slotId: string) => {
+    const s = draft.slots.find((x) => x.slotId === slotId);
+    if (!s) return;
+    updateSlotStyle(slotId, { hidden: !s.style?.hidden });
+  };
+
+  const toggleLock = (slotId: string) => {
+    const s = draft.slots.find((x) => x.slotId === slotId);
+    if (!s) return;
+    if (s.isUploadedBackground) {
+      toast.error("Ảnh nền upload luôn bị khoá");
+      return;
+    }
+    updateSlot(slotId, { locked: !s.locked });
+  };
+
+  // Clipboard nội bộ
+  const copySlot = (slotId: string) => {
+    const s = draft.slots.find((x) => x.slotId === slotId);
+    if (!s) return;
+    setClipboard(s);
+    bumpClipboard();
+    toast.success("Đã copy layer");
+  };
+  const cutSlot = (slotId: string) => {
+    const s = draft.slots.find((x) => x.slotId === slotId);
+    if (!s) return;
+    if (s.isUploadedBackground) {
+      toast.error("Không thể cắt ảnh nền upload");
+      return;
+    }
+    setClipboard(s);
+    bumpClipboard();
+    deleteSlot(slotId);
+    toast.success("Đã cắt layer");
+  };
+  const pasteSlot = () => {
+    const next = pasteFromClipboard(24);
+    if (!next) {
+      toast.error("Clipboard trống");
+      return;
+    }
+    updateDraft((d) => d.slots.push(next));
+    setSelectedSlotId(next.slotId);
+  };
+
+  // Đổi tên layer
+  const renameSlot = (slotId: string, name: string) => {
+    updateSlot(slotId, { name: name.trim() || undefined });
+  };
+
+  // Drag-reorder layer trong panel (top-first list)
+  const handleLayerDrop = (targetId: string) => {
+    const dragId = dragLayerIdRef.current;
+    dragLayerIdRef.current = null;
+    setDragOverLayerId(null);
+    if (!dragId || dragId === targetId) return;
+    // build new top-first order
+    const sortedTopFirst = draft.slots
+      .filter((s) => !s.isUploadedBackground)
+      .slice()
+      .sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0))
+      .map((s) => s.slotId);
+    const fromIdx = sortedTopFirst.indexOf(dragId);
+    const toIdx = sortedTopFirst.indexOf(targetId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const next = sortedTopFirst.slice();
+    next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, dragId);
+    updateDraft((d) => {
+      d.slots = reorderByPanel(d.slots, next);
+    });
+  };
+
+  // Build context menu actions for 1 slot
+  const buildSlotMenuActions = (slotId: string): SlotMenuActions => ({
+    bringToFront: () => orderSlot(slotId, "front"),
+    bringForward: () => orderSlot(slotId, "forward"),
+    sendBackward: () => orderSlot(slotId, "backward"),
+    sendToBack: () => orderSlot(slotId, "back"),
+    duplicate: () => duplicateSlot(slotId),
+    rename: () => {
+      setSelectedSlotId(slotId);
+      setRenamingSlotId(slotId);
+      setLeftOpen(true);
+    },
+    toggleLock: () => toggleLock(slotId),
+    toggleHidden: () => toggleHidden(slotId),
+    remove: () => deleteSlot(slotId),
+    copy: () => copySlot(slotId),
+    cut: () => cutSlot(slotId),
+    paste: () => pasteSlot(),
+    canPaste: hasClipboard(),
+  });
 
   const addSection = () => {
     const sec: Section = {
