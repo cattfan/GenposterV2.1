@@ -503,7 +503,7 @@ export const aiGenerateComboFromImagesServer = createServerFn({ method: "POST" }
     // Đảm bảo đủ page (nếu AI bỏ sót thì fill role=other)
     for (let i = 0; i < data.images.length; i++) {
       if (!classified.find((c) => c.index === i)) {
-        classified.push({ index: i, role: "other", suggestedName: `Page ${i + 1}` });
+        classified.push({ index: i, role: "other" as const, dayNumber: undefined, suggestedName: `Page ${i + 1}` });
       }
     }
     classified.sort((a, b) => a.index - b.index);
