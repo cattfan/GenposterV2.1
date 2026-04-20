@@ -50,6 +50,7 @@ import { useBindOverrides, useEffectiveTemplate } from "@/features/generate/useB
 import { aiSuggestBindings, aiCaptionFromEntity } from "@/features/ai/aiFeatures";
 import { SuggestBindingsModal, type BindSuggestion } from "@/features/ai/SuggestBindingsModal";
 import { SheetFieldsPanel } from "@/features/generate/SheetFieldsPanel";
+import { PackTabContent } from "@/features/generate/PackTabContent";
 
 export const Route = createFileRoute("/generate")({
   component: GeneratePage,
