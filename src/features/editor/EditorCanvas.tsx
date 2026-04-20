@@ -12,6 +12,7 @@ import {
   shapeClipPath,
 } from "@/engines/binding/dataBinding";
 import { CropOverlay } from "./CropOverlay";
+import { SlotContextMenu, type SlotMenuActions } from "./SlotContextMenu";
 
 export function NumField({
   label,
