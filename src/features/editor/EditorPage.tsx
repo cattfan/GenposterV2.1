@@ -315,6 +315,8 @@ export function EditorPage() {
     const blobKey = await saveBlob(file);
     const url = await getBlobURL(blobKey);
     if (!url) return;
+    // Lưu dạng "idb://<blobKey>" để bền vững qua reload (không lưu blob: URL trực tiếp).
+    const persistentSrc = `idb://${blobKey}`;
     const dim = await new Promise<{ w: number; h: number }>((resolve) => {
       const img = new Image();
       img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
