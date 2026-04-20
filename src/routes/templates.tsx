@@ -209,6 +209,14 @@ function TemplatesPage() {
   return (
     <div className="p-8 max-w-6xl">
       <input ref={fileRef} type="file" accept="image/*" hidden onChange={onAiImageChange} />
+      <input
+        ref={comboFileRef}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        onChange={onComboFilesChange}
+      />
       <div className="flex items-center justify-between mb-6 gap-2 flex-wrap">
         <div>
           <h1 className="text-3xl font-bold">Page Templates</h1>
@@ -222,11 +230,74 @@ function TemplatesPage() {
             {aiBusy ? <Loader2 className="size-4 mr-2 animate-spin" /> : <Sparkles className="size-4 mr-2" />}
             AI dựng từ ảnh
           </Button>
+          <Button variant="outline" onClick={onPickComboImages} disabled={aiBusy}>
+            <Layers className="size-4 mr-2" /> AI dựng combo
+          </Button>
           <Button onClick={createNew}>
             <Plus className="size-4 mr-2" /> Tạo mới
           </Button>
         </div>
       </div>
+
+      <Dialog open={comboOpen} onOpenChange={(o) => !comboBusy && setComboOpen(o)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>AI dựng combo từ {comboPreviews.length} ảnh</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Tên pack (để trống → AI tự đặt)</Label>
+              <Input
+                value={comboPackName}
+                onChange={(e) => setComboPackName(e.target.value)}
+                placeholder="Vd: Đà Lạt 4N3Đ"
+                disabled={comboBusy}
+              />
+            </div>
+            <div>
+              <Label>Ảnh đã chọn</Label>
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mt-2 max-h-[300px] overflow-y-auto">
+                {comboPreviews.map((src, idx) => (
+                  <div key={idx} className="relative group aspect-[4/5] rounded overflow-hidden border bg-muted">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={src} alt={`page-${idx + 1}`} className="w-full h-full object-cover" />
+                    <div className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1">
+                      #{idx + 1}
+                    </div>
+                    {!comboBusy && (
+                      <button
+                        onClick={() => removeComboImage(idx)}
+                        className="absolute top-1 right-1 bg-black/60 text-white rounded p-0.5 opacity-0 group-hover:opacity-100"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+            {comboBusy && (
+              <div className="space-y-1">
+                <div className="text-sm text-muted-foreground">{comboStep}</div>
+                <Progress value={comboProgress} />
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setComboOpen(false)} disabled={comboBusy}>
+              Huỷ
+            </Button>
+            <Button onClick={startCombo} disabled={comboBusy || comboPreviews.length === 0}>
+              {comboBusy ? (
+                <Loader2 className="size-4 mr-2 animate-spin" />
+              ) : (
+                <Sparkles className="size-4 mr-2" />
+              )}
+              Bắt đầu dựng
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {tpls && tpls.length === 0 && (
         <Card>
