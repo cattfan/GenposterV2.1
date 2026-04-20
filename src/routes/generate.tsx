@@ -499,7 +499,7 @@ function GeneratePage() {
                             </div>
                           </div>
                         </div>
-                        {ent?.partnerFlag && <Badge>Đối tác</Badge>}
+                        {ent?.partnerFlag && <Badge className="gap-1"><Star className="size-3" /> Đối tác</Badge>}
                       </div>
                     </CardHeader>
                     <CardContent className="p-3 pt-0 space-y-2">
