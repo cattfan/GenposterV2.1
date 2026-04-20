@@ -16,16 +16,38 @@ import { selectForSection } from "../selection/engine";
 import { pickAssetForEntity } from "../binding/assetSafe";
 import type { ScoreContext } from "../scoring/score";
 
+export type PackBindMode = "section" | "one-entity-per-pack" | "one-entity-per-page";
+
 export interface GenerateInput {
   pack: PackTemplate;
   pageTemplates: PageTemplate[];
   entities: Entity[];
   assets: Asset[];
   overrides?: ManualOverride[];
+  /** Chế độ bind entity vào page. Mặc định "section" (luồng cũ). */
+  mode?: PackBindMode;
+  /** Pool entity đã filter sẵn (chỉ dùng cho 2 mode bind theo entity). */
+  entityPool?: Entity[];
+  /** Bind override per-page-template designer set trong UI. */
+  bindOverrides?: Record<string, Record<string, string | undefined>>;
 }
 
 export function generatePackJob(input: GenerateInput): GenerationJob {
-  const { pack, pageTemplates, entities, assets, overrides = [] } = input;
+  const {
+    pack,
+    pageTemplates,
+    entities,
+    assets,
+    overrides = [],
+    mode = "section",
+    entityPool = [],
+    bindOverrides = {},
+  } = input;
+
+  // === Branch: bind theo entity (không section selection) ===
+  if (mode === "one-entity-per-pack" || mode === "one-entity-per-page") {
+    return generateEntityBindJob(pack, pageTemplates, entityPool, mode, bindOverrides);
+  }
 
   const ctx: ScoreContext = {
     pageEntitiesUsed: new Set(),
@@ -124,6 +146,77 @@ export function generatePackJob(input: GenerateInput): GenerationJob {
       renderedAt: Date.now(),
     });
   });
+
+  return {
+    jobId: nanoid(),
+    packTemplateId: pack.packTemplateId,
+    packTemplateName: pack.name,
+    createdAt: Date.now(),
+    pages: renderedPages,
+    status: "generated",
+  };
+}
+
+/**
+ * Bind theo entity (không section selection, chỉ resolve text/image bindingPath ở renderer).
+ * - one-entity-per-pack: mỗi entity sinh đủ pack (orderedPages.length pages)
+ * - one-entity-per-page: round-robin entity vào từng page của 1 pack
+ */
+function generateEntityBindJob(
+  pack: PackTemplate,
+  pageTemplates: PageTemplate[],
+  entityPool: Entity[],
+  mode: "one-entity-per-pack" | "one-entity-per-page",
+  bindOverrides: Record<string, Record<string, string | undefined>>,
+): GenerationJob {
+  const pageMap = new Map(pageTemplates.map((p) => [p.pageTemplateId, p]));
+  const renderedPages: RenderedPage[] = [];
+  const orderedTpls = pack.orderedPages
+    .map((id) => pageMap.get(id))
+    .filter((t): t is PageTemplate => !!t);
+
+  if (orderedTpls.length === 0 || entityPool.length === 0) {
+    return {
+      jobId: nanoid(),
+      packTemplateId: pack.packTemplateId,
+      packTemplateName: pack.name,
+      createdAt: Date.now(),
+      pages: [],
+      status: "generated",
+    };
+  }
+
+  let pageIndex = 0;
+  const pushPage = (tpl: PageTemplate, ent: Entity, perPackIdx: number) => {
+    const ov = bindOverrides[tpl.pageTemplateId];
+    const slugEnt = slugify(ent.name);
+    renderedPages.push({
+      pageIndex,
+      pageFile: `${slugEnt}-p${perPackIdx + 1}-${slugify(tpl.name)}.png`,
+      pageTemplateId: tpl.pageTemplateId,
+      state: "accepted",
+      selected: true,
+      healthScore: 100,
+      warnings: [],
+      items: [],
+      renderedAt: Date.now(),
+      entityId: ent.entityId,
+      entityName: ent.name,
+      bindOverrides: ov,
+    });
+    pageIndex += 1;
+  };
+
+  if (mode === "one-entity-per-pack") {
+    for (const ent of entityPool) {
+      orderedTpls.forEach((tpl, i) => pushPage(tpl, ent, i));
+    }
+  } else {
+    orderedTpls.forEach((tpl, i) => {
+      const ent = entityPool[i % entityPool.length];
+      pushPage(tpl, ent, i);
+    });
+  }
 
   return {
     jobId: nanoid(),

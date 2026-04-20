@@ -50,6 +50,7 @@ import { useBindOverrides, useEffectiveTemplate } from "@/features/generate/useB
 import { aiSuggestBindings, aiCaptionFromEntity } from "@/features/ai/aiFeatures";
 import { SuggestBindingsModal, type BindSuggestion } from "@/features/ai/SuggestBindingsModal";
 import { SheetFieldsPanel } from "@/features/generate/SheetFieldsPanel";
+import { PackTabContent } from "@/features/generate/PackTabContent";
 
 export const Route = createFileRoute("/generate")({
   component: GeneratePage,
@@ -735,119 +736,26 @@ function GeneratePage() {
           />
         </TabsContent>
 
-        {/* === TAB: theo pack (luồng cũ) === */}
+        {/* === TAB: theo pack (nâng cao, bind theo entity) === */}
         <TabsContent value="pack" className="space-y-4">
-          <Card>
-            <CardContent className="p-4 flex flex-wrap items-end gap-3">
-              <div className="flex-1 min-w-[240px]">
-                <label className="text-xs text-muted-foreground">Pack template</label>
-                <Select value={packId} onValueChange={setPackId}>
-                  <SelectTrigger><SelectValue placeholder="Chọn pack..." /></SelectTrigger>
-                  <SelectContent>
-                    {packs?.map((p) => (
-                      <SelectItem key={p.packTemplateId} value={p.packTemplateId}>
-                        {p.name} ({p.orderedPages.length} page)
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button onClick={onGenerate} disabled={!packId}>
-                <Sparkles className="size-4 mr-2" /> Generate
-              </Button>
-              <Button variant="outline" onClick={() => setDebug((d) => !d)}>
-                {debug ? <EyeOff className="size-4 mr-2" /> : <Eye className="size-4 mr-2" />}
-                {debug ? "Tắt debug" : "Bật debug"}
-              </Button>
-            </CardContent>
-          </Card>
-
-          {currentJob && (
-            <>
-              <Card className="mb-4">
-                <CardContent className="p-4 flex flex-wrap items-center gap-3">
-                  <Badge variant="outline">{currentJob.pages.length} page</Badge>
-                  <Badge variant="secondary">{currentJob.pages.filter((p) => p.selected).length} đã chọn</Badge>
-                  <div className="flex-1" />
-                  <Select value={filter} onValueChange={(v) => setFilter(v as "all" | "selected" | "errors" | "partner")}>
-                    <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Tất cả</SelectItem>
-                      <SelectItem value="selected">Đang chọn</SelectItem>
-                      <SelectItem value="errors">Có cảnh báo</SelectItem>
-                      <SelectItem value="partner">Có đối tác</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Button variant="outline" size="sm" onClick={() => setSelectedAll(true)}>Chọn hết</Button>
-                  <Button variant="outline" size="sm" onClick={() => setSelectedAll(false)}>Bỏ chọn hết</Button>
-                  <Button onClick={exportZip}>
-                    <Package className="size-4 mr-2" /> Export ZIP
-                  </Button>
-                </CardContent>
-              </Card>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredPages?.map((p) => {
-                  const tpl = tpls?.find((t) => t.pageTemplateId === p.pageTemplateId);
-                  if (!tpl) return null;
-                  const previewScale = 320 / tpl.canvas.width;
-                  return (
-                    <Card key={p.pageIndex} className={p.selected ? "border-primary" : ""}>
-                      <CardHeader className="p-3 pb-2">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-start gap-2 min-w-0">
-                            <Checkbox checked={p.selected} onCheckedChange={() => toggleSelected(p.pageIndex)} />
-                            <div className="min-w-0">
-                              <div className="font-semibold text-sm truncate">{tpl.name}</div>
-                              <div className="text-xs text-muted-foreground">{p.pageFile}</div>
-                            </div>
-                          </div>
-                          <Badge variant={p.healthScore >= 80 ? "default" : p.healthScore >= 50 ? "secondary" : "destructive"}>
-                            {p.healthScore}
-                          </Badge>
-                        </div>
-                      </CardHeader>
-                      <CardContent className="p-3 pt-0 space-y-2">
-                        <div className="overflow-hidden rounded border bg-muted/30">
-                          <div ref={(el) => { if (el) renderRefs.current.set(p.pageIndex, el); }}>
-                            <PageRenderer
-                              template={tpl}
-                              page={p}
-                              entities={entities ?? []}
-                              assets={assets ?? []}
-                              scale={previewScale}
-                              debug={debug}
-                            />
-                          </div>
-                        </div>
-                        {p.warnings.length > 0 && (
-                          <div className="text-xs text-amber-700 bg-amber-50 dark:bg-amber-950 dark:text-amber-300 p-2 rounded space-y-0.5">
-                            {p.warnings.slice(0, 3).map((w, i) => (
-                              <div key={i} className="flex items-start gap-1">
-                                <AlertTriangle className="size-3 mt-0.5 shrink-0" /> <span>{w}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="w-full"
-                          onClick={async () => {
-                            const node = renderRefs.current.get(p.pageIndex);
-                            if (!node) return;
-                            await downloadPng(node, p.pageFile, 2);
-                          }}
-                        >
-                          <Download className="size-3 mr-1" /> Export PNG
-                        </Button>
-                      </CardContent>
-                    </Card>
-                  );
-                })}
-              </div>
-            </>
-          )}
+          <PackTabContent
+            packs={packs ?? []}
+            tpls={tpls ?? []}
+            entities={entities ?? []}
+            assets={assets ?? []}
+            currentJob={currentJob}
+            setJob={setJob}
+            toggleSelected={toggleSelected}
+            setSelectedAll={setSelectedAll}
+            renderRefs={renderRefs}
+            debug={debug}
+            setDebug={setDebug}
+            sheetOptions={sheetOptions}
+            packId={packId}
+            setPackId={setPackId}
+            filter={filter}
+            setFilter={setFilter}
+          />
         </TabsContent>
       </Tabs>
     </div>

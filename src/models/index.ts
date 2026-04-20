@@ -276,6 +276,12 @@ export interface RenderedPage {
   warnings: string[];
   items: RenderedItem[];
   renderedAt: number;
+  /** Entity gắn vào page này (chỉ dùng cho luồng pack-bind theo entity). */
+  entityId?: ID;
+  /** Tên entity để hiển thị nhanh trên card kết quả. */
+  entityName?: string;
+  /** Override binding tạm thời designer áp lên page này khi generate. */
+  bindOverrides?: Record<string, string | undefined>;
 }
 
 export interface DataSourceInfo {
