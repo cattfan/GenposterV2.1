@@ -453,11 +453,27 @@ function GeneratePage() {
                   <MousePointerClick className="size-4" />
                   Click block để liên kết dữ liệu
                 </CardTitle>
-                {Object.keys(bindOverrides).length > 0 && (
-                  <Button size="sm" variant="ghost" onClick={resetAll} className="h-7 text-xs">
-                    <Link2Off className="size-3 mr-1" /> Reset bind
+                <div className="flex gap-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={runAiSuggest}
+                    disabled={!effectiveTpl || suggestBusy}
+                    className="h-7 text-xs"
+                  >
+                    {suggestBusy ? (
+                      <Loader2 className="size-3 mr-1 animate-spin" />
+                    ) : (
+                      <Wand2 className="size-3 mr-1" />
+                    )}
+                    AI gợi ý bind
                   </Button>
-                )}
+                  {Object.keys(bindOverrides).length > 0 && (
+                    <Button size="sm" variant="ghost" onClick={resetAll} className="h-7 text-xs">
+                      <Link2Off className="size-3 mr-1" /> Reset
+                    </Button>
+                  )}
+                </div>
               </CardHeader>
               <CardContent>
                 {!effectiveTpl ? (
