@@ -31,7 +31,17 @@ function TemplatesPage() {
   const navigate = useNavigate();
   const tpls = useLiveQuery(() => db.pageTemplates.orderBy("updatedAt").reverse().toArray(), []);
   const fileRef = useRef<HTMLInputElement>(null);
+  const comboFileRef = useRef<HTMLInputElement>(null);
   const [aiBusy, setAiBusy] = useState(false);
+
+  // Combo state
+  const [comboOpen, setComboOpen] = useState(false);
+  const [comboFiles, setComboFiles] = useState<File[]>([]);
+  const [comboPreviews, setComboPreviews] = useState<string[]>([]);
+  const [comboPackName, setComboPackName] = useState("");
+  const [comboBusy, setComboBusy] = useState(false);
+  const [comboStep, setComboStep] = useState("");
+  const [comboProgress, setComboProgress] = useState(0);
 
   if (location.pathname !== "/templates") {
     return <Outlet />;
