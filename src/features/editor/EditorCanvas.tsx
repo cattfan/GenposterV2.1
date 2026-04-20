@@ -233,7 +233,12 @@ function SlotEditor({
   } else if (slot.kind === "image") {
     const filter = buildCssFilter(slot.style);
     const objectFit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
-    const displaySrc = useResolvedImageSrc(slot.staticImage) ?? slot.staticImage;
+    const resolved = useResolvedImageSrc(slot.staticImage);
+    // KHÔNG fallback về `idb://...` string — gây <img> hỏng. Chỉ render khi có URL thật.
+    const isIdb = !!slot.staticImage && slot.staticImage.startsWith("idb://");
+    const isPending = isIdb && resolved === undefined;
+    const isMissing = isIdb && resolved === undefined && !isPending; // resolver trả null => undefined sau .then
+    const displaySrc = resolved && !resolved.startsWith("idb://") ? resolved : (!isIdb ? slot.staticImage : undefined);
     const crop = slot.crop;
 
     // Khi có crop, render qua wrapper overflow:hidden + img scale lên rồi offset
@@ -274,9 +279,11 @@ function SlotEditor({
         />
       )
     ) : (
-      <div className="w-full h-full bg-muted/50 grid place-items-center text-xs text-muted-foreground gap-1 flex-col">
+      <div className="w-full h-full bg-muted/50 grid place-items-center text-xs text-muted-foreground gap-1 flex-col p-2 text-center">
         <ImageIcon className="size-5 opacity-50" />
-        <span>Image placeholder</span>
+        <span>
+          {isIdb ? (resolved === undefined ? "Đang tải / ảnh đã mất" : "Ảnh đã mất — upload lại") : "Image placeholder"}
+        </span>
       </div>
     );
     content = (
@@ -303,7 +310,10 @@ function SlotEditor({
     const radius = shapeBorderRadius(slot.shapeKind, slot.style?.borderRadius, zoom);
     const clip = slot.shapeKind ? shapeClipPath(slot.shapeKind) : undefined;
     const objectFit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
-    const src = useResolvedImageSrc(slot.staticImage) ?? slot.staticImage;
+    const resolvedShape = useResolvedImageSrc(slot.staticImage);
+    const src = resolvedShape && !resolvedShape.startsWith("idb://")
+      ? resolvedShape
+      : (slot.staticImage && !slot.staticImage.startsWith("idb://") ? slot.staticImage : undefined);
 
     if (slot.shapeKind === "line" || slot.shapeKind === "divider") {
       content = (
@@ -473,7 +483,10 @@ function CropContainer({
   onCommit: (crop: { x: number; y: number; w: number; h: number }) => void;
   onCancel: () => void;
 }) {
-  const resolved = useResolvedImageSrc(slot.staticImage) ?? slot.staticImage ?? "";
+  const resolvedCrop = useResolvedImageSrc(slot.staticImage);
+  const resolved = resolvedCrop && !resolvedCrop.startsWith("idb://")
+    ? resolvedCrop
+    : (slot.staticImage && !slot.staticImage.startsWith("idb://") ? slot.staticImage : "");
   return (
     <div
       style={{
