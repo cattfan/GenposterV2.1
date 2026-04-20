@@ -6,6 +6,8 @@ import { nanoid } from "nanoid";
 import { Canvas, NumField } from "@/features/editor/EditorCanvas";
 import { FontPicker } from "@/features/editor/FontPicker";
 import { SlotContextMenu, type SlotMenuActions } from "@/features/editor/SlotContextMenu";
+import { CardRepeaterPanel } from "@/features/editor/CardRepeaterPanel";
+import type { CardGroupConfig } from "@/models";
 import {
   bringForward,
   bringToFront,
