@@ -43,6 +43,7 @@ export function Canvas({
   onSelect,
   onUpdateSlot,
   onDeleteSlot,
+  buildMenuActions,
 }: {
   template: PageTemplate;
   zoom: number;
@@ -50,6 +51,7 @@ export function Canvas({
   onSelect: (id: string | null) => void;
   onUpdateSlot: (slotId: string, patch: Partial<Slot>) => void;
   onDeleteSlot?: (slotId: string) => void;
+  buildMenuActions?: (slotId: string) => SlotMenuActions;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [cropSlotId, setCropSlotId] = useState<string | null>(null);
@@ -83,6 +85,7 @@ export function Canvas({
             onDelete={() => onDeleteSlot?.(slot.slotId)}
             onStartCrop={() => setCropSlotId(slot.slotId)}
             template={template}
+            menuActions={buildMenuActions?.(slot.slotId)}
           />
         ))}
       {cropSlot && cropSlot.staticImage && (
