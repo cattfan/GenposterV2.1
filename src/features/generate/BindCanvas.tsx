@@ -91,11 +91,15 @@ export function BindCanvas({
         );
       })}
 
-      {template.slots
+      {expanded.slots
         .slice()
+        .filter((s) => s.cardIndex === 0)
         .filter((s) => !s.style?.hidden)
         .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))
         .map((slot) => {
+          const cardEnt = slot.__cardEntityId
+            ? expanded.entityBySlotId.get(slot.slotId)
+            : undefined;
           const inCardGroup = !!slot.groupId &&
             (template.cardGroups ?? []).some((g) => g.groupId === slot.groupId);
           const cardCfg = inCardGroup
@@ -108,7 +112,7 @@ export function BindCanvas({
               scale={scale}
               selected={slot.slotId === selectedSlotId}
               onSelect={() => onSelectSlot(slot.slotId)}
-              entity={entity}
+              entity={cardEnt ?? entity}
               planned={imagePlan.get(slot.slotId)}
               cardBadge={cardCfg ? `↻ ${cardCfg.repeatCount}` : undefined}
             />
