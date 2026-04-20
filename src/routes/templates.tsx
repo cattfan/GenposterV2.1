@@ -17,7 +17,7 @@ import { toast } from "sonner";
 import { useEffect, useRef, useState } from "react";
 import type { PageTemplate } from "@/models";
 import { PageRenderer } from "@/features/render/PageRenderer";
-import { aiGenerateTemplateFromImageServer, aiGenerateComboFromImagesServer } from "@/server/aiTemplate";
+import { aiGenerateTemplateFromImage, aiGenerateComboFromImages } from "@/features/ai/aiFeatures";
 import { aiLayoutToTemplate } from "@/features/ai/templateFromImage";
 import { buildComboFromAiResult, persistCombo } from "@/features/ai/comboFromImages";
 import { seedTravelFlexPack, cloneDayPage } from "@/storage/seedFlex";
@@ -84,7 +84,7 @@ function TemplatesPage() {
         r.onerror = () => rej(new Error("Đọc ảnh lỗi"));
         r.readAsDataURL(f);
       });
-      const out = await aiGenerateTemplateFromImageServer({ data: { imageDataUrl: dataUrl } });
+      const out = await aiGenerateTemplateFromImage(dataUrl);
       if (!out.ok) {
         toast.error(out.error);
         return;
@@ -170,10 +170,12 @@ function TemplatesPage() {
     setComboStep(`Phân loại ${comboPreviews.length} ảnh...`);
     setComboProgress(10);
     try {
-      const out = await aiGenerateComboFromImagesServer({
-        data: {
-          images: comboPreviews.map((dataUrl) => ({ dataUrl })),
-          packNameHint: comboPackName.trim() || undefined,
+      const out = await aiGenerateComboFromImages({
+        images: comboPreviews.map((dataUrl) => ({ dataUrl })),
+        packNameHint: comboPackName.trim() || undefined,
+        onProgress: (step, progress) => {
+          setComboStep(step);
+          setComboProgress(progress);
         },
       });
       if (!out.ok) {
