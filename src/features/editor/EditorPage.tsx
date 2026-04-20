@@ -4,6 +4,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { db, saveBlob, getBlobURL } from "@/storage/db";
 import { nanoid } from "nanoid";
 import { Canvas, NumField } from "@/features/editor/EditorCanvas";
+import { FontPicker } from "@/features/editor/FontPicker";
 import type { PageTemplate, Slot, Section } from "@/models";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,6 +40,11 @@ import {
   Lock,
   Undo2,
   Redo2,
+  Bold,
+  Italic,
+  Underline,
+  Strikethrough,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 
