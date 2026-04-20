@@ -198,7 +198,7 @@ function SlotRenderer({
         {src && (
           <>
             <img
-              src={src}
+              src={resolvedShapeSrc ?? src}
               crossOrigin="anonymous"
               alt=""
               style={{
@@ -241,6 +241,7 @@ function SlotRenderer({
         entityIdLog = a.entityId;
       }
     }
+    const resolvedImgSrc = useResolvedImageSrc(src);
     const filter = buildCssFilter(slot.style);
     const objectFit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
     const crop = slot.crop;
@@ -249,7 +250,7 @@ function SlotRenderer({
         {src ? (
           crop ? (
             <img
-              src={src}
+              src={resolvedImgSrc ?? src}
               crossOrigin="anonymous"
               style={{
                 position: "absolute",
@@ -265,7 +266,7 @@ function SlotRenderer({
             />
           ) : (
             <img
-              src={src}
+              src={resolvedImgSrc ?? src}
               crossOrigin="anonymous"
               style={{
                 width: "100%",
