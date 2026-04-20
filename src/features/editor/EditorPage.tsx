@@ -772,19 +772,33 @@ export function EditorPage() {
             )}
             {selectedSlot && (
               <>
-                <div className="flex gap-1">
+                <div className="flex flex-wrap gap-1">
                   {!selectedSlot.isUploadedBackground && (
-                    <Button size="sm" variant="outline" onClick={() => duplicateSlot(selectedSlot.slotId)}>
+                    <Button size="sm" variant="outline" onClick={() => duplicateSlot(selectedSlot.slotId)} title="Nhân bản (Ctrl+D)">
                       <Copy className="size-3 mr-1" /> Copy
                     </Button>
                   )}
-                  <Button size="sm" variant="outline" onClick={() => moveZ(selectedSlot.slotId, 1)}>
-                    <ArrowUp className="size-3" />
+                  <div className="flex border rounded-md overflow-hidden">
+                    <Button size="sm" variant="ghost" className="h-8 px-2 rounded-none" onClick={() => orderSlot(selectedSlot.slotId, "front")} title="Đưa lên trên cùng (Ctrl+Shift+])" disabled={selectedSlot.isUploadedBackground}>
+                      <ChevronsUp className="size-3" />
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-8 px-2 rounded-none border-l" onClick={() => orderSlot(selectedSlot.slotId, "forward")} title="Đưa lên 1 cấp (Ctrl+])" disabled={selectedSlot.isUploadedBackground}>
+                      <ArrowUp className="size-3" />
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-8 px-2 rounded-none border-l" onClick={() => orderSlot(selectedSlot.slotId, "backward")} title="Đưa xuống 1 cấp (Ctrl+[)" disabled={selectedSlot.isUploadedBackground}>
+                      <ArrowDown className="size-3" />
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-8 px-2 rounded-none border-l" onClick={() => orderSlot(selectedSlot.slotId, "back")} title="Đưa xuống dưới cùng (Ctrl+Shift+[)" disabled={selectedSlot.isUploadedBackground}>
+                      <ChevronsDown className="size-3" />
+                    </Button>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => toggleHidden(selectedSlot.slotId)} title={selectedSlot.style?.hidden ? "Hiện (Ctrl+H)" : "Ẩn (Ctrl+H)"}>
+                    {selectedSlot.style?.hidden ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => moveZ(selectedSlot.slotId, -1)}>
-                    <ArrowDown className="size-3" />
+                  <Button size="sm" variant="outline" onClick={() => toggleLock(selectedSlot.slotId)} title={selectedSlot.locked ? "Mở khoá (Ctrl+L)" : "Khoá (Ctrl+L)"} disabled={selectedSlot.isUploadedBackground}>
+                    {selectedSlot.locked || selectedSlot.isUploadedBackground ? <Lock className="size-3" /> : <Unlock className="size-3" />}
                   </Button>
-                  <Button size="sm" variant="destructive" onClick={() => deleteSlot(selectedSlot.slotId)}>
+                  <Button size="sm" variant="destructive" onClick={() => deleteSlot(selectedSlot.slotId)} title="Xoá (Delete)" disabled={selectedSlot.isUploadedBackground}>
                     <Trash2 className="size-3" />
                   </Button>
                 </div>
