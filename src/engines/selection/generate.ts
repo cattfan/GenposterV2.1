@@ -16,12 +16,20 @@ import { selectForSection } from "../selection/engine";
 import { pickAssetForEntity } from "../binding/assetSafe";
 import type { ScoreContext } from "../scoring/score";
 
+export type PackBindMode = "section" | "one-entity-per-pack" | "one-entity-per-page";
+
 export interface GenerateInput {
   pack: PackTemplate;
   pageTemplates: PageTemplate[];
   entities: Entity[];
   assets: Asset[];
   overrides?: ManualOverride[];
+  /** Chế độ bind entity vào page. Mặc định "section" (luồng cũ). */
+  mode?: PackBindMode;
+  /** Pool entity đã filter sẵn (chỉ dùng cho 2 mode bind theo entity). */
+  entityPool?: Entity[];
+  /** Bind override per-page-template designer set trong UI. */
+  bindOverrides?: Record<string, Record<string, string | undefined>>;
 }
 
 export function generatePackJob(input: GenerateInput): GenerationJob {
