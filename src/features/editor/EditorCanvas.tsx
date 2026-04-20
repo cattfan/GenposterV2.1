@@ -13,6 +13,7 @@ import {
 } from "@/engines/binding/dataBinding";
 import { CropOverlay } from "./CropOverlay";
 import { SlotContextMenu, type SlotMenuActions } from "./SlotContextMenu";
+import { useResolvedImageSrc } from "@/storage/imageSrc";
 
 export function NumField({
   label,
@@ -89,28 +90,15 @@ export function Canvas({
           />
         ))}
       {cropSlot && cropSlot.staticImage && (
-        <div
-          style={{
-            position: "absolute",
-            left: cropSlot.x * zoom,
-            top: cropSlot.y * zoom,
-            width: cropSlot.width * zoom,
-            height: cropSlot.height * zoom,
+        <CropContainer
+          slot={cropSlot}
+          zoom={zoom}
+          onCommit={(crop) => {
+            onUpdateSlot(cropSlot.slotId, { crop });
+            setCropSlotId(null);
           }}
-        >
-          <CropOverlay
-            src={cropSlot.staticImage}
-            initial={cropSlot.crop}
-            zoom={zoom}
-            width={cropSlot.width}
-            height={cropSlot.height}
-            onCommit={(crop) => {
-              onUpdateSlot(cropSlot.slotId, { crop });
-              setCropSlotId(null);
-            }}
-            onCancel={() => setCropSlotId(null)}
-          />
-        </div>
+          onCancel={() => setCropSlotId(null)}
+        />
       )}
     </div>
   );
@@ -245,7 +233,7 @@ function SlotEditor({
   } else if (slot.kind === "image") {
     const filter = buildCssFilter(slot.style);
     const objectFit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
-    const displaySrc = slot.staticImage;
+    const displaySrc = useResolvedImageSrc(slot.staticImage) ?? slot.staticImage;
     const crop = slot.crop;
 
     // Khi có crop, render qua wrapper overflow:hidden + img scale lên rồi offset
@@ -315,7 +303,7 @@ function SlotEditor({
     const radius = shapeBorderRadius(slot.shapeKind, slot.style?.borderRadius, zoom);
     const clip = slot.shapeKind ? shapeClipPath(slot.shapeKind) : undefined;
     const objectFit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
-    const src = slot.staticImage;
+    const src = useResolvedImageSrc(slot.staticImage) ?? slot.staticImage;
 
     if (slot.shapeKind === "line" || slot.shapeKind === "divider") {
       content = (
@@ -472,4 +460,39 @@ function SlotEditor({
     );
   }
   return slotEl;
+}
+
+function CropContainer({
+  slot,
+  zoom,
+  onCommit,
+  onCancel,
+}: {
+  slot: Slot;
+  zoom: number;
+  onCommit: (crop: { x: number; y: number; w: number; h: number }) => void;
+  onCancel: () => void;
+}) {
+  const resolved = useResolvedImageSrc(slot.staticImage) ?? slot.staticImage ?? "";
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: slot.x * zoom,
+        top: slot.y * zoom,
+        width: slot.width * zoom,
+        height: slot.height * zoom,
+      }}
+    >
+      <CropOverlay
+        src={resolved}
+        initial={slot.crop}
+        zoom={zoom}
+        width={slot.width}
+        height={slot.height}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />
+    </div>
+  );
 }

@@ -13,6 +13,7 @@ import {
   shapeBorderRadius,
   shapeClipPath,
 } from "@/engines/binding/dataBinding";
+import { useResolvedImageSrc } from "@/storage/imageSrc";
 
 export function BindCanvas({
   template,
@@ -30,6 +31,7 @@ export function BindCanvas({
   assets: Asset[];
 }) {
   const { width, height, background, backgroundImage } = template.canvas;
+  const resolvedBg = useResolvedImageSrc(backgroundImage);
 
   return (
     <div
@@ -41,7 +43,7 @@ export function BindCanvas({
         height: height * scale,
         position: "relative",
         background: background ?? "transparent",
-        backgroundImage: backgroundImage ? `url(${backgroundImage})` : undefined,
+        backgroundImage: resolvedBg ? `url(${resolvedBg})` : undefined,
         backgroundSize: "cover",
         backgroundPosition: "center",
         overflow: "hidden",
@@ -124,6 +126,7 @@ function BindSlot({
       const r = resolveImageBinding(slot.bindingPath, entity, assets, src);
       if (r.src) src = r.src;
     }
+    const resolvedSrc = useResolvedImageSrc(src);
     const fit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
     const filter = buildCssFilter(slot.style);
     const radius = shapeBorderRadius(slot.shapeKind, slot.style?.borderRadius, scale);
@@ -159,7 +162,7 @@ function BindSlot({
         {src ? (
           <>
             <img
-              src={src}
+              src={resolvedSrc ?? src}
               alt=""
               draggable={false}
               style={{ width: "100%", height: "100%", objectFit: fit, filter, pointerEvents: "none" }}
@@ -179,6 +182,7 @@ function BindSlot({
       const r = resolveImageBinding(slot.bindingPath, entity, assets, src);
       if (r.src) src = r.src;
     }
+    const resolvedImgSrc = useResolvedImageSrc(src);
     const filter = buildCssFilter(slot.style);
     const objectFit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
     const crop = slot.crop;
@@ -187,7 +191,7 @@ function BindSlot({
         {src ? (
           crop ? (
             <img
-              src={src}
+              src={resolvedImgSrc ?? src}
               alt=""
               draggable={false}
               style={{
@@ -203,7 +207,7 @@ function BindSlot({
             />
           ) : (
             <img
-              src={src}
+              src={resolvedImgSrc ?? src}
               alt=""
               draggable={false}
               style={{ width: "100%", height: "100%", objectFit, filter, pointerEvents: "none" }}

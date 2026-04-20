@@ -22,6 +22,7 @@ import {
   shapeBorderRadius,
   shapeClipPath,
 } from "@/engines/binding/dataBinding";
+import { useResolvedImageSrc } from "@/storage/imageSrc";
 
 interface Props {
   template: PageTemplate;
@@ -49,6 +50,7 @@ export function PageRenderer({
   const assetMap = useMemo(() => new Map(assets.map((a) => [a.assetId, a])), [assets]);
 
   const { width, height, background, backgroundImage } = template.canvas;
+  const resolvedBg = useResolvedImageSrc(backgroundImage);
 
   const sectionItemsMap = useMemo(() => {
     const m = new Map<string, Array<{ entityId?: string; assetId?: string }>>();
@@ -81,7 +83,7 @@ export function PageRenderer({
         position: "relative",
         // Nếu template không set background → để trong suốt (không fallback #fff).
         background: background ?? "transparent",
-        backgroundImage: backgroundImage ? `url(${backgroundImage})` : undefined,
+        backgroundImage: resolvedBg ? `url(${resolvedBg})` : undefined,
         backgroundSize: "cover",
         backgroundPosition: "center",
         overflow: "hidden",
@@ -157,6 +159,7 @@ function SlotRenderer({
       const r = resolveImageBinding(slot.bindingPath, entity, assets, src);
       if (r.src) src = r.src;
     }
+    const resolvedShapeSrc = useResolvedImageSrc(src);
     const fit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
     const filter = buildCssFilter(slot.style);
     const radius = shapeBorderRadius(slot.shapeKind, slot.style?.borderRadius, scale);
@@ -195,7 +198,7 @@ function SlotRenderer({
         {src && (
           <>
             <img
-              src={src}
+              src={resolvedShapeSrc ?? src}
               crossOrigin="anonymous"
               alt=""
               style={{
@@ -238,6 +241,7 @@ function SlotRenderer({
         entityIdLog = a.entityId;
       }
     }
+    const resolvedImgSrc = useResolvedImageSrc(src);
     const filter = buildCssFilter(slot.style);
     const objectFit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
     const crop = slot.crop;
@@ -246,7 +250,7 @@ function SlotRenderer({
         {src ? (
           crop ? (
             <img
-              src={src}
+              src={resolvedImgSrc ?? src}
               crossOrigin="anonymous"
               style={{
                 position: "absolute",
@@ -262,7 +266,7 @@ function SlotRenderer({
             />
           ) : (
             <img
-              src={src}
+              src={resolvedImgSrc ?? src}
               crossOrigin="anonymous"
               style={{
                 width: "100%",
