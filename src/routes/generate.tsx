@@ -122,6 +122,14 @@ function GeneratePage() {
   const [previewEntityId, setPreviewEntityId] = useState<string | undefined>(undefined);
   const { overrides: bindOverrides, setBinding, clearBinding, resetAll } = useBindOverrides();
 
+  // === AI suggest bindings ===
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [suggestBusy, setSuggestBusy] = useState(false);
+  const [suggestions, setSuggestions] = useState<BindSuggestion[]>([]);
+
+  // === AI caption ===
+  const [captionBusy, setCaptionBusy] = useState(false);
+
   const selectedTpl = tpls?.find((t) => t.pageTemplateId === tplId);
   const effectiveTpl = useEffectiveTemplate(selectedTpl, bindOverrides);
 
