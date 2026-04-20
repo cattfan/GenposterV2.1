@@ -22,6 +22,7 @@ import {
   shapeBorderRadius,
   shapeClipPath,
 } from "@/engines/binding/dataBinding";
+import { useResolvedImageSrc } from "@/storage/imageSrc";
 
 interface Props {
   template: PageTemplate;
