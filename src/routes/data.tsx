@@ -184,20 +184,22 @@ function DataPage() {
                 <thead className="bg-muted">
                   <tr>
                     <th className="text-left p-2">Tên</th>
-                    <th className="text-left p-2">Category</th>
-                    <th className="text-left p-2">Address</th>
-                    <th className="text-left p-2">Price</th>
-                    <th className="text-left p-2">Partner</th>
+                    <th className="text-left p-2">Sheet</th>
+                    <th className="text-left p-2">Mô hình</th>
+                    <th className="text-left p-2">Phong cách</th>
+                    <th className="text-left p-2">Địa chỉ</th>
+                    <th className="text-left p-2">Đối tác</th>
                   </tr>
                 </thead>
                 <tbody>
                   {entities?.map((e) => (
                     <tr key={e.entityId} className="border-t">
                       <td className="p-2 font-medium">{e.name}</td>
+                      <td className="p-2 text-xs"><Badge variant="outline">{e.sheetName ?? "—"}</Badge></td>
                       <td className="p-2">{e.categoryMain}</td>
+                      <td className="p-2 text-xs">{e.categorySub}</td>
                       <td className="p-2 text-xs text-muted-foreground">{e.address}</td>
-                      <td className="p-2 text-xs">{e.priceRange}</td>
-                      <td className="p-2">{e.partnerFlag && <Badge variant="default">P {e.partnerPriority}</Badge>}</td>
+                      <td className="p-2">{e.partnerFlag && <Badge variant="default">Đối tác</Badge>}</td>
                     </tr>
                   ))}
                 </tbody>
