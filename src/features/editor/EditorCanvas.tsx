@@ -298,14 +298,16 @@ function SlotEditor({
       </div>
     );
   } else if (slot.kind === "shape") {
-    const fill = slot.style?.fill ?? "#000";
-    if (slot.shapeKind === "triangle") {
-      content = (
-        <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
-          <polygon points="50,0 100,100 0,100" fill={fill} />
-        </svg>
-      );
-    } else if (slot.shapeKind === "line" || slot.shapeKind === "divider") {
+    const gradient = buildGradient(slot.style);
+    const fill = gradient ?? slot.style?.fill ?? "#000";
+    const filter = buildCssFilter(slot.style);
+    const border = buildBorder(slot.style, zoom);
+    const radius = shapeBorderRadius(slot.shapeKind, slot.style?.borderRadius, zoom);
+    const clip = slot.shapeKind ? shapeClipPath(slot.shapeKind) : undefined;
+    const objectFit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
+    const src = slot.staticImage;
+
+    if (slot.shapeKind === "line" || slot.shapeKind === "divider") {
       content = (
         <div
           style={{
@@ -322,11 +324,36 @@ function SlotEditor({
           style={{
             width: "100%",
             height: "100%",
-            background: fill,
-            borderRadius:
-              slot.shapeKind === "circle" ? "50%" : (slot.style?.borderRadius ?? 0) * zoom,
+            position: "relative",
+            background: src ? undefined : fill,
+            borderRadius: radius,
+            clipPath: clip,
+            border: src ? undefined : border,
+            overflow: "hidden",
           }}
-        />
+        >
+          {src ? (
+            <>
+              <img
+                src={src}
+                alt=""
+                draggable={false}
+                onDragStart={(e) => e.preventDefault()}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit,
+                  filter,
+                  userSelect: "none",
+                  pointerEvents: "none",
+                }}
+              />
+              {slot.style?.overlayColor && (
+                <div style={{ position: "absolute", inset: 0, background: slot.style.overlayColor, pointerEvents: "none" }} />
+              )}
+            </>
+          ) : null}
+        </div>
       );
     }
   } else if (slot.kind === "section") {
