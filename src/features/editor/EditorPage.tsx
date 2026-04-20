@@ -531,14 +531,14 @@ export function EditorPage() {
 
   const save = async () => {
     if (!draft) return;
-    // Khi lưu: bỏ nền canvas trắng để export trong suốt (chỉ giữ ảnh + block trên).
+    // Giữ nguyên canvas.background và canvas.backgroundImage do designer đã set —
+    // không wipe nữa để ảnh nền/đệm màu xuất hiện đúng ở /generate.
     const toSave: PageTemplate = {
       ...draft,
-      canvas: { ...draft.canvas, background: undefined, backgroundImage: undefined },
       updatedAt: Date.now(),
     };
     await db.pageTemplates.put(toSave);
-    toast.success("Đã lưu template (nền canvas trong suốt)");
+    toast.success("Đã lưu template");
   };
 
   return (
