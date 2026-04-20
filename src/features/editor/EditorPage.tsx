@@ -936,7 +936,7 @@ export function EditorPage() {
                   <CardRepeaterPanel
                     groupId={selectedSlot.groupId}
                     template={draft}
-                    onChange={(next) => updateDraft((d) => { d.cardGroups = next; })}
+                    onChange={(next: CardGroupConfig[] | undefined) => updateDraft((d) => { d.cardGroups = next; })}
                   />
                 )}
                 <div className="flex flex-wrap gap-1">
