@@ -199,6 +199,11 @@ function SlotRenderer({
     const gradient = buildGradient(slot.style);
     const border = buildBorder(slot.style, scale);
     const isLine = slot.shapeKind === "line" || slot.shapeKind === "divider";
+    const shapeText = slot.bindingPath?.startsWith("entity.")
+      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText)
+      : (slot.staticText ?? "");
+    const hasShapeText = !!shapeText.trim();
+    const textCss = buildTextStyle(slot.style, scale);
 
     if (isLine) {
       return (
@@ -245,6 +250,25 @@ function SlotRenderer({
               <div style={{ position: "absolute", inset: 0, background: slot.style.overlayColor }} />
             )}
           </>
+        )}
+        {hasShapeText && (
+          <div
+            style={{
+              ...textCss,
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent:
+                slot.style?.textAlign === "center"
+                  ? "center"
+                  : slot.style?.textAlign === "right"
+                    ? "flex-end"
+                    : "flex-start",
+            }}
+          >
+            {shapeText}
+          </div>
         )}
         <DebugBadge debug={debug} text={`shape${planned?.fallback ? "*" : ""}`} />
       </div>
