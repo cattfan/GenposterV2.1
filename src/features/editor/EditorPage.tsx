@@ -979,7 +979,8 @@ export function EditorPage() {
                         <SelectItem value="badge">badge</SelectItem>
                       </SelectContent>
                     </Select>
-                    <Label>Fill</Label>
+
+                    <Label>Fill (màu nền)</Label>
                     <Input
                       type="color"
                       value={selectedSlot.style?.fill ?? "#000000"}
@@ -991,6 +992,137 @@ export function EditorPage() {
                       value={selectedSlot.style?.borderRadius ?? 0}
                       onChange={(v) => updateSlotStyle(selectedSlot.slotId, { borderRadius: v })}
                     />
+
+                    {/* Shape làm KHUNG GIỮ ẢNH */}
+                    <div className="border-t pt-2 space-y-2">
+                      <Label className="text-xs uppercase text-muted-foreground flex items-center gap-1">
+                        <ImageIcon className="size-3" /> Ảnh trong shape
+                      </Label>
+                      <Input
+                        value={selectedSlot.staticImage ?? ""}
+                        onChange={(e) => updateSlot(selectedSlot.slotId, { staticImage: e.target.value })}
+                        placeholder="https://... (cập nhật sau qua sheet)"
+                        className="h-8"
+                      />
+                      <p className="text-[10px] text-muted-foreground italic">
+                        Khi có ảnh, ảnh sẽ được clip theo hình dạng shape. Để trống nếu sẽ bind từ data ở trang Tạo nội dung.
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">Object fit</Label>
+                          <Select
+                            value={selectedSlot.style?.fit ?? "cover"}
+                            onValueChange={(v) => updateSlotStyle(selectedSlot.slotId, { fit: v as any })}
+                          >
+                            <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="cover">cover</SelectItem>
+                              <SelectItem value="contain">contain</SelectItem>
+                              <SelectItem value="stretch">stretch</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div>
+                          <Label className="text-xs">Overlay</Label>
+                          <Input
+                            value={selectedSlot.style?.overlayColor ?? ""}
+                            onChange={(e) => updateSlotStyle(selectedSlot.slotId, { overlayColor: e.target.value })}
+                            placeholder="rgba(0,0,0,.4)"
+                            className="h-8 text-xs"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Border */}
+                    <div className="border-t pt-2 space-y-2">
+                      <Label className="text-xs uppercase text-muted-foreground">Viền (border)</Label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <Label className="text-xs">Color</Label>
+                          <Input
+                            type="color"
+                            value={selectedSlot.style?.borderColor ?? "#000000"}
+                            onChange={(e) => updateSlotStyle(selectedSlot.slotId, { borderColor: e.target.value })}
+                            className="h-8 p-1"
+                          />
+                        </div>
+                        <NumField
+                          label="Width"
+                          value={selectedSlot.style?.borderWidth ?? 0}
+                          onChange={(v) => updateSlotStyle(selectedSlot.slotId, { borderWidth: v })}
+                        />
+                        <div>
+                          <Label className="text-xs">Style</Label>
+                          <Select
+                            value={selectedSlot.style?.borderStyle ?? "solid"}
+                            onValueChange={(v) => updateSlotStyle(selectedSlot.slotId, { borderStyle: v as any })}
+                          >
+                            <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="solid">solid</SelectItem>
+                              <SelectItem value="dashed">dashed</SelectItem>
+                              <SelectItem value="dotted">dotted</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Gradient fill */}
+                    <div className="border-t pt-2 space-y-2">
+                      <Label className="text-xs uppercase text-muted-foreground flex items-center justify-between">
+                        <span className="flex items-center gap-1"><Sparkles className="size-3" /> Gradient fill</span>
+                        <Button
+                          size="sm"
+                          variant={selectedSlot.style?.gradientEnabled ? "default" : "outline"}
+                          className="h-6 px-2 text-[10px]"
+                          onClick={() => updateSlotStyle(selectedSlot.slotId, {
+                            gradientEnabled: !selectedSlot.style?.gradientEnabled,
+                            gradientFrom: selectedSlot.style?.gradientFrom ?? "#f97316",
+                            gradientTo: selectedSlot.style?.gradientTo ?? "#db2777",
+                            gradientAngle: selectedSlot.style?.gradientAngle ?? 90,
+                          })}
+                        >
+                          {selectedSlot.style?.gradientEnabled ? "ON" : "OFF"}
+                        </Button>
+                      </Label>
+                      {selectedSlot.style?.gradientEnabled && (
+                        <>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <Label className="text-xs">From</Label>
+                              <Input
+                                type="color"
+                                value={selectedSlot.style?.gradientFrom ?? "#f97316"}
+                                onChange={(e) => updateSlotStyle(selectedSlot.slotId, { gradientFrom: e.target.value })}
+                                className="h-8 p-1"
+                              />
+                            </div>
+                            <div>
+                              <Label className="text-xs">To</Label>
+                              <Input
+                                type="color"
+                                value={selectedSlot.style?.gradientTo ?? "#db2777"}
+                                onChange={(e) => updateSlotStyle(selectedSlot.slotId, { gradientTo: e.target.value })}
+                                className="h-8 p-1"
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <Label className="text-xs flex justify-between">
+                              <span>Angle (°)</span>
+                              <span className="text-muted-foreground">{selectedSlot.style?.gradientAngle ?? 90}</span>
+                            </Label>
+                            <Slider
+                              value={[selectedSlot.style?.gradientAngle ?? 90]}
+                              min={0} max={360} step={5}
+                              onValueChange={(v) => updateSlotStyle(selectedSlot.slotId, { gradientAngle: v[0] })}
+                            />
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </div>
                 )}
 
