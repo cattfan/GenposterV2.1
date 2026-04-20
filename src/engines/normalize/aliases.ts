@@ -27,6 +27,11 @@ export const FIELD_ALIASES: Record<string, string[]> = {
     "type",
     "nhóm",
     "nhom",
+    "loai_dich_vu",
+    "loại dịch vụ",
+    "loai dich vu",
+    "dich_vu",
+    "dịch vụ",
   ],
   categorySub: [
     "sub",
