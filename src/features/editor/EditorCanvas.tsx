@@ -127,6 +127,7 @@ function SlotEditor({
   onDelete,
   onStartCrop,
   template,
+  menuActions,
 }: {
   slot: Slot;
   zoom: number;
@@ -136,6 +137,7 @@ function SlotEditor({
   onDelete: () => void;
   onStartCrop: () => void;
   template: PageTemplate;
+  menuActions?: SlotMenuActions;
 }) {
   const startMove = useCallback(
     (e: React.MouseEvent) => {
