@@ -34,6 +34,7 @@ import {
   AlertTriangle,
   Image as ImageIcon,
   Type,
+  Star,
 } from "lucide-react";
 import type { Entity, Slot } from "@/models";
 import {
