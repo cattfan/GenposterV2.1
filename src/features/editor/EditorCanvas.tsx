@@ -90,28 +90,15 @@ export function Canvas({
           />
         ))}
       {cropSlot && cropSlot.staticImage && (
-        <div
-          style={{
-            position: "absolute",
-            left: cropSlot.x * zoom,
-            top: cropSlot.y * zoom,
-            width: cropSlot.width * zoom,
-            height: cropSlot.height * zoom,
+        <CropContainer
+          slot={cropSlot}
+          zoom={zoom}
+          onCommit={(crop) => {
+            onUpdateSlot(cropSlot.slotId, { crop });
+            setCropSlotId(null);
           }}
-        >
-          <CropOverlay
-            src={cropSlot.staticImage}
-            initial={cropSlot.crop}
-            zoom={zoom}
-            width={cropSlot.width}
-            height={cropSlot.height}
-            onCommit={(crop) => {
-              onUpdateSlot(cropSlot.slotId, { crop });
-              setCropSlotId(null);
-            }}
-            onCancel={() => setCropSlotId(null)}
-          />
-        </div>
+          onCancel={() => setCropSlotId(null)}
+        />
       )}
     </div>
   );
