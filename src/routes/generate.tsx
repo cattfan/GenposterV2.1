@@ -103,8 +103,12 @@ function GeneratePage() {
 
   // === Chế độ "Generate theo entity" ===
   const [tplId, setTplId] = useState<string | undefined>(undefined);
-  const [filterCategory, setFilterCategory] = useState<string>("");
+  const [selectedSheet, setSelectedSheet] = useState<string>("__all__");
+  const [filterMoHinh, setFilterMoHinh] = useState<string>("__all__");
+  const [filterPhongCach, setFilterPhongCach] = useState<string>("__all__");
+  const [prioritizePartner, setPrioritizePartner] = useState(true);
   const [onlyPartner, setOnlyPartner] = useState(false);
+  const [maxPages, setMaxPages] = useState<number>(50);
   const [entityPages, setEntityPages] = useState<
     Array<{ entityId: string; selected: boolean }>
   >([]);
@@ -116,17 +120,51 @@ function GeneratePage() {
   const selectedTpl = tpls?.find((t) => t.pageTemplateId === tplId);
   const effectiveTpl = useEffectiveTemplate(selectedTpl, bindOverrides);
 
+  // Distinct sheets / mô hình / phong cách
+  const sheetOptions = useMemo(() => {
+    const set = new Set<string>();
+    entities?.forEach((e) => e.sheetName && set.add(e.sheetName));
+    return Array.from(set).sort();
+  }, [entities]);
+  const moHinhOptions = useMemo(() => {
+    const set = new Set<string>();
+    entities?.forEach((e) => {
+      if (e.status !== "active") return;
+      if (selectedSheet !== "__all__" && e.sheetName !== selectedSheet) return;
+      if (e.categoryMain) set.add(e.categoryMain);
+    });
+    return Array.from(set).sort();
+  }, [entities, selectedSheet]);
+  const phongCachOptions = useMemo(() => {
+    const set = new Set<string>();
+    entities?.forEach((e) => {
+      if (e.status !== "active") return;
+      if (selectedSheet !== "__all__" && e.sheetName !== selectedSheet) return;
+      if (e.categorySub) set.add(e.categorySub);
+    });
+    return Array.from(set).sort();
+  }, [entities, selectedSheet]);
+
   const filteredEntities: Entity[] = useMemo(() => {
     if (!entities) return [];
-    return entities.filter((e) => {
+    const list = entities.filter((e) => {
       if (e.status !== "active") return false;
+      if (selectedSheet !== "__all__" && e.sheetName !== selectedSheet) return false;
+      if (filterMoHinh !== "__all__" && e.categoryMain !== filterMoHinh) return false;
+      if (filterPhongCach !== "__all__" && e.categorySub !== filterPhongCach) return false;
       if (onlyPartner && !e.partnerFlag) return false;
-      if (filterCategory && !((e.categoryMain ?? "") + "/" + (e.categorySub ?? ""))
-        .toLowerCase()
-        .includes(filterCategory.toLowerCase())) return false;
       return true;
     });
-  }, [entities, onlyPartner, filterCategory]);
+    list.sort((a, b) => {
+      if (prioritizePartner) {
+        if (!!b.partnerFlag !== !!a.partnerFlag) return b.partnerFlag ? 1 : -1;
+        if ((b.partnerPriority ?? 0) !== (a.partnerPriority ?? 0))
+          return (b.partnerPriority ?? 0) - (a.partnerPriority ?? 0);
+      }
+      return a.name.localeCompare(b.name, "vi");
+    });
+    return list.slice(0, Math.max(1, maxPages));
+  }, [entities, selectedSheet, filterMoHinh, filterPhongCach, onlyPartner, prioritizePartner, maxPages]);
 
   // Reset chọn slot & preview entity khi đổi template
   useEffect(() => {
