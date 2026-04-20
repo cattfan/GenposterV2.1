@@ -1,62 +1,120 @@
 
 
-## Hiểu 2 lỗi
+## Kế hoạch triển khai (A+B song song)
 
-### 1) Ảnh nền vẫn không hiện ở `/generate`
-Mở `EditorPage.save()` (dòng 532-542): mỗi lần bấm **Lưu** đang **xoá luôn** `canvas.background` và `canvas.backgroundImage` (đặt thành `undefined`).
-- Nếu template được tạo với `canvas.backgroundImage` nào đó (vd seed cũ, hoặc set qua URL) → bị wipe.
-- Nhưng ảnh nền hiện tại được lưu dưới dạng **slot ảnh có `isUploadedBackground:true` + `staticImage: "idb://..."`** → vẫn nên hiện.
+### Đợt A — Designer dựng tay + Sheet import + Preset 4N3Đ
 
-Còn nguyên nhân thực ở screenshot user gửi (`image-9.png`): block ảnh nền ở trên cùng (frame to) hiển thị **icon ảnh hỏng** (📄) → tức `<img src>` rỗng/sai. Đây là vì khi reload, slot này có `staticImage = "idb://<key>"` → trong `EditorCanvas` line 236 và `BindCanvas` line 165 đang fallback `useResolvedImageSrc(...) ?? slot.staticImage` — khi resolver chưa kịp trả URL thật, fallback **trả luôn chuỗi `"idb://..."`** → trình duyệt cố load → hỏng. Đồng thời nếu `idb://` đó tham chiếu đến blob đã bị xoá (vì lưu ở session khác / DB clear) → vĩnh viễn không có URL.
+**A1. Mở rộng model Section**
+- `src/models/index.ts`: thêm
+  - `Section.filterRules?: Array<{ field: string; op: "eq"|"in"|"gte"|"lte"|"contains"; value: string|number|string[] }>`
+  - `Section.layoutMode?: "stack" | "zigzag" | "grid"` (default `stack`)
+  - `Entity.metadata?: Record<string, string|number>` (đã có hoặc bổ sung) để chứa cột tuỳ ý từ sheet (vd `day`, `priceUsd`).
 
-**Fix:**
-- Trong cả 3 nơi (`EditorCanvas`, `BindCanvas`, `PageRenderer`), **không fallback về `idb://` string** — chỉ render `<img>` khi resolver đã trả URL thật. Nếu chưa có → render placeholder loading thay vì broken `<img>`.
-- `EditorPage.save()` **không xoá** `canvas.background/backgroundImage` nữa (giữ nguyên những gì designer đã set).
-- Bổ sung cảnh báo trong panel ảnh nếu `slot.staticImage` bắt đầu bằng `idb://` mà resolver trả `null` → hiện nút "Upload lại ảnh nền".
+**A2. Selection engine hỗ trợ filter & layout**
+- `src/engines/selection/engine.ts`: sau bước filter category, áp `filterRules` (đọc từ `entity.metadata` hoặc field gốc). Hỗ trợ op `eq/in/gte/lte/contains`.
+- Trả thêm `layoutMode` cho renderer dùng.
 
-### 2) Trùng dữ liệu giữa các block
-Hiện tại `resolveTextBinding` / `resolveImageBinding` chỉ chạy theo **từng slot** một cách độc lập — không biết slot khác đã dùng gì. Nên 2 textbox cùng bind `entity.name` đều ra "Homestay Trên Đồi", 2 block ảnh cùng bind `asset.cover` đều ra cùng 1 ảnh.
+**A3. Renderer item card zigzag**
+- `src/features/render/PageRenderer.tsx` + `src/features/generate/BindCanvas.tsx`: khi section `layoutMode==="zigzag"`, ở mỗi item lẻ thì swap vị trí cụm ảnh ↔ cụm text theo trục X. Logic: nhân bản slot template của section item, tính `xOffset` theo index chẵn/lẻ.
+- Thêm field `Section.itemTemplate` (gồm subset slot có `role: "itemImage" | "itemTitle" | "itemAddress" | "itemPriceBadge"`) để biết slot nào lật.
 
-User đã chốt:
-- **Text: không cho chọn trùng** (slot khác đã chiếm field thì dropdown disable lựa chọn đó).
-- **Image: mỗi block 1 ảnh khác nhau** (auto-rotate asset trong cùng entity, fallback nếu hết).
+**A4. Item card preset trong editor**
+- `src/features/editor/EditorPage.tsx` + `EditorCanvas.tsx`: thêm nút **"Chèn item card"** trong toolbar Insert. Sinh nhóm 4 slot có `role` đúng quy ước, group sẵn để designer di chuyển 1 cụm.
+- 2 variant: ảnh-trái, ảnh-phải (zigzag tự lo khi render).
 
-**Fix text — UI cứng:**
-- Trong panel binding ở `routes/generate.tsx`, tính `usedTextFields = Set<bindingPath>` từ `effectiveTpl.slots` (kind=text, đã có bindingPath, khác slot đang chọn).
-- Trong dropdown text, render option `disabled` nếu `usedTextFields.has(option.value)`. Hiển thị badge "đã dùng ở block khác".
-- Vẫn giữ option "Cố định" luôn enabled.
+**A5. Badge giá preset**
+- Cùng nút "Chèn item card" tự thêm shape rectangle bo tròn cao + fill cam (`#F97316`) + text trắng bind `entity.metadata.price`.
+- Bổ sung preset "Header badge ngày" (rectangle đỏ + text "NGÀY {{day}} - ${{total}}").
 
-**Fix image — auto khác nhau khi render:**
-- Sửa logic render trong `BindCanvas` + `PageRenderer`: thay vì gọi `resolveImageBinding` riêng từng slot, xây trước **kế hoạch bind ảnh cấp page** trong `useMemo`:
-  1. Lọc danh sách shape/image slot đã có `bindingPath`, sort theo (zIndex asc, slotId).
-  2. Tạo `usedAssetIds = Set` cho page hiện tại.
-  3. Với mỗi slot, gọi `pickImageForSlot(bindingPath, entity, assets, usedAssetIds)`:
-      - Nếu `asset.cover` → ưu tiên cover, nếu cover đã used thì lấy asset chưa used khác (theo qualityScore desc), cuối cùng fallback cover (cho phép trùng nếu hết ảnh).
-      - Nếu `asset.byRole:X` → ưu tiên đúng role chưa used, sau đó role khác chưa used, cuối cùng fallback theo role gốc.
-  4. Trả `Map<slotId, {src, assetId}>` để render.
-- Hiển thị badge debug khi 1 ảnh phải fallback dùng lại.
+**A6. Import từ Google Sheet URL**
+- `src/features/data/parsers.ts`: thêm `parseSheetUrl(url: string): Promise<Row[]>`.
+  - Detect URL dạng `docs.google.com/spreadsheets/d/{id}/edit#gid={gid}` → convert thành `https://docs.google.com/spreadsheets/d/{id}/export?format=csv&gid={gid}` → fetch → parse CSV bằng logic hiện tại.
+  - Vì cần CORS, dùng **server function** `fetchSheetCsv` (`src/server/sheetFetch.ts`, `createServerFn`) để fetch server-side rồi trả CSV text về client.
+- `src/routes/data.tsx`: thêm input URL + nút "Import từ Google Sheet" cạnh nút upload CSV hiện tại.
 
-**Fix text — auto khác nhau (bonus nhỏ):**
-Vì user đã không cho trùng ở UI, không cần thêm logic runtime. Giữ `resolveTextBinding` y nguyên.
+**A7. Aliases tiếng Việt cho cột phổ biến**
+- `src/engines/normalize/aliases.ts`: bổ sung
+  - `name`: `tên`, `tên địa điểm`, `tên homestay`
+  - `address`: `địa chỉ`, `vị trí`
+  - `price`: `giá`, `chi phí`, `cost`
+  - `day`: `ngày`, `day`
+  - `category`: `loại`, `nhóm`
+  - `image`: `ảnh`, `hình`, `link ảnh`
 
----
-
-## Files đụng tới
-
-- **Sửa**:
-  - `src/storage/imageSrc.ts` — thêm helper `isPendingIdb(src, resolved)` để các nơi render biết "đang chờ resolve" vs "đã hỏng".
-  - `src/features/render/PageRenderer.tsx` — bỏ fallback `idb://` ra `<img src>`; thêm `useMemo` build `slotImagePlan` (rotate asset không trùng).
-  - `src/features/generate/BindCanvas.tsx` — bỏ fallback `idb://`; dùng cùng `slotImagePlan`.
-  - `src/features/editor/EditorCanvas.tsx` — bỏ fallback `idb://`; placeholder "Đang tải ảnh / Ảnh nền chưa sẵn sàng".
-  - `src/features/editor/EditorPage.tsx` — `save()` **không** xoá `canvas.background/backgroundImage`; thêm nút "Thay ảnh" trong panel image cho slot `isUploadedBackground` khi resolver = null.
-  - `src/routes/generate.tsx` — dropdown text disable option đã dùng + nhãn "đã dùng".
-- **Tạo mới**:
-  - `src/engines/binding/imagePlan.ts` — `buildSlotImagePlan(template, entity, assets)` trả `Map<slotId, {src, assetId, fallback?: boolean}>` chia sẻ giữa Bind & Page renderer.
+**A8. Seed pack "Lịch trình du lịch" (linh hoạt)**
+- `src/storage/seed.ts`: thêm pack `travel_itinerary_flex` gồm 2 page mặc định:
+  - **Cover**: background placeholder + 2 textbox (tiêu đề + sub).
+  - **Tiện ích**: 3 section (transport/homestay/other) với `filterRules: [{field:"category", op:"eq", value:"..."}]`, layoutMode `stack`.
+- Thêm **page template stand-alone** `day_template_zigzag` để designer **nhân bản** cho mỗi ngày tour (1 → N). Page có sẵn: badge header "NGÀY {{day}} - ${{total}}" + section bind `filterRules: [{field:"day", op:"eq", value:"{{dayNumber}}"}]` layoutMode `zigzag` + 6 item card.
+- Trang `/packs` hoặc `/templates`: thêm action "Nhân bản page Ngày" để clone page template với `dayNumber` mới.
 
 ---
 
-## Thứ tự triển khai
-1. Sửa fallback `idb://` ở 3 renderer + bỏ wipe background trong save → ảnh nền hiển thị đúng/không bị nuốt sau lưu.
-2. Thêm `imagePlan.ts` + thay chỗ gọi `resolveImageBinding` trong 2 renderer → ảnh không trùng.
-3. Disable option text đã dùng trong panel binding.
-4. Thêm placeholder/cảnh báo cho ảnh nền hỏng + nút thay ảnh.
+### Đợt B — AI gen template + auto-bind + AI caption
+
+**B1. Server function `aiGenerateTemplateFromImage`**
+- File mới `src/server/aiTemplate.ts` dùng `createServerFn({method:"POST"})`.
+- Input: `{ imageDataUrl: string, canvasSize?: {w,h} }`.
+- Gọi Lovable AI Gateway (`google/gemini-2.5-pro`) với image + tool calling JSON schema:
+  ```ts
+  parameters: {
+    canvas: { w: number, h: number, bgColor?: string },
+    slots: Array<{
+      kind: "text"|"shape"|"image",
+      x: number, y: number, w: number, h: number, // 0-1 relative
+      placeholder?: string, // "{{tên}}", "{{địa chỉ}}", "{{giá}}", "{{ngày}}"...
+      style?: { fontSize?, fontWeight?, color?, fill?, borderRadius?, fontFamily? }
+    }>
+  }
+  ```
+- Prompt cứng: *"Bạn CHỈ tạo khung layout và placeholder. KHÔNG bịa nội dung text thật. Mọi text phải là placeholder dạng `{{tên}}`, `{{địa chỉ}}`, `{{giá}}`, `{{ngày}}`. Không tạo bindingPath."*
+
+**B2. Parser JSON → PageTemplate**
+- `src/features/ai/templateFromImage.ts`: convert AI JSON → `PageTemplate` (canvas size scale lên 1080×1920 portrait), tạo slot với `staticText` = placeholder string. KHÔNG set `bindingPath`.
+
+**B3. UI "AI dựng từ ảnh mẫu"**
+- `src/routes/templates.tsx`: nút "AI dựng từ ảnh" → upload ảnh → gọi server fn → tạo template mới → mở thẳng `/templates/$id/edit`.
+
+**B4. AI auto-bind suggest**
+- Server fn `aiSuggestBindings({ slots, columns })` — nhận danh sách slot (id + staticText placeholder + role) + danh sách cột sheet → trả `Array<{ slotId, suggestedBindingPath, confidence }>`.
+- Trong `/generate`, sau khi chọn template + có entity data: nút "Gợi ý bind tự động" → hiện modal preview suggestion → designer nhấn "Áp dụng" mỗi dòng (hoặc "Áp dụng tất cả").
+
+**B5. AI caption từ data thật**
+- Server fn `aiCaptionFromEntity({ entity, style: "instagram"|"threads"|"facebook" })`.
+- Prompt: *"Viết caption {style} dựa CHỈ trên data cung cấp. KHÔNG thêm thông tin bịa. Format: 2-3 dòng + 5 hashtag liên quan."* Truyền entity JSON (name, address, price, category, day, description nếu có).
+- UI: `/generate` panel binding text — nút "AI caption" cho slot text dài (vd subtitle/description). Đổ kết quả vào `slot.staticText` (override).
+
+**B6. Bật Lovable Cloud + AI Gateway**
+- Cần `LOVABLE_API_KEY`. Sẽ check `fetch_secrets`; nếu chưa có → bật Cloud trước khi gọi server fn.
+
+---
+
+### Files đụng tới
+
+**Sửa:**
+- `src/models/index.ts` — `Section.filterRules`, `layoutMode`, `Entity.metadata`
+- `src/engines/selection/engine.ts` — apply filterRules
+- `src/engines/normalize/aliases.ts` — VN aliases
+- `src/features/data/parsers.ts` — `parseSheetUrl`
+- `src/features/render/PageRenderer.tsx`, `src/features/generate/BindCanvas.tsx` — render zigzag
+- `src/features/editor/EditorPage.tsx`, `EditorCanvas.tsx` — nút "Chèn item card", "Chèn header badge"
+- `src/storage/seed.ts` — seed pack flex + page template ngày
+- `src/routes/data.tsx` — input Google Sheet URL
+- `src/routes/templates.tsx` — nút "AI dựng từ ảnh"
+- `src/routes/generate.tsx` — nút "Gợi ý bind tự động" + "AI caption"
+
+**Tạo mới:**
+- `src/server/sheetFetch.ts` — `createServerFn` fetch CSV từ Google Sheet
+- `src/server/aiTemplate.ts` — `aiGenerateTemplateFromImage`, `aiSuggestBindings`, `aiCaptionFromEntity`
+- `src/features/ai/templateFromImage.ts` — JSON → PageTemplate parser
+- `src/features/ai/SuggestBindingsModal.tsx` — UI preview suggestions
+
+### Thứ tự triển khai
+1. **A1+A2+A3** — model + selection + render zigzag (nền tảng cho mọi thứ).
+2. **A6+A7** — sheet import (để có data thật chạy thử).
+3. **A8+A4+A5** — seed pack flex + nút chèn item card / badge.
+4. **B6** — bật Lovable Cloud / verify `LOVABLE_API_KEY`.
+5. **B1+B2+B3** — AI gen template từ ảnh.
+6. **B4** — AI auto-bind suggest.
+7. **B5** — AI caption từ data thật.
+
