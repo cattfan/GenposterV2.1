@@ -1,7 +1,16 @@
 import { useRef, useCallback, useState } from "react";
 import { X, ImageIcon, Layers as LayersIcon } from "lucide-react";
 import type { PageTemplate, Slot } from "@/models";
-import { buildBoxShadow, buildCssFilter, buildFlipTransform } from "@/engines/binding/dataBinding";
+import {
+  buildBoxShadow,
+  buildCssFilter,
+  buildFlipTransform,
+  buildBorder,
+  buildGradient,
+  buildTextStyle,
+  shapeBorderRadius,
+  shapeClipPath,
+} from "@/engines/binding/dataBinding";
 import { CropOverlay } from "./CropOverlay";
 
 export function NumField({
@@ -210,23 +219,14 @@ function SlotEditor({
 
   let content: React.ReactNode = null;
   if (slot.kind === "text") {
-    const s = slot.style ?? {};
     const displayText = slot.staticText;
+    const textCss = buildTextStyle(slot.style, zoom);
     content = (
       <div
         style={{
-          color: s.color ?? "#0f172a",
-          fontSize: (s.fontSize ?? 24) * zoom,
-          fontWeight: s.fontWeight ?? 500,
-          lineHeight: s.lineHeight ?? 1.2,
-          textAlign: s.textAlign ?? "left",
-          textTransform: s.textTransform ?? "none",
-          letterSpacing: (s.letterSpacing ?? 0) * zoom,
-          textShadow: s.textShadow,
-          whiteSpace: "pre-wrap",
+          ...textCss,
           width: "100%",
           height: "100%",
-          overflow: "hidden",
         }}
       >
         {displayText}
