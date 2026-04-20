@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import type { Asset, Entity } from "@/models";
-import { FIELD_ALIASES, METADATA_FIELDS, normalizeKey, parseBool, parseList, parseNumber } from "./aliases";
+import { FIELD_ALIASES, FIELD_LABELS_VI, METADATA_FIELDS, normalizeKey, parseBool, parseList, parseNumber } from "./aliases";
 
 export interface RawRow {
   [key: string]: unknown;
@@ -28,6 +28,14 @@ export function autoMap(headers: string[]): FieldMapping {
 
 export function standardFieldOptions(): string[] {
   return ["__ignore__", ...Object.keys(FIELD_ALIASES)];
+}
+
+/** Option list đã việt hoá cho dropdown mapping. */
+export function standardFieldOptionsLabeled(): Array<{ value: string; label: string }> {
+  return standardFieldOptions().map((v) => ({
+    value: v,
+    label: FIELD_LABELS_VI[v] ?? v,
+  }));
 }
 
 export function normalizeRows(rows: RawRow[], mapping: FieldMapping, sheetName?: string): NormalizeResult {
