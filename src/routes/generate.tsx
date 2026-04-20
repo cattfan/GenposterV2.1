@@ -396,23 +396,31 @@ function GeneratePage() {
                     Chọn 1 block (text hoặc image) trên canvas để gán trường data.
                   </p>
                 )}
-                {selectedSlot && selectedSlot.kind !== "text" && selectedSlot.kind !== "image" && (
+                {selectedSlot && selectedSlot.kind !== "text" && selectedSlot.kind !== "image" && selectedSlot.kind !== "shape" && (
                   <div className="rounded-md border border-dashed bg-muted/30 p-3 space-y-1">
                     <div className="flex items-center gap-2 text-xs font-medium">
                       <AlertTriangle className="size-3.5" />
-                      Block "{selectedSlot.kind}" là khối trang trí
+                      Block "{selectedSlot.kind}" không liên kết được
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Shape / section dùng để tạo nền, viền, khung trang trí — không có dữ liệu để đổ vào. Chỉ block <b>text</b> và <b>image</b> mới liên kết được trường data.
+                      Chỉ block <b>text</b>, <b>image</b> và <b>shape</b> mới gán được trường data.
                     </p>
                   </div>
                 )}
-                {selectedSlot && (selectedSlot.kind === "text" || selectedSlot.kind === "image") && (
+                {selectedSlot && (selectedSlot.kind === "text" || selectedSlot.kind === "image" || selectedSlot.kind === "shape") && (
                   <>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       {selectedSlot.kind === "text" ? <Type className="size-3" /> : <ImageIcon className="size-3" />}
-                      <span>Block {selectedSlot.kind}</span>
+                      <span>
+                        Block {selectedSlot.kind}
+                        {selectedSlot.kind === "shape" && " (khung giữ ảnh)"}
+                      </span>
                     </div>
+                    {selectedSlot.kind === "shape" && (
+                      <p className="text-[11px] text-muted-foreground italic">
+                        Shape sẽ hiển thị ảnh được clip theo hình dạng (vuông/tròn/tam giác).
+                      </p>
+                    )}
                     <div>
                       <Label className="text-xs">Trường dữ liệu</Label>
                       <Select
