@@ -119,3 +119,47 @@ function TemplatesPage() {
     </div>
   );
 }
+
+function TemplatePreview({ tpl }: { tpl: PageTemplate }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(0.2);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const compute = () => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (!w || !h) return;
+      setScale(Math.min(w / tpl.canvas.width, h / tpl.canvas.height));
+    };
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [tpl.canvas.width, tpl.canvas.height]);
+
+  const isEmpty = tpl.slots.length === 0;
+
+  return (
+    <div ref={ref} className="absolute inset-0 overflow-hidden" style={{ background: tpl.canvas.background ?? "#fff" }}>
+      {isEmpty ? (
+        <div className="w-full h-full flex items-center justify-center text-muted-foreground text-xs uppercase tracking-wider">
+          {tpl.type} · trống
+        </div>
+      ) : (
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: "50%",
+            transform: "translate(-50%, -50%)",
+            pointerEvents: "none",
+          }}
+        >
+          <PageRenderer template={tpl} entities={[]} assets={[]} scale={scale} />
+        </div>
+      )}
+    </div>
+  );
+}
