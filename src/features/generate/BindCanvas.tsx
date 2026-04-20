@@ -209,6 +209,7 @@ function BindSlot({
   onSelect,
   entity,
   planned,
+  cardBadge,
 }: {
   slot: Slot;
   scale: number;
@@ -216,6 +217,7 @@ function BindSlot({
   onSelect: () => void;
   entity?: Entity;
   planned?: PlannedImage;
+  cardBadge?: string;
 }) {
   const flip = buildFlipTransform(slot.style);
   const rot = slot.rotation ? `rotate(${slot.rotation}deg)` : "";
