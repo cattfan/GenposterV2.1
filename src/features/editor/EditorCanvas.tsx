@@ -187,7 +187,6 @@ function SlotEditor({
     [slot, zoom, onSelect, onUpdate],
   );
 
-  const hasBinding = slotHasBinding(slot);
   const flip = buildFlipTransform(slot.style);
   const rot = slot.rotation ? `rotate(${slot.rotation}deg)` : "";
   const transform = (rot + flip).trim() || undefined;
@@ -202,9 +201,7 @@ function SlotEditor({
     cursor: slot.locked ? "not-allowed" : "move",
     outline: selected
       ? "2px solid hsl(var(--primary))"
-      : hasBinding
-        ? "2px dashed #a855f7"
-        : "1px dashed rgba(0,0,0,0.15)",
+      : "1px dashed rgba(0,0,0,0.15)",
     outlineOffset: 0,
     boxSizing: "border-box",
     opacity: slot.style?.opacity ?? 1,
@@ -214,7 +211,7 @@ function SlotEditor({
   let content: React.ReactNode = null;
   if (slot.kind === "text") {
     const s = slot.style ?? {};
-    const displayText = hasBinding ? `{{${slot.bindingPath}}}` : slot.staticText;
+    const displayText = slot.staticText;
     content = (
       <div
         style={{
