@@ -21,6 +21,12 @@ export function getBlobKeyFromSrc(src: string): string | null {
   return src.slice(IDB_PREFIX.length);
 }
 
+/** True nếu src là idb:// (cần chờ resolver), dùng để render placeholder thay vì <img src="idb://..."> hỏng. */
+export function isPendingIdb(src: string | undefined | null, resolved: string | undefined): boolean {
+  if (!src) return false;
+  return src.startsWith(IDB_PREFIX) && !resolved;
+}
+
 // Cache để tránh tạo nhiều object URL cho cùng 1 blobKey trong session.
 const urlCache = new Map<string, Promise<string | null>>();
 
