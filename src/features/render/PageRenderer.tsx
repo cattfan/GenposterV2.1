@@ -132,6 +132,7 @@ function SlotRenderer({
   entity,
   sectionItemsMap,
   slotOverride,
+  planned,
   debug,
 }: {
   slot: Slot;
@@ -143,6 +144,7 @@ function SlotRenderer({
   entity?: Entity;
   sectionItemsMap: Map<string, Array<{ entityId?: string; assetId?: string }>>;
   slotOverride?: { entityId?: string; assetId?: string };
+  planned?: PlannedImage;
   debug?: boolean;
 }) {
   const flip = buildFlipTransform(slot.style);
@@ -162,13 +164,18 @@ function SlotRenderer({
   };
 
   if (slot.kind === "shape") {
-    // Shape có thể bind ảnh (cover/byRole) hoặc staticImage URL — ảnh sẽ clip theo hình dạng
-    let src = slot.staticImage;
-    if (slot.bindingPath && entity) {
-      const r = resolveImageBinding(slot.bindingPath, entity, assets, src);
-      if (r.src) src = r.src;
+    // Shape có thể bind ảnh — ưu tiên planned (anti-trùng), fallback resolveImageBinding theo slot, cuối cùng staticImage.
+    let rawSrc = slot.staticImage;
+    if (planned?.src) {
+      rawSrc = planned.src;
+    } else if (slot.bindingPath && entity) {
+      const r = resolveImageBinding(slot.bindingPath, entity, assets, rawSrc);
+      if (r.src) rawSrc = r.src;
     }
-    const resolvedShapeSrc = useResolvedImageSrc(src);
+    const resolvedShapeSrc = useResolvedImageSrc(rawSrc);
+    const usableSrc = resolvedShapeSrc && !resolvedShapeSrc.startsWith("idb://")
+      ? resolvedShapeSrc
+      : (rawSrc && !rawSrc.startsWith("idb://") ? rawSrc : undefined);
     const fit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
     const filter = buildCssFilter(slot.style);
     const radius = shapeBorderRadius(slot.shapeKind, slot.style?.borderRadius, scale);
@@ -197,17 +204,17 @@ function SlotRenderer({
       <div
         style={{
           ...baseStyle,
-          background: src ? undefined : fillBg,
+          background: usableSrc ? undefined : fillBg,
           borderRadius: radius,
           clipPath: clip,
-          border: src ? undefined : border,
+          border: usableSrc ? undefined : border,
           overflow: "hidden",
         }}
       >
-        {src && (
+        {usableSrc && (
           <>
             <img
-              src={resolvedShapeSrc ?? src}
+              src={usableSrc}
               crossOrigin="anonymous"
               alt=""
               style={{
@@ -223,43 +230,50 @@ function SlotRenderer({
             )}
           </>
         )}
-        <DebugBadge debug={debug} text="shape" />
+        <DebugBadge debug={debug} text={`shape${planned?.fallback ? "*" : ""}`} />
       </div>
     );
   }
 
   if (slot.kind === "image") {
-    let src = slot.staticImage;
+    let rawSrc = slot.staticImage;
     let entityIdLog: string | undefined;
     let assetIdLog: string | undefined;
-    // Ưu tiên: bindingPath + entity (chế độ generate theo entity)
-    if (slot.bindingPath && entity) {
-      const r = resolveImageBinding(slot.bindingPath, entity, assets, src);
+    // Ưu tiên: plan ảnh đã rotate cho cả page (chống trùng).
+    if (planned?.src) {
+      rawSrc = planned.src;
+      assetIdLog = planned.assetId;
+      entityIdLog = planned.entityId;
+    } else if (slot.bindingPath && entity) {
+      const r = resolveImageBinding(slot.bindingPath, entity, assets, rawSrc);
       if (r.src) {
-        src = r.src;
+        rawSrc = r.src;
         assetIdLog = r.assetId;
         entityIdLog = r.entityId;
       }
     }
     // Fallback: page items override (luồng pack/section cũ)
-    if (!src && slotOverride?.assetId) {
+    if (!rawSrc && slotOverride?.assetId) {
       const a = assetMap.get(slotOverride.assetId);
       if (a) {
-        src = a.sourceValue;
+        rawSrc = a.sourceValue;
         assetIdLog = a.assetId;
         entityIdLog = a.entityId;
       }
     }
-    const resolvedImgSrc = useResolvedImageSrc(src);
+    const resolvedImgSrc = useResolvedImageSrc(rawSrc);
+    const usableSrc = resolvedImgSrc && !resolvedImgSrc.startsWith("idb://")
+      ? resolvedImgSrc
+      : (rawSrc && !rawSrc.startsWith("idb://") ? rawSrc : undefined);
     const filter = buildCssFilter(slot.style);
     const objectFit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
     const crop = slot.crop;
     return (
       <div style={{ ...baseStyle, overflow: "hidden", borderRadius: (slot.style?.borderRadius ?? 0) * scale }}>
-        {src ? (
+        {usableSrc ? (
           crop ? (
             <img
-              src={resolvedImgSrc ?? src}
+              src={usableSrc}
               crossOrigin="anonymous"
               style={{
                 position: "absolute",
@@ -275,7 +289,7 @@ function SlotRenderer({
             />
           ) : (
             <img
-              src={resolvedImgSrc ?? src}
+              src={usableSrc}
               crossOrigin="anonymous"
               style={{
                 width: "100%",
@@ -312,7 +326,7 @@ function SlotRenderer({
             }}
           />
         )}
-        <DebugBadge debug={debug} text={`img ${entityIdLog?.slice(0, 4) ?? ""} ${assetIdLog?.slice(0, 4) ?? ""}`} />
+        <DebugBadge debug={debug} text={`img${planned?.fallback ? "*" : ""} ${entityIdLog?.slice(0, 4) ?? ""} ${assetIdLog?.slice(0, 4) ?? ""}`} />
       </div>
     );
   }
