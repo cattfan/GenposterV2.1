@@ -17,7 +17,7 @@ import {
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { parseCsvFile, parseJsonFile, fetchSheetCsv, type ParsedTable } from "@/features/data/parsers";
-import { autoMap, normalizeRows, standardFieldOptions, type FieldMapping } from "@/engines/normalize/normalizer";
+import { autoMap, normalizeRows, standardFieldOptionsLabeled, type FieldMapping } from "@/engines/normalize/normalizer";
 import { BulkImageUpload } from "@/features/data/BulkImageUpload";
 
 export const Route = createFileRoute("/data")({
@@ -155,10 +155,17 @@ function DataPage() {
                       <span className="text-xs flex-1 truncate">{h}</span>
                       <span className="text-muted-foreground">→</span>
                       <Select value={mapping[h] ?? "__ignore__"} onValueChange={(v) => setMapping({ ...mapping, [h]: v })}>
-                        <SelectTrigger className="h-8 w-44"><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="h-8 w-56"><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          {standardFieldOptions().map((s) => (
-                            <SelectItem key={s} value={s}>{s}</SelectItem>
+                          {standardFieldOptionsLabeled().map((s) => (
+                            <SelectItem key={s.value} value={s.value}>
+                              <span className="flex flex-col items-start leading-tight">
+                                <span>{s.label}</span>
+                                {s.value !== "__ignore__" && (
+                                  <span className="text-[10px] text-muted-foreground">{s.value}</span>
+                                )}
+                              </span>
+                            </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
