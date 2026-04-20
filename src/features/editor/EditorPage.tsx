@@ -749,6 +749,17 @@ export function EditorPage() {
             <Button variant="outline" size="sm" className="w-full justify-start mt-2" onClick={() => addSlot("section")}>
               <LayersIcon className="size-4 mr-2" /> Section
             </Button>
+
+            <div className="text-xs font-semibold text-muted-foreground uppercase pt-2">Preset 4N3Đ</div>
+            <Button variant="outline" size="sm" className="w-full justify-start" onClick={() => insertItemCard("image-left")}>
+              <ImageIcon className="size-4 mr-2" /> Item Card (ảnh trái)
+            </Button>
+            <Button variant="outline" size="sm" className="w-full justify-start" onClick={() => insertItemCard("image-right")}>
+              <ImageIcon className="size-4 mr-2" /> Item Card (ảnh phải)
+            </Button>
+            <Button variant="outline" size="sm" className="w-full justify-start" onClick={insertDayHeaderBadge}>
+              <Type className="size-4 mr-2" /> Header Ngày
+            </Button>
           </div>
           <div className="p-3 border-t flex-1 overflow-y-auto">
             <div className="text-xs font-semibold text-muted-foreground uppercase mb-2">
