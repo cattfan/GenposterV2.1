@@ -35,6 +35,8 @@ import {
   Image as ImageIcon,
   Type,
   Star,
+  Wand2,
+  Loader2,
 } from "lucide-react";
 import type { Entity, Slot } from "@/models";
 import {
@@ -45,6 +47,8 @@ import {
 } from "@/engines/binding/dataBinding";
 import { BindCanvas } from "@/features/generate/BindCanvas";
 import { useBindOverrides, useEffectiveTemplate } from "@/features/generate/useBindOverrides";
+import { aiSuggestBindingsServer, aiCaptionFromEntityServer } from "@/server/aiTemplate";
+import { SuggestBindingsModal, type BindSuggestion } from "@/features/ai/SuggestBindingsModal";
 
 export const Route = createFileRoute("/generate")({
   component: GeneratePage,
