@@ -1,6 +1,7 @@
 import { useRef, useCallback, useState } from "react";
+import { X, ImageIcon, Layers as LayersIcon } from "lucide-react";
 import type { PageTemplate, Slot } from "@/models";
-import { buildBoxShadow, buildCssFilter, buildFlipTransform, slotHasBinding } from "@/engines/binding/dataBinding";
+import { buildBoxShadow, buildCssFilter, buildFlipTransform } from "@/engines/binding/dataBinding";
 import { CropOverlay } from "./CropOverlay";
 
 export function NumField({
@@ -186,7 +187,6 @@ function SlotEditor({
     [slot, zoom, onSelect, onUpdate],
   );
 
-  const hasBinding = slotHasBinding(slot);
   const flip = buildFlipTransform(slot.style);
   const rot = slot.rotation ? `rotate(${slot.rotation}deg)` : "";
   const transform = (rot + flip).trim() || undefined;
@@ -201,9 +201,7 @@ function SlotEditor({
     cursor: slot.locked ? "not-allowed" : "move",
     outline: selected
       ? "2px solid hsl(var(--primary))"
-      : hasBinding
-        ? "2px dashed #a855f7"
-        : "1px dashed rgba(0,0,0,0.15)",
+      : "1px dashed rgba(0,0,0,0.15)",
     outlineOffset: 0,
     boxSizing: "border-box",
     opacity: slot.style?.opacity ?? 1,
@@ -213,7 +211,7 @@ function SlotEditor({
   let content: React.ReactNode = null;
   if (slot.kind === "text") {
     const s = slot.style ?? {};
-    const displayText = hasBinding ? `{{${slot.bindingPath}}}` : slot.staticText;
+    const displayText = slot.staticText;
     content = (
       <div
         style={{
@@ -229,7 +227,6 @@ function SlotEditor({
           width: "100%",
           height: "100%",
           overflow: "hidden",
-          fontStyle: hasBinding ? "italic" : undefined,
         }}
       >
         {displayText}
@@ -279,8 +276,9 @@ function SlotEditor({
         />
       )
     ) : (
-      <div className="w-full h-full bg-muted/50 grid place-items-center text-xs text-muted-foreground">
-        {hasBinding ? `🔗 ${slot.bindingPath}` : "Image (bind data)"}
+      <div className="w-full h-full bg-muted/50 grid place-items-center text-xs text-muted-foreground gap-1 flex-col">
+        <ImageIcon className="size-5 opacity-50" />
+        <span>Image placeholder</span>
       </div>
     );
     content = (
@@ -334,8 +332,9 @@ function SlotEditor({
   } else if (slot.kind === "section") {
     const sec = template.sections.find((s) => s.sectionId === slot.sectionRefId);
     content = (
-      <div className="w-full h-full bg-accent/30 border-2 border-dashed border-accent grid place-items-center text-accent-foreground text-xs p-2 text-center">
-        📦 Section: {sec?.title ?? "(chưa gán)"}
+      <div className="w-full h-full bg-accent/30 border-2 border-dashed border-accent grid place-items-center text-accent-foreground text-xs p-2 text-center gap-1">
+        <LayersIcon className="size-4" />
+        <span>Section: {sec?.title ?? "(chưa gán)"}</span>
       </div>
     );
   }
@@ -371,24 +370,6 @@ function SlotEditor({
       tabIndex={selected ? 0 : -1}
     >
       {content}
-      {hasBinding && (
-        <div
-          style={{
-            position: "absolute",
-            top: -22,
-            left: 0,
-            background: "#a855f7",
-            color: "white",
-            fontSize: 10,
-            padding: "1px 6px",
-            borderRadius: 3,
-            pointerEvents: "none",
-            whiteSpace: "nowrap",
-          }}
-        >
-          🔗 {slot.bindingPath}
-        </div>
-      )}
       {selected && !slot.locked && (
         <>
           {handles.map((hd) => (
@@ -422,15 +403,20 @@ function SlotEditor({
               color: "white",
               border: "none",
               borderRadius: 4,
-              padding: "2px 8px",
-              fontSize: 11,
+              padding: "4px 6px",
               cursor: "pointer",
               zIndex: 11,
               boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 11,
+              lineHeight: 1,
             }}
             title="Xoá block (Delete)"
           >
-            ✕ Xoá
+            <X className="size-3" />
+            <span>Xoá</span>
           </button>
         </>
       )}

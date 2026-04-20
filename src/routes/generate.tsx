@@ -13,16 +13,37 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { generatePackJob } from "@/engines/selection/generate";
 import { useJobStore } from "@/features/generate/jobStore";
 import { PageRenderer } from "@/features/render/PageRenderer";
 import { nodeToPngBlob, downloadPng, downloadZip } from "@/features/render/exportPng";
-import { Sparkles, Download, Package, Eye, EyeOff } from "lucide-react";
-import type { Entity } from "@/models";
-import { slotHasBinding } from "@/engines/binding/dataBinding";
+import {
+  Sparkles,
+  Download,
+  Package,
+  Eye,
+  EyeOff,
+  Link2,
+  Link2Off,
+  MousePointerClick,
+  Filter,
+  AlertTriangle,
+  Image as ImageIcon,
+  Type,
+} from "lucide-react";
+import type { Entity, Slot } from "@/models";
+import {
+  TEXT_BINDING_OPTIONS,
+  IMAGE_BINDING_OPTIONS,
+  resolveImageBinding,
+  resolveTextBinding,
+} from "@/engines/binding/dataBinding";
+import { BindCanvas } from "@/features/generate/BindCanvas";
+import { useBindOverrides, useEffectiveTemplate } from "@/features/generate/useBindOverrides";
 
 export const Route = createFileRoute("/generate")({
   component: GeneratePage,
@@ -88,8 +109,12 @@ function GeneratePage() {
     Array<{ entityId: string; selected: boolean }>
   >([]);
   const entityRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
+  const [previewEntityId, setPreviewEntityId] = useState<string | undefined>(undefined);
+  const { overrides: bindOverrides, setBinding, clearBinding, resetAll } = useBindOverrides();
 
   const selectedTpl = tpls?.find((t) => t.pageTemplateId === tplId);
+  const effectiveTpl = useEffectiveTemplate(selectedTpl, bindOverrides);
 
   const filteredEntities: Entity[] = useMemo(() => {
     if (!entities) return [];
@@ -103,14 +128,30 @@ function GeneratePage() {
     });
   }, [entities, onlyPartner, filterCategory]);
 
-  const hasAnyBinding = !!selectedTpl?.slots.some(slotHasBinding);
+  // Reset chọn slot & preview entity khi đổi template
+  useEffect(() => {
+    setSelectedSlotId(null);
+    resetAll();
+  }, [tplId, resetAll]);
+
+  // Auto chọn entity preview đầu tiên
+  useEffect(() => {
+    if (!previewEntityId && filteredEntities[0]) setPreviewEntityId(filteredEntities[0].entityId);
+    if (previewEntityId && !filteredEntities.find((e) => e.entityId === previewEntityId)) {
+      setPreviewEntityId(filteredEntities[0]?.entityId);
+    }
+  }, [filteredEntities, previewEntityId]);
+
+  const previewEntity = entities?.find((e) => e.entityId === previewEntityId);
+  const selectedSlot: Slot | undefined = effectiveTpl?.slots.find((s) => s.slotId === selectedSlotId);
+  const boundCount = effectiveTpl?.slots.filter((s) => !!s.bindingPath).length ?? 0;
+  const hasAnyBinding = boundCount > 0;
 
   const generateByEntity = () => {
-    if (!selectedTpl) return toast.error("Chưa chọn template");
+    if (!effectiveTpl) return toast.error("Chưa chọn template");
     if (!hasAnyBinding) {
-      // template tĩnh: chỉ render 1 page
       setEntityPages([{ entityId: "_static", selected: true }]);
-      toast.info("Template không có block bind → render 1 trang tĩnh");
+      toast.info("Chưa bind block nào → render 1 trang tĩnh");
       return;
     }
     if (filteredEntities.length === 0) return toast.error("Không có entity phù hợp");
@@ -119,7 +160,7 @@ function GeneratePage() {
   };
 
   const exportEntityZip = async () => {
-    if (!selectedTpl) return;
+    if (!effectiveTpl) return;
     const sel = entityPages.filter((p) => p.selected);
     if (sel.length === 0) return toast.error("Chưa chọn trang nào");
     toast.info(`Đang export ${sel.length} trang...`);
@@ -132,27 +173,38 @@ function GeneratePage() {
       const blob = await nodeToPngBlob(node, 2);
       files.push({ name: `${slug || p.entityId}.png`, blob });
     }
-    await downloadZip(files, `${selectedTpl.name}-entities.zip`);
+    await downloadZip(files, `${effectiveTpl.name}-entities.zip`);
     toast.success("Đã export ZIP");
   };
 
+  // Tính scale canvas tương tác theo container ~640px max
+  const canvasScale = effectiveTpl ? Math.min(640 / effectiveTpl.canvas.width, 720 / effectiveTpl.canvas.height) : 0.5;
+
   return (
-    <div className="p-8 max-w-7xl">
+    <div className="p-8 max-w-[1600px]">
       <h1 className="text-3xl font-bold mb-6">Tạo nội dung</h1>
 
       <Tabs defaultValue="entity" className="mb-6">
         <TabsList>
-          <TabsTrigger value="entity">⚡ Generate theo entity (đơn giản)</TabsTrigger>
-          <TabsTrigger value="pack">📦 Pack template (nâng cao)</TabsTrigger>
+          <TabsTrigger value="entity" className="gap-2">
+            <Sparkles className="size-4" /> Theo entity (đơn giản)
+          </TabsTrigger>
+          <TabsTrigger value="pack" className="gap-2">
+            <Package className="size-4" /> Pack template (nâng cao)
+          </TabsTrigger>
         </TabsList>
 
         {/* === TAB: theo entity === */}
         <TabsContent value="entity" className="space-y-4">
-          <Card>
-            <CardContent className="p-4 space-y-3">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="grid grid-cols-12 gap-4">
+            {/* Cột 1: Cấu hình */}
+            <Card className="col-span-12 lg:col-span-3">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Cấu hình</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
                 <div>
-                  <label className="text-xs text-muted-foreground">Page template</label>
+                  <Label className="text-xs">Page template</Label>
                   <Select value={tplId} onValueChange={setTplId}>
                     <SelectTrigger><SelectValue placeholder="Chọn template..." /></SelectTrigger>
                     <SelectContent>
@@ -165,50 +217,181 @@ function GeneratePage() {
                   </Select>
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground">Lọc category (chứa...)</label>
+                  <Label className="text-xs">Lọc category</Label>
                   <Input
                     value={filterCategory}
                     onChange={(e) => setFilterCategory(e.target.value)}
                     placeholder="vd: cafe, quan_an"
                   />
                 </div>
-                <div className="flex items-end gap-2">
-                  <label className="flex items-center gap-2 text-sm">
-                    <Checkbox checked={onlyPartner} onCheckedChange={(v) => setOnlyPartner(!!v)} />
-                    Chỉ entity đối tác
-                  </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox checked={onlyPartner} onCheckedChange={(v) => setOnlyPartner(!!v)} />
+                  Chỉ entity đối tác
+                </label>
+                <div className="border-t pt-3 space-y-2 text-xs text-muted-foreground">
+                  <div className="flex justify-between">
+                    <span>Entity phù hợp</span>
+                    <b className="text-foreground">{filteredEntities.length}</b>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Block đã liên kết</span>
+                    <b className="text-foreground">{boundCount}/{effectiveTpl?.slots.length ?? 0}</b>
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                <span>Đối tượng phù hợp: <b className="text-foreground">{filteredEntities.length}</b></span>
-                {selectedTpl && (
-                  <span>
-                    Block đã liên kết: <b className="text-foreground">{selectedTpl.slots.filter(slotHasBinding).length}</b>/{selectedTpl.slots.length}
-                  </span>
+                {filteredEntities.length > 0 && (
+                  <div>
+                    <Label className="text-xs">Xem trước với entity</Label>
+                    <Select value={previewEntityId} onValueChange={setPreviewEntityId}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {filteredEntities.map((e) => (
+                          <SelectItem key={e.entityId} value={e.entityId}>
+                            {e.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 )}
-              </div>
-              <div className="flex gap-2">
-                <Button onClick={generateByEntity} disabled={!tplId}>
-                  <Sparkles className="size-4 mr-2" /> Generate
-                </Button>
-                <Button variant="outline" onClick={() => setDebug((d) => !d)}>
-                  {debug ? <EyeOff className="size-4 mr-2" /> : <Eye className="size-4 mr-2" />}
-                  {debug ? "Tắt debug" : "Bật debug"}
-                </Button>
-                {entityPages.length > 0 && (
-                  <Button onClick={exportEntityZip} className="ml-auto">
-                    <Package className="size-4 mr-2" /> Export ZIP ({entityPages.filter((p) => p.selected).length})
+                <div className="border-t pt-3 space-y-2">
+                  <Button onClick={generateByEntity} disabled={!tplId} className="w-full">
+                    <Sparkles className="size-4 mr-2" /> Generate
+                  </Button>
+                  <Button variant="outline" onClick={() => setDebug((d) => !d)} className="w-full">
+                    {debug ? <EyeOff className="size-4 mr-2" /> : <Eye className="size-4 mr-2" />}
+                    {debug ? "Tắt debug" : "Bật debug"}
+                  </Button>
+                  {entityPages.length > 0 && (
+                    <Button onClick={exportEntityZip} className="w-full">
+                      <Package className="size-4 mr-2" /> Export ZIP ({entityPages.filter((p) => p.selected).length})
+                    </Button>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Cột 2: Canvas tương tác */}
+            <Card className="col-span-12 lg:col-span-6">
+              <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <MousePointerClick className="size-4" />
+                  Click block để liên kết dữ liệu
+                </CardTitle>
+                {Object.keys(bindOverrides).length > 0 && (
+                  <Button size="sm" variant="ghost" onClick={resetAll} className="h-7 text-xs">
+                    <Link2Off className="size-3 mr-1" /> Reset bind
                   </Button>
                 )}
-              </div>
-            </CardContent>
-          </Card>
+              </CardHeader>
+              <CardContent>
+                {!effectiveTpl ? (
+                  <div className="border border-dashed rounded-lg h-[480px] grid place-items-center text-muted-foreground text-sm">
+                    Chọn template để bắt đầu
+                  </div>
+                ) : (
+                  <div className="bg-muted/30 rounded-lg p-4 grid place-items-center overflow-auto" style={{ minHeight: 480 }}>
+                    <BindCanvas
+                      template={effectiveTpl}
+                      scale={canvasScale}
+                      selectedSlotId={selectedSlotId}
+                      onSelectSlot={setSelectedSlotId}
+                      entity={previewEntity}
+                      assets={assets ?? []}
+                    />
+                  </div>
+                )}
+              </CardContent>
+            </Card>
 
-          {selectedTpl && entityPages.length > 0 && (
+            {/* Cột 3: Panel binding */}
+            <Card className="col-span-12 lg:col-span-3">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Link2 className="size-4" /> Liên kết dữ liệu
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {!selectedSlot && (
+                  <p className="text-xs text-muted-foreground">
+                    Chọn 1 block (text hoặc image) trên canvas để gán trường data.
+                  </p>
+                )}
+                {selectedSlot && selectedSlot.kind !== "text" && selectedSlot.kind !== "image" && (
+                  <p className="text-xs text-muted-foreground">Block loại "{selectedSlot.kind}" không hỗ trợ liên kết.</p>
+                )}
+                {selectedSlot && (selectedSlot.kind === "text" || selectedSlot.kind === "image") && (
+                  <>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      {selectedSlot.kind === "text" ? <Type className="size-3" /> : <ImageIcon className="size-3" />}
+                      <span>Block {selectedSlot.kind}</span>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Trường dữ liệu</Label>
+                      <Select
+                        value={selectedSlot.bindingPath ?? "_static"}
+                        onValueChange={(v) => setBinding(selectedSlot.slotId, v === "_static" ? undefined : v)}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {(selectedSlot.kind === "text" ? TEXT_BINDING_OPTIONS : IMAGE_BINDING_OPTIONS).map((o) => (
+                            <SelectItem key={o.value || "_static"} value={o.value || "_static"}>
+                              {o.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {selectedSlot.bindingPath && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full"
+                        onClick={() => clearBinding(selectedSlot.slotId)}
+                      >
+                        <Link2Off className="size-3 mr-1" /> Xoá liên kết
+                      </Button>
+                    )}
+                    {/* Preview giá trị thực */}
+                    {selectedSlot.bindingPath && previewEntity && (
+                      <div className="border-t pt-3 space-y-1">
+                        <Label className="text-xs text-muted-foreground">
+                          Preview với "{previewEntity.name}"
+                        </Label>
+                        {selectedSlot.kind === "text" ? (
+                          <div className="text-sm border rounded p-2 bg-muted/30 break-words">
+                            {resolveTextBinding(selectedSlot.bindingPath, previewEntity, selectedSlot.staticText) || (
+                              <span className="text-muted-foreground italic">(trống)</span>
+                            )}
+                          </div>
+                        ) : (
+                          (() => {
+                            const r = resolveImageBinding(
+                              selectedSlot.bindingPath,
+                              previewEntity,
+                              assets ?? [],
+                              selectedSlot.staticImage,
+                            );
+                            return r.src ? (
+                              <img src={r.src} alt="" className="w-full h-32 object-cover rounded border" />
+                            ) : (
+                              <div className="border rounded p-2 text-xs text-muted-foreground">(không có ảnh phù hợp)</div>
+                            );
+                          })()
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Kết quả render */}
+          {effectiveTpl && entityPages.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {entityPages.map((p, idx) => {
                 const ent = entities?.find((e) => e.entityId === p.entityId);
-                const previewScale = 320 / selectedTpl.canvas.width;
+                const previewScale = 320 / effectiveTpl.canvas.width;
                 return (
                   <Card key={p.entityId + idx} className={p.selected ? "border-primary" : ""}>
                     <CardHeader className="p-3 pb-2">
@@ -224,7 +407,7 @@ function GeneratePage() {
                               {ent?.name ?? "(Template tĩnh)"}
                             </div>
                             <div className="text-xs text-muted-foreground truncate">
-                              {ent?.categoryMain ?? selectedTpl.name}
+                              {ent?.categoryMain ?? effectiveTpl.name}
                             </div>
                           </div>
                         </div>
@@ -235,7 +418,7 @@ function GeneratePage() {
                       <div className="overflow-hidden rounded border bg-muted/30">
                         <div ref={(el) => { if (el) entityRefs.current.set(p.entityId, el); }}>
                           <PageRenderer
-                            template={selectedTpl}
+                            template={effectiveTpl}
                             entities={entities ?? []}
                             assets={assets ?? []}
                             entity={ent}
@@ -266,10 +449,21 @@ function GeneratePage() {
 
           {entityPages.length === 0 && (
             <Card>
-              <CardContent className="p-10 text-center text-muted-foreground space-y-2">
-                <p>1️⃣ Chọn 1 page template đã có các block "🔗 liên kết" với entity field.</p>
-                <p>2️⃣ Lọc danh sách entity (theo category, đối tác).</p>
-                <p>3️⃣ Bấm Generate — mỗi entity sẽ tạo 1 trang riêng, các block tĩnh giữ nguyên.</p>
+              <CardContent className="p-8">
+                <ol className="space-y-3 max-w-2xl mx-auto text-sm text-muted-foreground">
+                  <li className="flex gap-3">
+                    <span className="size-6 shrink-0 rounded-full bg-muted text-foreground grid place-items-center text-xs font-semibold">1</span>
+                    <span className="flex items-center gap-1.5"><MousePointerClick className="size-4" /> Click vào các block trên canvas để gán trường data từ entity.</span>
+                  </li>
+                  <li className="flex gap-3">
+                    <span className="size-6 shrink-0 rounded-full bg-muted text-foreground grid place-items-center text-xs font-semibold">2</span>
+                    <span className="flex items-center gap-1.5"><Filter className="size-4" /> Lọc danh sách entity (theo category, đối tác).</span>
+                  </li>
+                  <li className="flex gap-3">
+                    <span className="size-6 shrink-0 rounded-full bg-muted text-foreground grid place-items-center text-xs font-semibold">3</span>
+                    <span className="flex items-center gap-1.5"><Sparkles className="size-4" /> Bấm Generate — mỗi entity sẽ tạo 1 trang riêng, các block không bind giữ nguyên nội dung tĩnh.</span>
+                  </li>
+                </ol>
               </CardContent>
             </Card>
           )}
@@ -362,7 +556,11 @@ function GeneratePage() {
                         </div>
                         {p.warnings.length > 0 && (
                           <div className="text-xs text-amber-700 bg-amber-50 dark:bg-amber-950 dark:text-amber-300 p-2 rounded space-y-0.5">
-                            {p.warnings.slice(0, 3).map((w, i) => <div key={i}>⚠ {w}</div>)}
+                            {p.warnings.slice(0, 3).map((w, i) => (
+                              <div key={i} className="flex items-start gap-1">
+                                <AlertTriangle className="size-3 mt-0.5 shrink-0" /> <span>{w}</span>
+                              </div>
+                            ))}
                           </div>
                         )}
                         <Button
@@ -383,14 +581,6 @@ function GeneratePage() {
                 })}
               </div>
             </>
-          )}
-
-          {!currentJob && (
-            <Card>
-              <CardContent className="p-10 text-center text-muted-foreground">
-                Chọn 1 pack rồi bấm Generate để xem preview các page.
-              </CardContent>
-            </Card>
           )}
         </TabsContent>
       </Tabs>
