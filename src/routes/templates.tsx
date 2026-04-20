@@ -173,6 +173,16 @@ function TemplatesPage() {
                 >
                   <Copy className="size-3" />
                 </Button>
+                {/Ng[àa]y/i.test(t.name) && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    title="Nhân bản thành ngày khác"
+                    onClick={() => onCloneDay(t.pageTemplateId)}
+                  >
+                    <CalendarPlus className="size-3" />
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="outline"
