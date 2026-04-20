@@ -52,6 +52,7 @@ export function PageRenderer({
 
   const { width, height, background, backgroundImage } = template.canvas;
   const resolvedBg = useResolvedImageSrc(backgroundImage);
+  const bgUsable = resolvedBg && !resolvedBg.startsWith("idb://") ? resolvedBg : undefined;
 
   const sectionItemsMap = useMemo(() => {
     const m = new Map<string, Array<{ entityId?: string; assetId?: string }>>();
@@ -74,6 +75,12 @@ export function PageRenderer({
     return m;
   }, [page]);
 
+  // Plan ảnh cấp page: rotate asset không trùng cho các block bind asset.*
+  const imagePlan: SlotImagePlan = useMemo(
+    () => buildSlotImagePlan(template, entity, assets),
+    [template, entity, assets],
+  );
+
   return (
     <div
       ref={innerRef}
@@ -84,7 +91,7 @@ export function PageRenderer({
         position: "relative",
         // Nếu template không set background → để trong suốt (không fallback #fff).
         background: background ?? "transparent",
-        backgroundImage: resolvedBg ? `url(${resolvedBg})` : undefined,
+        backgroundImage: bgUsable ? `url(${bgUsable})` : undefined,
         backgroundSize: "cover",
         backgroundPosition: "center",
         overflow: "hidden",
@@ -107,6 +114,7 @@ export function PageRenderer({
             entity={entity}
             sectionItemsMap={sectionItemsMap}
             slotOverride={slotEntityOverride.get(slot.slotId)}
+            planned={imagePlan.get(slot.slotId)}
             debug={debug}
           />
         ))}
