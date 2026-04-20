@@ -425,3 +425,27 @@ function BindSlot({
 
   return null;
 }
+
+function CardBadge({ label }: { label: string }) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: -22,
+        right: -2,
+        background: "hsl(var(--primary))",
+        color: "hsl(var(--primary-foreground))",
+        fontSize: 10,
+        padding: "2px 6px",
+        borderRadius: 4,
+        fontWeight: 700,
+        whiteSpace: "nowrap",
+        pointerEvents: "none",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+      }}
+      title="Block này thuộc Card mẫu — sẽ được lặp"
+    >
+      {label}
+    </div>
+  );
+}
