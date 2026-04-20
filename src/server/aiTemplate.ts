@@ -169,7 +169,8 @@ export const aiGenerateTemplateFromImageServer = createServerFn({ method: "POST"
     });
     if (!result.ok) return { ok: false as const, error: result.error };
     if (!result.toolArgs) return { ok: false as const, error: "AI không trả layout JSON hợp lệ" };
-    return { ok: true as const, layout: result.toolArgs };
+    // Stringify để bypass strict serializable check — client sẽ JSON.parse.
+    return { ok: true as const, layoutJson: JSON.stringify(result.toolArgs) };
   });
 
 // ============================================================
