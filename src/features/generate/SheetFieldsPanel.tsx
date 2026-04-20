@@ -116,10 +116,11 @@ export function SheetFieldsPanel({
 
   // Field nào enable cho slot đang chọn
   const slotKind = selectedSlot?.kind;
+  const shapeActsAsText = slotKind === "shape" && !!selectedSlot?.staticText?.trim();
   const canBindNow = slotKind === "text" || slotKind === "image" || slotKind === "shape";
   const fieldEnabled = (f: FieldItem): boolean => {
     if (!canBindNow) return false;
-    if (slotKind === "text") return !f.isImageLike; // text bind text-like
+    if (slotKind === "text" || shapeActsAsText) return !f.isImageLike; // text / shape có chữ bind text-like
     return f.isImageLike; // image/shape chỉ bind cột chứa URL ảnh (nếu sheet có)
   };
 
