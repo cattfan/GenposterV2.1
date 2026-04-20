@@ -24,7 +24,7 @@ import {
 } from "@/engines/binding/dataBinding";
 import { buildSlotImagePlan, type PlannedImage, type SlotImagePlan } from "@/engines/binding/imagePlan";
 import { useResolvedImageSrc } from "@/storage/imageSrc";
-import { expandPageWithCardGroups, type ExpandedSlot } from "@/engines/binding/cardRepeater";
+import { expandPageWithCardGroups } from "@/engines/binding/cardRepeater";
 
 interface Props {
   template: PageTemplate;
