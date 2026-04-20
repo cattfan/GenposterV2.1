@@ -69,9 +69,15 @@ export function EditorPage() {
   const tpl = useLiveQuery(() => db.pageTemplates.get(id), [id]);
   const [draft, setDraft] = useState<PageTemplate | null>(null);
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
+  const [renamingSlotId, setRenamingSlotId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(0.4);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
+  const dragLayerIdRef = useRef<string | null>(null);
+  const [dragOverLayerId, setDragOverLayerId] = useState<string | null>(null);
+  // re-render trigger sau khi setClipboard (vì clipboard là module-level)
+  const [, setClipboardTick] = useState(0);
+  const bumpClipboard = () => setClipboardTick((n) => n + 1);
   const canvasScrollRef = useRef<HTMLDivElement>(null);
   // Undo/Redo stacks (lưu snapshot draft trước khi thay đổi)
   const pastRef = useRef<PageTemplate[]>([]);
