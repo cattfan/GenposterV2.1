@@ -1393,3 +1393,162 @@ function FilterSlider({
     </div>
   );
 }
+
+// Một dòng trong panel Layers — UX kiểu Figma/Canva: icon kiểu + tên (đổi tên)
+// + toggle eye/lock + drag-reorder + chuột phải mở context menu.
+function LayerRow({
+  slot,
+  selected,
+  renaming,
+  onSelect,
+  onStartRename,
+  onCommitRename,
+  onCancelRename,
+  onToggleHidden,
+  onToggleLock,
+  onDelete,
+  menuActions,
+  dragOver,
+  onDragStart,
+  onDragEnter,
+  onDragLeave,
+  onDrop,
+}: {
+  slot: Slot;
+  selected: boolean;
+  renaming: boolean;
+  onSelect: () => void;
+  onStartRename: () => void;
+  onCommitRename: (name: string) => void;
+  onCancelRename: () => void;
+  onToggleHidden: () => void;
+  onToggleLock: () => void;
+  onDelete: () => void;
+  menuActions: SlotMenuActions;
+  dragOver: boolean;
+  onDragStart: () => void;
+  onDragEnter: () => void;
+  onDragLeave: () => void;
+  onDrop: () => void;
+}) {
+  const isBg = !!slot.isUploadedBackground;
+  const isHidden = !!slot.style?.hidden;
+  const isLocked = !!slot.locked || isBg;
+  const Icon =
+    slot.kind === "text" ? Type
+    : slot.kind === "image" ? ImageIcon
+    : slot.kind === "shape" ? (slot.shapeKind === "circle" ? Circle : slot.shapeKind === "triangle" ? Triangle : Square)
+    : LayersIcon;
+
+  const name = inferLayerName(slot);
+
+  const row = (
+    <div
+      draggable={!isBg && !renaming}
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = "move";
+        onDragStart();
+      }}
+      onDragOver={(e) => {
+        if (!isBg) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+        }
+      }}
+      onDragEnter={(e) => {
+        if (!isBg) {
+          e.preventDefault();
+          onDragEnter();
+        }
+      }}
+      onDragLeave={onDragLeave}
+      onDrop={(e) => {
+        e.preventDefault();
+        onDrop();
+      }}
+      className={
+        "group flex items-center gap-1 px-2 py-1 text-xs rounded select-none " +
+        (selected ? "bg-primary text-primary-foreground" : "hover:bg-muted") +
+        (dragOver ? " ring-2 ring-primary/60" : "") +
+        (isHidden ? " opacity-60" : "")
+      }
+    >
+      <GripVertical
+        className={"size-3 shrink-0 " + (isBg ? "opacity-20" : "opacity-40 cursor-grab active:cursor-grabbing")}
+      />
+      <Icon className="size-3 shrink-0 opacity-70" />
+      {renaming ? (
+        <input
+          autoFocus
+          defaultValue={slot.name ?? ""}
+          placeholder={name}
+          onBlur={(e) => onCommitRename(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              onCommitRename((e.target as HTMLInputElement).value);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              onCancelRename();
+            }
+          }}
+          onClick={(e) => e.stopPropagation()}
+          className="flex-1 h-5 bg-background text-foreground border border-input rounded px-1 text-xs"
+        />
+      ) : (
+        <button
+          onClick={onSelect}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            onStartRename();
+          }}
+          className="flex-1 text-left truncate"
+          title={name + " (double-click để đổi tên)"}
+        >
+          <span className="truncate">{name}</span>
+        </button>
+      )}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleHidden();
+        }}
+        className={"p-0.5 rounded " + (selected ? "hover:bg-primary-foreground/20" : "hover:bg-muted-foreground/20")}
+        title={isHidden ? "Hiện (Ctrl+H)" : "Ẩn (Ctrl+H)"}
+      >
+        {isHidden ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
+      </button>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleLock();
+        }}
+        className={"p-0.5 rounded " + (selected ? "hover:bg-primary-foreground/20" : "hover:bg-muted-foreground/20")}
+        title={isLocked ? "Mở khoá (Ctrl+L)" : "Khoá (Ctrl+L)"}
+        disabled={isBg}
+      >
+        {isLocked ? <Lock className="size-3" /> : <Unlock className="size-3 opacity-50" />}
+      </button>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+        className={
+          "opacity-0 group-hover:opacity-100 p-0.5 rounded " +
+          (selected ? "hover:bg-primary-foreground/20" : "hover:bg-destructive hover:text-destructive-foreground")
+        }
+        title="Xoá layer (Delete)"
+        disabled={isBg}
+      >
+        <Trash2 className="size-3" />
+      </button>
+    </div>
+  );
+
+  return (
+    <SlotContextMenu slot={slot} actions={menuActions}>
+      {row}
+    </SlotContextMenu>
+  );
+}
