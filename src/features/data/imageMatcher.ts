@@ -71,13 +71,35 @@ function normalizeInput(input: string | MatchInputFile): MatchInputFile {
   return input;
 }
 
+function pathParts(relativePath?: string): string[] {
+  if (!relativePath) return [];
+  return relativePath
+    .split(/[\\/]/)
+    .slice(0, -1)
+    .map((part) => slugify(part))
+    .filter(Boolean);
+}
+
 function pathContextSlug(relativePath?: string): string {
-  if (!relativePath) return "";
-  return slugify(
-    relativePath
-      .split(/[\\/]/)
-      .slice(0, -1)
-      .join(" "),
+  return pathParts(relativePath).join(" ");
+}
+
+function exactFolderEntityMatch(relativePath: string | undefined, entity: Entity): boolean {
+  const parts = pathParts(relativePath);
+  const parent = parts[parts.length - 1];
+  if (!parent) return false;
+  return parent === slugify(entity.name);
+}
+
+function exactFolderSheetMatch(relativePath: string | undefined, entity: Entity): boolean {
+  const parts = pathParts(relativePath);
+  const sheetFolder = parts[parts.length - 2];
+  if (!sheetFolder || !entity.sheetName) return false;
+  const sheetSlug = slugify(entity.sheetName);
+  return (
+    sheetFolder === sheetSlug ||
+    sheetFolder.includes(sheetSlug) ||
+    sheetSlug.includes(sheetFolder)
   );
 }
 
@@ -107,6 +129,12 @@ export function matchFilesToEntities(
     entity: e,
     slug: slugify(e.name),
   }));
+  const entityBySlug = new Map<string, Array<(typeof entitySlugs)[number]>>();
+  for (const item of entitySlugs) {
+    const bucket = entityBySlug.get(item.slug) ?? [];
+    bucket.push(item);
+    entityBySlug.set(item.slug, bucket);
+  }
 
   return fileNames.map((entry) => {
     const normalizedInput = normalizeInput(entry);
@@ -115,10 +143,33 @@ export function matchFilesToEntities(
     const fileSlug = slugify(cleaned);
     const contextSlug = pathContextSlug(normalizedInput.relativePath);
 
+    const folderSlug = pathParts(normalizedInput.relativePath).at(-1);
+    const exactFolderCandidates = folderSlug ? entityBySlug.get(folderSlug) ?? [] : [];
+    const exactFolderMatch = exactFolderCandidates.find((es) => {
+      const parentMatch = exactFolderEntityMatch(normalizedInput.relativePath, es.entity);
+      const sheetMatch =
+        !es.entity.sheetName || exactFolderSheetMatch(normalizedInput.relativePath, es.entity);
+      return parentMatch && sheetMatch;
+    });
+    if (exactFolderMatch) {
+      return {
+        fileName: fn,
+        relativePath: normalizedInput.relativePath,
+        matchedEntityId: exactFolderMatch.entity.entityId,
+        matchedEntityName: exactFolderMatch.entity.name,
+        score: 100,
+        reason: "exact",
+        autoAssign: true,
+        needsReview: false,
+      };
+    }
+
     // 1. Exact match
-    const exact = entitySlugs.find(
-      (es) => es.slug === fileSlug || (contextSlug && contextSlug.includes(es.slug)),
-    );
+    const exact =
+      (entityBySlug.get(fileSlug) ?? []).find(
+        (es) => !es.entity.sheetName || exactFolderSheetMatch(normalizedInput.relativePath, es.entity),
+      ) ??
+      entitySlugs.find((es) => contextSlug && contextSlug.includes(es.slug));
     if (exact) {
       return {
         fileName: fn,

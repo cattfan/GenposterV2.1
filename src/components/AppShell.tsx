@@ -85,10 +85,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <Palette className="size-5" />
                 </div>
                 <div className="min-w-0">
-                  <div className="font-bold text-sm leading-tight truncate">Content Pack</div>
-                  <div className="text-xs text-muted-foreground leading-tight truncate">
-                    Generator · VN
-                  </div>
+                  <div className="font-bold text-sm leading-tight truncate">GenPoster</div>
                 </div>
               </div>
               <button

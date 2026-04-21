@@ -42,6 +42,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { LayoutGuides } from "@/features/render/LayoutGuides";
 import { PageRenderer } from "@/features/render/PageRenderer";
 import { downloadJSON, downloadText } from "@/features/render/exportPng";
 import {
@@ -1134,6 +1135,7 @@ function DraftTemplatePreview({ tpl }: { tpl: PageTemplate }) {
       className="relative overflow-hidden rounded-lg border bg-muted/30"
       style={{ aspectRatio: `${tpl.canvas.width} / ${tpl.canvas.height}` }}
     >
+      <LayoutGuides width={tpl.canvas.width} height={tpl.canvas.height} scale={scale} />
       {isEmpty ? (
         <div className="flex h-full w-full items-center justify-center text-xs uppercase tracking-wider text-muted-foreground">
           {tpl.type} · trống

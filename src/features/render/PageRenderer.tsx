@@ -395,12 +395,14 @@ function SlotRenderer({
             style={{
               width: "100%",
               height: "100%",
-              background: "rgba(0,0,0,0.05)",
+              background:
+                slot.style?.overlayColor ??
+                "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02))",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              color: "#94a3b8",
-              fontSize: 14 * scale,
+              color: "rgba(255,255,255,0.28)",
+              fontSize: 10 * scale,
             }}
           >
             (chưa có ảnh)

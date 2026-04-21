@@ -42,8 +42,9 @@ import {
 import { BindCanvas } from "@/features/generate/BindCanvas";
 import { PageRenderer } from "@/features/render/PageRenderer";
 import { SheetFieldsPanel } from "@/features/generate/SheetFieldsPanel";
+import { GeneratePageEditor } from "@/features/generate/GeneratePageEditor";
 import { SuggestBindingsModal, type BindSuggestion } from "@/features/ai/SuggestBindingsModal";
-import { aiSuggestBindings } from "@/features/ai/aiFeatures";
+import { aiCaptionFromEntity, aiSuggestBindings } from "@/features/ai/aiFeatures";
 import { generateCaptions } from "@/engines/captions/generator";
 import { generatePackJob, type PackBindMode } from "@/engines/selection/generate";
 import {
@@ -53,12 +54,15 @@ import {
 import { buildEntityBindingTargets } from "@/engines/binding/cardRepeater";
 import {
   usePackBindOverrides,
-  applyPackOverridesToTemplate,
 } from "@/features/generate/usePackBindOverrides";
 import { nodeToPngBlob, downloadPng, downloadZip } from "@/features/render/exportPng";
 import { db } from "@/storage/db";
 import { getLastActiveSheet, setLastActiveSheet } from "@/storage/lastSheet";
 import { buildBundleGroups } from "@/lib/packDisplay";
+import {
+  createWorkingTemplate,
+  resolvePageWorkingTemplate,
+} from "@/features/generate/templateState";
 
 type Filter = "all" | "selected" | "errors" | "partner";
 
@@ -69,6 +73,10 @@ interface Props {
   assets: Asset[];
   currentJob: GenerationJob | null | undefined;
   setJob: (j: GenerationJob) => void;
+  updatePage: (
+    idx: number,
+    updater: (page: GenerationJob["pages"][number]) => GenerationJob["pages"][number],
+  ) => void;
   toggleSelected: (idx: number) => void;
   setSelectedAll: (v: boolean) => void;
   renderRefs: React.MutableRefObject<Map<number, HTMLDivElement>>;
@@ -88,6 +96,7 @@ export function PackTabContent({
   assets,
   currentJob,
   setJob,
+  updatePage,
   toggleSelected,
   setSelectedAll,
   renderRefs,
@@ -113,6 +122,7 @@ export function PackTabContent({
   const [selectedSlotIds, setSelectedSlotIds] = useState<string[]>([]);
   const [previewEntityId, setPreviewEntityId] = useState<string | undefined>(undefined);
   const [aiBusy, setAiBusy] = useState(false);
+  const [captionBusy, setCaptionBusy] = useState(false);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [suggestions, setSuggestions] = useState<BindSuggestion[]>([]);
   const [suggestPageId, setSuggestPageId] = useState<string | null>(null);
@@ -123,8 +133,9 @@ export function PackTabContent({
     clearBinding,
     resetPage,
     resetAll,
-    replacePage,
   } = usePackBindOverrides();
+  const [previewPageDrafts, setPreviewPageDrafts] = useState<Record<string, PageTemplate>>({});
+  const [editingPageIndex, setEditingPageIndex] = useState<number | null>(null);
 
   const selectedPack = packs.find((p) => p.packTemplateId === packId);
   const packPages: PageTemplate[] = useMemo(() => {
@@ -135,8 +146,15 @@ export function PackTabContent({
 
   const activePage = packPages[activePageIdx];
   const effectiveActive = useMemo(
-    () => (activePage ? applyPackOverridesToTemplate(activePage, packOv) : undefined),
-    [activePage, packOv],
+    () =>
+      activePage
+        ? resolvePageWorkingTemplate(
+            activePage,
+            packOv[activePage.pageTemplateId],
+            previewPageDrafts[activePage.pageTemplateId],
+          )
+        : undefined,
+    [activePage, packOv, previewPageDrafts],
   );
 
   // Filter options
@@ -225,6 +243,8 @@ export function PackTabContent({
   useEffect(() => {
     setSelectedSlotIds([]);
     setActivePageIdx(0);
+    setPreviewPageDrafts({});
+    setEditingPageIndex(null);
   }, [packId]);
   useEffect(() => {
     setSelectedSlotIds([]);
@@ -309,9 +329,31 @@ export function PackTabContent({
     bindingPath: string | undefined,
   ) => {
     slots.forEach((slot) => setBinding(pageTemplateId, slot.slotId, bindingPath));
+    setPreviewPageDrafts((prev) => {
+      const current = prev[pageTemplateId];
+      if (!current) return prev;
+      const next = createWorkingTemplate(current, undefined, current);
+      next.slots = next.slots.map((slot) => {
+        if (!slots.some((target) => target.slotId === slot.slotId)) return slot;
+        return { ...slot, bindingPath: bindingPath || undefined };
+      });
+      next.updatedAt = Date.now();
+      return { ...prev, [pageTemplateId]: next };
+    });
   };
   const clearBindingsForSlots = (slots: Slot[], pageTemplateId: string) => {
     slots.forEach((slot) => clearBinding(pageTemplateId, slot.slotId));
+    setPreviewPageDrafts((prev) => {
+      const current = prev[pageTemplateId];
+      if (!current) return prev;
+      const next = createWorkingTemplate(current, undefined, current);
+      next.slots = next.slots.map((slot) => {
+        if (!slots.some((target) => target.slotId === slot.slotId)) return slot;
+        return { ...slot, bindingPath: undefined };
+      });
+      next.updatedAt = Date.now();
+      return { ...prev, [pageTemplateId]: next };
+    });
   };
   const commonBindingValue = (slots: Slot[]): string | undefined => {
     if (slots.length === 0) return undefined;
@@ -322,10 +364,17 @@ export function PackTabContent({
     () =>
       packPages.reduce(
         (acc, t) =>
-          acc + applyPackOverridesToTemplate(t, packOv).slots.filter((s) => !!s.bindingPath).length,
+          acc +
+          (
+            resolvePageWorkingTemplate(
+              t,
+              packOv[t.pageTemplateId],
+              previewPageDrafts[t.pageTemplateId],
+            )?.slots ?? []
+          ).filter((s) => !!s.bindingPath).length,
         0,
       ),
-    [packPages, packOv],
+    [packPages, packOv, previewPageDrafts],
   );
 
   const dataColumns = useMemo(() => {
@@ -357,7 +406,12 @@ export function PackTabContent({
         // Loop từng page, áp luôn (không mở modal)
         let total = 0;
         for (const tpl of packPages) {
-          const eff = applyPackOverridesToTemplate(tpl, packOv);
+          const eff = resolvePageWorkingTemplate(
+            tpl,
+            packOv[tpl.pageTemplateId],
+            previewPageDrafts[tpl.pageTemplateId],
+          );
+          if (!eff) continue;
           const slotsForAi = eff.slots
             .filter((s) => s.kind === "text" || s.kind === "image" || s.kind === "shape")
             .map((s) => ({
@@ -407,12 +461,48 @@ export function PackTabContent({
     toast.success(`Đã áp dụng ${selected.length} liên kết`);
   };
 
+  const runAiCaption = async () => {
+    if (!activePage || !selectedSlot || selectedSlot.kind !== "text") return;
+    if (!previewEntity) return toast.error("Chọn entity preview trước");
+    setCaptionBusy(true);
+    try {
+      const out = await aiCaptionFromEntity({
+        entity: previewEntity as unknown as Record<string, unknown>,
+        style: "instagram",
+      });
+      if (!out.ok) return toast.error(out.error);
+      setBinding(activePage.pageTemplateId, selectedSlot.slotId, undefined);
+      setPreviewPageDrafts((prev) => {
+        const working = createWorkingTemplate(
+          activePage,
+          packOv[activePage.pageTemplateId],
+          prev[activePage.pageTemplateId],
+        );
+        working.slots = working.slots.map((slot) =>
+          slot.slotId === selectedSlot.slotId
+            ? { ...slot, bindingPath: undefined, staticText: out.caption }
+            : slot,
+        );
+        working.updatedAt = Date.now();
+        return { ...prev, [activePage.pageTemplateId]: working };
+      });
+      toast.success("Đã sinh caption");
+    } catch (error) {
+      toast.error("AI lỗi: " + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setCaptionBusy(false);
+    }
+  };
+
   const onGenerate = () => {
     if (!selectedPack) return toast.error("Chưa chọn pack");
     if (filteredEntities.length === 0) return toast.error("Không có entity phù hợp");
+    const pageTemplatesForGenerate = tpls.map(
+      (tpl) => previewPageDrafts[tpl.pageTemplateId] ?? tpl,
+    );
     const job = generatePackJob({
       pack: selectedPack,
-      pageTemplates: tpls,
+      pageTemplates: pageTemplatesForGenerate,
       entities,
       assets,
       mode,
@@ -421,6 +511,18 @@ export function PackTabContent({
       partnerQuotaPerPage: onlyPartner ? 0 : partnerQuotaPerPage,
       prioritizePartner,
     });
+    if (Object.keys(previewPageDrafts).length > 0) {
+      job.pages = job.pages.map((page) => ({
+        ...page,
+        workingTemplate: previewPageDrafts[page.pageTemplateId]
+          ? createWorkingTemplate(
+              previewPageDrafts[page.pageTemplateId],
+              undefined,
+              previewPageDrafts[page.pageTemplateId],
+            )
+          : page.workingTemplate,
+      }));
+    }
     setJob(job);
     toast.success(`Đã tạo ${job.pages.length} page`);
   };
@@ -465,6 +567,16 @@ export function PackTabContent({
   const canvasScale = effectiveActive
     ? Math.min(560 / effectiveActive.canvas.width, 700 / effectiveActive.canvas.height)
     : 0.5;
+
+  const editingJobPage = currentJob?.pages.find((page) => page.pageIndex === editingPageIndex);
+  const editingJobPageBaseTemplate =
+    editingJobPage && tpls.length > 0
+      ? resolvePageWorkingTemplate(
+          tpls.find((tpl) => tpl.pageTemplateId === editingJobPage.pageTemplateId),
+          editingJobPage.bindOverrides ?? packOv[editingJobPage.pageTemplateId],
+        )
+      : undefined;
+  const editingJobPageTemplate = editingJobPage?.workingTemplate ?? editingJobPageBaseTemplate;
 
   return (
     <>
@@ -657,7 +769,15 @@ export function PackTabContent({
                 {debug ? "Tắt debug" : "Bật debug"}
               </Button>
               {Object.keys(packOv).length > 0 && (
-                <Button variant="ghost" size="sm" onClick={resetAll} className="w-full text-xs">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    resetAll();
+                    setPreviewPageDrafts({});
+                  }}
+                  className="w-full text-xs"
+                >
                   <Link2Off className="size-3 mr-1" /> Reset toàn bộ bind
                 </Button>
               )}
@@ -775,7 +895,14 @@ export function PackTabContent({
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() => resetPage(activePage.pageTemplateId)}
+                          onClick={() => {
+                            resetPage(activePage.pageTemplateId);
+                            setPreviewPageDrafts((prev) => {
+                              const next = { ...prev };
+                              delete next[activePage.pageTemplateId];
+                              return next;
+                            });
+                          }}
                           className="h-8 text-xs"
                         >
                           <Link2Off className="size-3 mr-1" /> Reset page
@@ -882,9 +1009,13 @@ export function PackTabContent({
                     variant="outline"
                     className="w-full"
                     onClick={runAiCaption}
-                    disabled={aiBusy || !previewEntity}
+                    disabled={captionBusy || !previewEntity}
                   >
-                    <Wand2 className="size-3 mr-1" />
+                    {captionBusy ? (
+                      <Loader2 className="size-3 mr-1 animate-spin" />
+                    ) : (
+                      <Wand2 className="size-3 mr-1" />
+                    )}
                     AI caption (từ data thật)
                   </Button>
                 )}
@@ -1043,7 +1174,13 @@ export function PackTabContent({
                     const page = meta.page;
                     const tpl = meta.pageTemplate;
                     if (!tpl) return null;
-                    const eff = applyPackOverridesToTemplate(tpl, packOv);
+                    const eff =
+                      page.workingTemplate ??
+                      resolvePageWorkingTemplate(
+                        tpl,
+                        page.bindOverrides ?? packOv[tpl.pageTemplateId],
+                      );
+                    if (!eff) return null;
                     const ent = page.entityId
                       ? entities.find((entity) => entity.entityId === page.entityId)
                       : undefined;
@@ -1090,18 +1227,28 @@ export function PackTabContent({
                               />
                             </div>
                           </div>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="w-full"
-                            onClick={async () => {
-                              const node = packRefs.current.get(page.pageIndex);
-                              if (!node) return;
-                              await downloadPng(node, page.pageFile, 2);
-                            }}
-                          >
-                            <Download className="size-3 mr-1" /> Export PNG
-                          </Button>
+                          <div className="grid grid-cols-2 gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full"
+                              onClick={() => setEditingPageIndex(page.pageIndex)}
+                            >
+                              <Type className="size-3 mr-1" /> Edit page
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full"
+                              onClick={async () => {
+                                const node = packRefs.current.get(page.pageIndex);
+                                if (!node) return;
+                                await downloadPng(node, page.pageFile, 2);
+                              }}
+                            >
+                              <Download className="size-3 mr-1" /> Export PNG
+                            </Button>
+                          </div>
                         </CardContent>
                       </Card>
                     );
@@ -1129,6 +1276,33 @@ export function PackTabContent({
             </p>
           </CardContent>
         </Card>
+      )}
+
+      {editingJobPage && editingJobPageBaseTemplate && editingJobPageTemplate && (
+        <GeneratePageEditor
+          open={!!editingJobPage}
+          onOpenChange={(open) => {
+            if (!open) setEditingPageIndex(null);
+          }}
+          title={`Edit page · ${editingJobPage.pageFile}`}
+          template={editingJobPageTemplate}
+          baseTemplate={editingJobPageBaseTemplate}
+          entities={entities}
+          assets={assets}
+          entity={
+            editingJobPage.entityId
+              ? entities.find((entity) => entity.entityId === editingJobPage.entityId)
+              : undefined
+          }
+          entityPool={buildOrderedEntityPool(editingJobPage.entityId)}
+          slotItems={editingJobPage.items}
+          onApply={(nextTemplate) => {
+            updatePage(editingJobPage.pageIndex, (page) => ({
+              ...page,
+              workingTemplate: nextTemplate ?? undefined,
+            }));
+          }}
+        />
       )}
 
       <SuggestBindingsModal

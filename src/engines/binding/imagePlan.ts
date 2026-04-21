@@ -11,6 +11,14 @@ export interface PlannedImage {
 
 export type SlotImagePlan = Map<string, PlannedImage>;
 
+function stableHash(input: string): number {
+  let hash = 0;
+  for (let index = 0; index < input.length; index += 1) {
+    hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
+
 function isImageBindingSlot(slot: Slot): boolean {
   return (
     (slot.kind === "image" || slot.kind === "shape") &&
@@ -24,6 +32,12 @@ function pickBest(pool: Asset[]): Asset | undefined {
   return pool.slice().sort((a, b) => (b.qualityScore ?? 0) - (a.qualityScore ?? 0))[0];
 }
 
+function pickStableRandom(pool: Asset[], seed: string): Asset | undefined {
+  if (pool.length === 0) return undefined;
+  const ordered = pool.slice().sort((a, b) => a.assetId.localeCompare(b.assetId));
+  return ordered[stableHash(seed) % ordered.length];
+}
+
 function buildImagePlanForSlots(
   slots: Slot[],
   resolveEntity: (slot: Slot) => Entity | undefined,
@@ -31,6 +45,7 @@ function buildImagePlanForSlots(
 ): SlotImagePlan {
   const plan: SlotImagePlan = new Map();
   const usedAssetIdsByEntity = new Map<string, Set<string>>();
+  const usedGlobalAssetIds = new Set<string>();
 
   const bindableSlots = slots
     .filter(isImageBindingSlot)
@@ -38,21 +53,46 @@ function buildImagePlanForSlots(
     .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0) || a.slotId.localeCompare(b.slotId));
 
   for (const slot of bindableSlots) {
+    const bindingPath = slot.bindingPath!;
+    let chosen: Asset | undefined;
+    let fallback = false;
+
+    if (bindingPath === "asset.random_global") {
+      const free = assets.filter((asset) => !usedGlobalAssetIds.has(asset.assetId));
+      chosen = pickStableRandom(
+        free.length > 0 ? free : assets,
+        `global:${slot.originalSlotId ?? slot.slotId}`,
+      );
+      fallback = free.length === 0 && assets.length > 1;
+      if (chosen) {
+        usedGlobalAssetIds.add(chosen.assetId);
+        plan.set(slot.slotId, {
+          src: chosen.sourceValue,
+          assetId: chosen.assetId,
+          entityId: chosen.entityId,
+          fallback,
+        });
+      }
+      continue;
+    }
+
     const entity = resolveEntity(slot);
     if (!entity) continue;
 
     const pool = assets.filter((asset) => asset.entityId === entity.entityId);
     if (pool.length === 0) continue;
 
-    const usedAssetIds =
-      usedAssetIdsByEntity.get(entity.entityId) ?? new Set<string>();
+    const usedAssetIds = usedAssetIdsByEntity.get(entity.entityId) ?? new Set<string>();
     usedAssetIdsByEntity.set(entity.entityId, usedAssetIds);
 
-    const bindingPath = slot.bindingPath!;
-    let chosen: Asset | undefined;
-    let fallback = false;
-
-    if (bindingPath === "asset.cover") {
+    if (bindingPath === "asset.random") {
+      const free = pool.filter((asset) => !usedAssetIds.has(asset.assetId));
+      chosen = pickStableRandom(
+        free.length > 0 ? free : pool,
+        `${entity.entityId}:${slot.originalSlotId ?? slot.slotId}`,
+      );
+      fallback = free.length === 0 && pool.length > 1;
+    } else if (bindingPath === "asset.cover") {
       const cover = pool.find((asset) => asset.isCover) ?? pool.find((asset) => asset.role === "cover");
       if (cover && !usedAssetIds.has(cover.assetId)) {
         chosen = cover;

@@ -14,6 +14,7 @@ import {
 import { CropOverlay } from "./CropOverlay";
 import { SlotContextMenu, type SlotMenuActions } from "./SlotContextMenu";
 import { useResolvedImageSrc } from "@/storage/imageSrc";
+import { LayoutGuides } from "@/features/render/LayoutGuides";
 
 export function NumField({
   label,
@@ -72,6 +73,12 @@ export function Canvas({
         if (e.target === ref.current) onSelect(null);
       }}
     >
+      <LayoutGuides
+        width={template.canvas.width}
+        height={template.canvas.height}
+        scale={zoom}
+      />
+
       {template.slots
         .slice()
         .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))

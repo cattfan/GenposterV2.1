@@ -2,6 +2,7 @@ import { nanoid } from "nanoid";
 import { aiGenerateComboFromImages } from "@/features/ai/aiFeatures";
 import { callAi } from "@/features/ai/aiClient";
 import { aiLayoutToTemplate } from "@/features/ai/templateFromImage";
+import { parseLayoutBlueprintJson } from "@/features/ai/blueprint";
 import type {
   AnalysisMode,
   AnalyzedPack,
@@ -11,6 +12,7 @@ import type {
   Asset,
   CompatibilityLevel,
   CompatibilityReport,
+  DataBlueprint,
   DraftPageSuggestion,
   DraftReadiness,
   DraftTemplateSuggestion,
@@ -26,6 +28,7 @@ import type {
   SheetCompatibilityDetail,
   SheetSemanticProfile,
   Slot,
+  VisualBlueprint,
 } from "@/models";
 
 type UploadedAnalysisImage = {
@@ -1133,6 +1136,54 @@ function normalizePageAnalysis(
   };
 }
 
+function normalizePageAnalysisFromBlueprint(params: {
+  dataBlueprint: DataBlueprint;
+  visualBlueprint?: VisualBlueprint;
+  pageIndex: number;
+  suggestedName: string;
+  layoutJson?: string;
+}): Omit<AnalyzedPage, "compatibility"> {
+  const { dataBlueprint, visualBlueprint, pageIndex, suggestedName, layoutJson } = params;
+  const normalized = normalizePageAnalysis(
+    {
+      pageRole: dataBlueprint.pageRole,
+      pageType: dataBlueprint.pageType,
+      summary: dataBlueprint.summary,
+      layoutDensity: dataBlueprint.layoutDensity,
+      numberOfSections: dataBlueprint.numberOfSections,
+      estimatedItemCount: dataBlueprint.estimatedItemCount,
+      hasMainTitle: dataBlueprint.hasMainTitle,
+      hasSubtitle: dataBlueprint.hasSubtitle,
+      hasBackgroundImage: dataBlueprint.hasBackgroundImage,
+      hasPanel: dataBlueprint.hasPanel,
+      hasSectionImages: dataBlueprint.hasSectionImages,
+      hasListRepeater: dataBlueprint.hasListRepeater,
+      hasSlotRepeater: dataBlueprint.hasSlotRepeater,
+      hasPriceBadge: dataBlueprint.hasPriceBadge,
+      hasCTA: dataBlueprint.hasCTA,
+      confidenceScore:
+        dataBlueprint.structureConfidence ??
+        dataBlueprint.bindingConfidence ??
+        visualBlueprint?.confidence ??
+        0.72,
+      uiRegions: dataBlueprint.uiRegions,
+      requiredFields: dataBlueprint.requiredFields,
+    },
+    pageIndex,
+    suggestedName,
+    layoutJson,
+  );
+
+  return {
+    ...normalized,
+    visualBlueprint,
+    dataBlueprint,
+    visualConfidence: visualBlueprint?.confidence,
+    structureConfidence: dataBlueprint.structureConfidence,
+    bindingConfidence: dataBlueprint.bindingConfidence,
+  };
+}
+
 function sheetNamesFromEntities(entities: Entity[]): string[] {
   return Array.from(
     new Set(entities.map((entity) => entity.sheetName || "default").filter(Boolean) as string[]),
@@ -1904,9 +1955,24 @@ function buildDataBlueprintGroups(pages: AnalyzedPage[]) {
   };
 }
 
-function readinessFromCompatibility(report: CompatibilityReport): DraftReadiness {
-  if (report.score >= 75 && report.groups.missing_required.length <= 1) return "ready";
-  if (report.score >= 45) return "needs_data";
+function readinessFromPage(page: AnalyzedPage): DraftReadiness {
+  const visualConfidence = page.visualConfidence ?? 0.75;
+  const structureConfidence = page.structureConfidence ?? page.confidenceScore ?? 0.75;
+  const bindingConfidence = page.bindingConfidence ?? 0.75;
+  const report = page.compatibility;
+
+  if (
+    report.score >= 75 &&
+    report.groups.missing_required.length <= 1 &&
+    visualConfidence >= 0.6 &&
+    structureConfidence >= 0.6 &&
+    bindingConfidence >= 0.55
+  ) {
+    return "ready";
+  }
+  if (report.score >= 45 && visualConfidence >= 0.45 && structureConfidence >= 0.45) {
+    return "needs_data";
+  }
   return "skeleton_only";
 }
 
@@ -2097,14 +2163,27 @@ function buildLayoutDrivenDraft(page: AnalyzedPage): {
   if (!page.layoutJson) return null;
 
   try {
-    const template = aiLayoutToTemplate(JSON.parse(page.layoutJson), page.suggestedName);
+    const parsedBlueprint = parseLayoutBlueprintJson(page.layoutJson);
+    const template = aiLayoutToTemplate(parsedBlueprint ?? JSON.parse(page.layoutJson), page.suggestedName);
     template.type = currentTemplateTypeFromAnalysis(page.pageType);
     template.validationRules = page.compatibility.groups.missing_required.map((gap) => gap.message);
     const suggestedBindings = inferAutoBindingsForLayoutTemplate(page, template);
+    const visualConfidence = page.visualConfidence ?? parsedBlueprint?.visualBlueprint.confidence ?? 0;
+    const draftWarnings = [
+      ...page.compatibility.groups.risk.map((gap) => gap.message),
+      ...(parsedBlueprint?.visualBlueprint.warnings ?? []),
+      ...(parsedBlueprint?.dataBlueprint?.warnings ?? []),
+    ];
+    if (!parsedBlueprint?.dataBlueprint) {
+      draftWarnings.push("Blueprint chưa có data pass đầy đủ, draft đang dựa nhiều vào visual blueprint.");
+    }
+    if (visualConfidence > 0 && visualConfidence < 0.6) {
+      draftWarnings.push("Visual fidelity thấp, cần kiểm tra kỹ trước khi dùng làm template.");
+    }
 
     return {
       template,
-      warnings: page.compatibility.groups.risk.map((gap) => gap.message),
+      warnings: uniqueStrings(draftWarnings),
       autoBindingCount: suggestedBindings.length,
     };
   } catch {
@@ -2473,12 +2552,17 @@ function buildFallbackDraft(page: AnalyzedPage): {
 } {
   if (page.layoutJson) {
     try {
-      const template = aiLayoutToTemplate(JSON.parse(page.layoutJson), page.suggestedName);
+      const parsedBlueprint = parseLayoutBlueprintJson(page.layoutJson);
+      const template = aiLayoutToTemplate(parsedBlueprint ?? JSON.parse(page.layoutJson), page.suggestedName);
       template.type = currentTemplateTypeFromAnalysis(page.pageType);
       template.validationRules = page.compatibility.groups.missing_required.map((gap) => gap.message);
       return {
         template,
-        warnings: page.compatibility.groups.risk.map((gap) => gap.message),
+        warnings: uniqueStrings([
+          ...page.compatibility.groups.risk.map((gap) => gap.message),
+          ...(parsedBlueprint?.visualBlueprint.warnings ?? []),
+          ...(parsedBlueprint?.dataBlueprint?.warnings ?? []),
+        ]),
         autoBindingCount: 0,
       };
     } catch {
@@ -2612,13 +2696,14 @@ function buildDraftSuggestion(
     const enhancedTemplate = enhanceTemplateSections(built.template, page, topSheet);
     pageTemplates.push(enhancedTemplate);
     warnings.push(...built.warnings);
+    const pageReadiness = readinessFromPage(page);
     pageDrafts.push({
       pageTemplateId: enhancedTemplate.pageTemplateId,
       pageIndex: page.pageIndex,
       pageName: page.suggestedName,
       pageType: page.pageType,
-      readiness: readinessFromCompatibility(page.compatibility),
-      readinessLabel: draftReadinessText(readinessFromCompatibility(page.compatibility)),
+      readiness: pageReadiness,
+      readinessLabel: draftReadinessText(pageReadiness),
       sectionCount: enhancedTemplate.sections.length,
       estimatedItemCount: page.estimatedItemCount,
       autoBindingCount: built.autoBindingCount,
@@ -2671,6 +2756,16 @@ async function analyzeSinglePageImage(params: {
   layoutJson?: string;
 }): Promise<Omit<AnalyzedPage, "compatibility">> {
   const { imageDataUrl, pageIndex, roleHint, suggestedName, layoutJson } = params;
+  const parsedBlueprint = parseLayoutBlueprintJson(layoutJson);
+  if (parsedBlueprint?.dataBlueprint && parsedBlueprint.dataBlueprint.requiredFields.length > 0) {
+    return normalizePageAnalysisFromBlueprint({
+      dataBlueprint: parsedBlueprint.dataBlueprint,
+      visualBlueprint: parsedBlueprint.visualBlueprint,
+      pageIndex,
+      suggestedName,
+      layoutJson,
+    });
+  }
   const result = await callAi({
     useVisionModel: true,
     messages: [
@@ -2730,15 +2825,27 @@ async function analyzeSinglePageImage(params: {
         [],
       ),
       layoutJson,
+      visualBlueprint: parsedBlueprint?.visualBlueprint,
+      dataBlueprint: parsedBlueprint?.dataBlueprint,
+      visualConfidence: parsedBlueprint?.visualBlueprint.confidence,
+      structureConfidence: parsedBlueprint?.dataBlueprint?.structureConfidence,
+      bindingConfidence: parsedBlueprint?.dataBlueprint?.bindingConfidence,
     };
   }
 
-  return normalizePageAnalysis(
-    result.toolArgs as PageAnalysisToolResult,
-    pageIndex,
-    suggestedName,
-    layoutJson,
-  );
+  return {
+    ...normalizePageAnalysis(
+      result.toolArgs as PageAnalysisToolResult,
+      pageIndex,
+      suggestedName,
+      layoutJson,
+    ),
+    visualBlueprint: parsedBlueprint?.visualBlueprint,
+    dataBlueprint: parsedBlueprint?.dataBlueprint,
+    visualConfidence: parsedBlueprint?.visualBlueprint.confidence,
+    structureConfidence: parsedBlueprint?.dataBlueprint?.structureConfidence,
+    bindingConfidence: parsedBlueprint?.dataBlueprint?.bindingConfidence,
+  };
 }
 
 export async function runReversePackAnalysis(input: {
@@ -2754,6 +2861,7 @@ export async function runReversePackAnalysis(input: {
   onProgress?.("Phân loại bộ ảnh...");
   const comboResult = await aiGenerateComboFromImages({
     images: images.map((image) => ({ dataUrl: image.dataUrl })),
+    preferVisibleLines: true,
     onProgress: (step) => onProgress?.(step),
   });
 

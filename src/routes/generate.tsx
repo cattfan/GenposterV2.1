@@ -38,7 +38,7 @@ import {
   Wand2,
   Loader2,
 } from "lucide-react";
-import type { Entity, RenderedItem, Slot } from "@/models";
+import type { Entity, PageTemplate, RenderedItem, Slot } from "@/models";
 import {
   TEXT_BINDING_OPTIONS,
   IMAGE_BINDING_OPTIONS,
@@ -51,12 +51,16 @@ import { aiSuggestBindings, aiCaptionFromEntity } from "@/features/ai/aiFeatures
 import { SuggestBindingsModal, type BindSuggestion } from "@/features/ai/SuggestBindingsModal";
 import { SheetFieldsPanel } from "@/features/generate/SheetFieldsPanel";
 import { PackTabContent } from "@/features/generate/PackTabContent";
+import { GeneratePageEditor } from "@/features/generate/GeneratePageEditor";
 import { getLastActiveSheet, setLastActiveSheet } from "@/storage/lastSheet";
 import {
   allocateEntityBindingsForTemplate,
   buildEntityAllocationOrder,
 } from "@/engines/selection/entityBindAllocator";
 import { buildEntityBindingTargets } from "@/engines/binding/cardRepeater";
+import {
+  createWorkingTemplate,
+} from "@/features/generate/templateState";
 
 export const Route = createFileRoute("/generate")({
   component: GeneratePage,
@@ -67,6 +71,8 @@ interface EntityPreviewPage {
   selected: boolean;
   items: RenderedItem[];
   warnings: string[];
+  baseTemplate?: PageTemplate;
+  workingTemplate?: PageTemplate;
 }
 
 function GeneratePage() {
@@ -79,10 +85,18 @@ function GeneratePage() {
   const [packId, setPackId] = useState<string | undefined>(undefined);
   const [debug, setDebug] = useState(false);
   const [filter, setFilter] = useState<"all" | "selected" | "errors" | "partner">("all");
-  const { currentJob, setJob, toggleSelected, setSelectedAll } = useJobStore();
+  const { currentJob, setJob, toggleSelected, setSelectedAll, updatePage } = useJobStore();
   const renderRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   const selectedPack = packs?.find((p) => p.packTemplateId === packId);
+
+  useEffect(() => {
+    if (!currentJob || currentJob.status !== "exported") return;
+    const timeout = window.setTimeout(() => {
+      void db.jobs.put(currentJob);
+    }, 150);
+    return () => window.clearTimeout(timeout);
+  }, [currentJob]);
 
   const onGenerate = () => {
     if (!selectedPack || !tpls || !entities || !assets) return;
@@ -133,6 +147,8 @@ function GeneratePage() {
   const [partnerQuotaPerPage, setPartnerQuotaPerPage] = useState<number>(0);
   const [maxPages, setMaxPages] = useState<number>(50);
   const [entityPages, setEntityPages] = useState<EntityPreviewPage[]>([]);
+  const [previewTemplateDraft, setPreviewTemplateDraft] = useState<PageTemplate | null>(null);
+  const [editingEntityPageId, setEditingEntityPageId] = useState<string | null>(null);
   const entityRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [selectedSlotIds, setSelectedSlotIds] = useState<string[]>([]);
   const [previewEntityId, setPreviewEntityId] = useState<string | undefined>(undefined);
@@ -148,6 +164,7 @@ function GeneratePage() {
 
   const selectedTpl = tpls?.find((t) => t.pageTemplateId === tplId);
   const effectiveTpl = useEffectiveTemplate(selectedTpl, bindOverrides);
+  const entityPreviewTemplate = previewTemplateDraft ?? effectiveTpl;
 
   // Distinct sheets / mô hình / phong cách
   const sheetOptions = useMemo(() => {
@@ -231,14 +248,19 @@ function GeneratePage() {
   );
 
   const activeTargetCount = useMemo(
-    () => (effectiveTpl ? buildEntityBindingTargets(effectiveTpl, filteredEntities).length : 0),
-    [effectiveTpl, filteredEntities],
+    () =>
+      entityPreviewTemplate
+        ? buildEntityBindingTargets(entityPreviewTemplate, filteredEntities).length
+        : 0,
+    [entityPreviewTemplate, filteredEntities],
   );
 
   // Reset chọn slot & preview entity khi đổi template
   useEffect(() => {
     setSelectedSlotIds([]);
     resetAll();
+    setPreviewTemplateDraft(null);
+    setEditingEntityPageId(null);
   }, [tplId, resetAll]);
 
   // Auto chọn entity preview đầu tiên
@@ -273,15 +295,15 @@ function GeneratePage() {
   const selectedSlots = useMemo(
     () =>
       selectedSlotIds
-        .map((slotId) => effectiveTpl?.slots.find((slot) => slot.slotId === slotId))
+        .map((slotId) => entityPreviewTemplate?.slots.find((slot) => slot.slotId === slotId))
         .filter((slot): slot is Slot => !!slot),
-    [effectiveTpl, selectedSlotIds],
+    [entityPreviewTemplate, selectedSlotIds],
   );
   const selectedSlot: Slot | undefined = selectedSlots[selectedSlots.length - 1];
   const previewSlotItems = useMemo(() => {
-    if (!effectiveTpl || !previewEntity) return [];
+    if (!entityPreviewTemplate || !previewEntity) return [];
     const allocation = allocateEntityBindingsForTemplate({
-      template: effectiveTpl,
+      template: entityPreviewTemplate,
       orderedEntities: buildOrderedEntityPool(previewEntityId),
       pageOwner: previewEntity,
       partnerQuota: onlyPartner ? 0 : partnerQuotaPerPage,
@@ -290,7 +312,7 @@ function GeneratePage() {
     });
     return allocation.items;
   }, [
-    effectiveTpl,
+    entityPreviewTemplate,
     previewEntity,
     filteredEntities,
     partnerQuotaPerPage,
@@ -325,16 +347,36 @@ function GeneratePage() {
   };
   const applyBindingToSlots = (slots: Slot[], bindingPath: string | undefined) => {
     slots.forEach((slot) => setBinding(slot.slotId, bindingPath));
+    setPreviewTemplateDraft((prev) => {
+      if (!prev) return prev;
+      const next = clonePageTemplate(prev);
+      next.slots = next.slots.map((slot) => {
+        if (!slots.some((target) => target.slotId === slot.slotId)) return slot;
+        return { ...slot, bindingPath: bindingPath || undefined };
+      });
+      next.updatedAt = Date.now();
+      return next;
+    });
   };
   const clearBindingsForSlots = (slots: Slot[]) => {
     slots.forEach((slot) => clearBinding(slot.slotId));
+    setPreviewTemplateDraft((prev) => {
+      if (!prev) return prev;
+      const next = clonePageTemplate(prev);
+      next.slots = next.slots.map((slot) => {
+        if (!slots.some((target) => target.slotId === slot.slotId)) return slot;
+        return { ...slot, bindingPath: undefined };
+      });
+      next.updatedAt = Date.now();
+      return next;
+    });
   };
   const commonBindingValue = (slots: Slot[]): string | undefined => {
     if (slots.length === 0) return undefined;
     const values = Array.from(new Set(slots.map((slot) => slot.bindingPath ?? "_static")));
     return values.length === 1 ? values[0] : undefined;
   };
-  const boundCount = effectiveTpl?.slots.filter((s) => !!s.bindingPath).length ?? 0;
+  const boundCount = entityPreviewTemplate?.slots.filter((s) => !!s.bindingPath).length ?? 0;
   const hasAnyBinding = boundCount > 0;
 
   // Tập cột data có sẵn từ entity (top-level + metadata) — feed cho AI bind suggest.
@@ -360,8 +402,8 @@ function GeneratePage() {
   }, [entities]);
 
   const runAiSuggest = async () => {
-    if (!effectiveTpl) return toast.error("Chưa chọn template");
-    const slotsForAi = effectiveTpl.slots
+    if (!entityPreviewTemplate) return toast.error("Chưa chọn template");
+    const slotsForAi = entityPreviewTemplate.slots
       .filter((s) => s.kind === "text" || s.kind === "image" || s.kind === "shape")
       .map((s) => ({
         slotId: s.slotId,
@@ -389,7 +431,7 @@ function GeneratePage() {
   };
 
   const runAiCaption = async () => {
-    if (!selectedSlot || selectedSlot.kind !== "text") return;
+    if (!selectedSlot || selectedSlot.kind !== "text" || !selectedTpl) return;
     if (!previewEntity) return toast.error("Chọn entity preview trước");
     setCaptionBusy(true);
     try {
@@ -399,16 +441,16 @@ function GeneratePage() {
       });
       if (!out.ok) return toast.error(out.error);
       setBinding(selectedSlot.slotId, undefined);
-      if (effectiveTpl) {
-        const tpl = await db.pageTemplates.get(effectiveTpl.pageTemplateId);
-        if (tpl) {
-          tpl.slots = tpl.slots.map((s) =>
-            s.slotId === selectedSlot.slotId ? { ...s, staticText: out.caption } : s,
-          );
-          tpl.updatedAt = Date.now();
-          await db.pageTemplates.put(tpl);
-        }
-      }
+      setPreviewTemplateDraft((prev) => {
+        const working = createWorkingTemplate(selectedTpl, bindOverrides, prev ?? undefined);
+        working.slots = working.slots.map((slot) =>
+          slot.slotId === selectedSlot.slotId
+            ? { ...slot, bindingPath: undefined, staticText: out.caption }
+            : slot,
+        );
+        working.updatedAt = Date.now();
+        return working;
+      });
       toast.success("Đã sinh caption");
     } catch (e) {
       toast.error("AI lỗi: " + (e instanceof Error ? e.message : String(e)));
@@ -418,9 +460,17 @@ function GeneratePage() {
   };
 
   const generateByEntity = () => {
-    if (!effectiveTpl) return toast.error("Chưa chọn template");
+    if (!entityPreviewTemplate) return toast.error("Chưa chọn template");
     if (!hasAnyBinding) {
-      setEntityPages([{ entityId: "_static", selected: true, items: [], warnings: [] }]);
+      setEntityPages([
+        {
+          entityId: "_static",
+          selected: true,
+          items: [],
+          warnings: [],
+          baseTemplate: clonePageTemplate(entityPreviewTemplate),
+        },
+      ]);
       toast.info("Chưa bind block nào → render 1 trang tĩnh");
       return;
     }
@@ -429,7 +479,7 @@ function GeneratePage() {
     setEntityPages(
       filteredEntities.map((ownerEntity) => {
         const allocation = allocateEntityBindingsForTemplate({
-          template: effectiveTpl,
+          template: entityPreviewTemplate,
           orderedEntities: [
             ownerEntity,
             ...randomizedEntityOrder.filter((entity) => entity.entityId !== ownerEntity.entityId),
@@ -444,6 +494,7 @@ function GeneratePage() {
           selected: true,
           items: allocation.items,
           warnings: allocation.warnings,
+          baseTemplate: clonePageTemplate(entityPreviewTemplate),
         };
       }),
     );
@@ -451,7 +502,7 @@ function GeneratePage() {
   };
 
   const exportEntityZip = async () => {
-    if (!effectiveTpl) return;
+    if (!entityPreviewTemplate) return;
     const sel = entityPages.filter((p) => p.selected);
     if (sel.length === 0) return toast.error("Chưa chọn trang nào");
     toast.info(`Đang export ${sel.length} trang...`);
@@ -467,14 +518,34 @@ function GeneratePage() {
       const blob = await nodeToPngBlob(node, 2);
       files.push({ name: `${slug || p.entityId}.png`, blob });
     }
-    await downloadZip(files, `${effectiveTpl.name}-entities.zip`);
+    await downloadZip(files, `${entityPreviewTemplate.name}-entities.zip`);
     toast.success("Đã export ZIP");
   };
 
   // Tính scale canvas tương tác theo container ~640px max
-  const canvasScale = effectiveTpl
-    ? Math.min(640 / effectiveTpl.canvas.width, 720 / effectiveTpl.canvas.height)
+  const canvasScale = entityPreviewTemplate
+    ? Math.min(640 / entityPreviewTemplate.canvas.width, 720 / entityPreviewTemplate.canvas.height)
     : 0.5;
+
+  const updateEntityPageTemplate = (entityId: string, nextTemplate: PageTemplate | null) => {
+    setEntityPages((pages) =>
+      pages.map((page) =>
+        page.entityId === entityId
+          ? {
+              ...page,
+              workingTemplate: nextTemplate ?? undefined,
+            }
+          : page,
+      ),
+    );
+  };
+
+  const editingEntityPage = entityPages.find((page) => page.entityId === editingEntityPageId);
+  const editingEntityBaseTemplate = editingEntityPage?.baseTemplate ?? entityPreviewTemplate;
+  const editingEntityTemplate =
+    editingEntityPage?.workingTemplate ??
+    editingEntityPage?.baseTemplate ??
+    entityPreviewTemplate;
 
   return (
     <div className="p-8 max-w-[1600px]">
@@ -626,7 +697,7 @@ function GeneratePage() {
                   <div className="flex justify-between">
                     <span>Block đã liên kết</span>
                     <b className="text-foreground">
-                      {boundCount}/{effectiveTpl?.slots.length ?? 0}
+                      {boundCount}/{entityPreviewTemplate?.slots.length ?? 0}
                     </b>
                   </div>
                 </div>
@@ -678,7 +749,7 @@ function GeneratePage() {
                     size="sm"
                     variant="outline"
                     onClick={runAiSuggest}
-                    disabled={!effectiveTpl || suggestBusy}
+                    disabled={!entityPreviewTemplate || suggestBusy}
                     className="h-7 text-xs"
                   >
                     {suggestBusy ? (
@@ -689,14 +760,22 @@ function GeneratePage() {
                     AI gợi ý bind
                   </Button>
                   {Object.keys(bindOverrides).length > 0 && (
-                    <Button size="sm" variant="ghost" onClick={resetAll} className="h-7 text-xs">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        resetAll();
+                        setPreviewTemplateDraft(null);
+                      }}
+                      className="h-7 text-xs"
+                    >
                       <Link2Off className="size-3 mr-1" /> Reset
                     </Button>
                   )}
                 </div>
               </CardHeader>
               <CardContent>
-                {!effectiveTpl ? (
+                {!entityPreviewTemplate ? (
                   <div className="border border-dashed rounded-lg h-[480px] grid place-items-center text-muted-foreground text-sm">
                     Chọn template để bắt đầu
                   </div>
@@ -706,7 +785,7 @@ function GeneratePage() {
                     style={{ minHeight: 480 }}
                   >
                     <BindCanvas
-                      template={effectiveTpl}
+                      template={entityPreviewTemplate}
                       scale={canvasScale}
                       selectedSlotIds={selectedSlotIds}
                       onSelectSlot={handleSelectSlot}
@@ -899,11 +978,12 @@ function GeneratePage() {
           </div>
 
           {/* Kết quả render */}
-          {effectiveTpl && entityPages.length > 0 && (
+          {entityPreviewTemplate && entityPages.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {entityPages.map((p, idx) => {
                 const ent = entities?.find((e) => e.entityId === p.entityId);
-                const previewScale = 320 / effectiveTpl.canvas.width;
+                const pageTemplate = p.workingTemplate ?? p.baseTemplate ?? entityPreviewTemplate;
+                const previewScale = 320 / pageTemplate.canvas.width;
                 return (
                   <Card key={p.entityId + idx} className={p.selected ? "border-primary" : ""}>
                     <CardHeader className="p-3 pb-2">
@@ -922,7 +1002,7 @@ function GeneratePage() {
                               {ent?.name ?? "(Template tĩnh)"}
                             </div>
                             <div className="text-xs text-muted-foreground truncate">
-                              {ent?.categoryMain ?? effectiveTpl.name}
+                              {ent?.categoryMain ?? pageTemplate.name}
                             </div>
                           </div>
                         </div>
@@ -941,7 +1021,7 @@ function GeneratePage() {
                           }}
                         >
                           <PageRenderer
-                            template={effectiveTpl}
+                            template={pageTemplate}
                             entities={entities ?? []}
                             assets={assets ?? []}
                             entity={ent}
@@ -952,6 +1032,14 @@ function GeneratePage() {
                           />
                         </div>
                       </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={() => setEditingEntityPageId(p.entityId)}
+                      >
+                        <Type className="size-3 mr-1" /> Edit page
+                      </Button>
                       <Button
                         variant="outline"
                         size="sm"
@@ -1010,11 +1098,31 @@ function GeneratePage() {
             </Card>
           )}
 
+          {editingEntityPage && editingEntityBaseTemplate && editingEntityTemplate && (
+            <GeneratePageEditor
+              open={!!editingEntityPage}
+              onOpenChange={(open) => {
+                if (!open) setEditingEntityPageId(null);
+              }}
+              title={`Edit page · ${entities?.find((e) => e.entityId === editingEntityPage.entityId)?.name ?? "Template tĩnh"}`}
+              template={editingEntityTemplate}
+              baseTemplate={editingEntityBaseTemplate}
+              entities={entities ?? []}
+              assets={assets ?? []}
+              entity={entities?.find((e) => e.entityId === editingEntityPage.entityId)}
+              entityPool={buildOrderedEntityPool(editingEntityPage.entityId)}
+              slotItems={editingEntityPage.items}
+              onApply={(nextTemplate) => {
+                updateEntityPageTemplate(editingEntityPage.entityId, nextTemplate);
+              }}
+            />
+          )}
+
           <SuggestBindingsModal
             open={suggestOpen}
             onOpenChange={setSuggestOpen}
             suggestions={suggestions}
-            slots={effectiveTpl?.slots ?? []}
+            slots={entityPreviewTemplate?.slots ?? []}
             onApply={applyAiSuggestions}
           />
         </TabsContent>
@@ -1028,6 +1136,7 @@ function GeneratePage() {
             assets={assets ?? []}
             currentJob={currentJob}
             setJob={setJob}
+            updatePage={updatePage}
             toggleSelected={toggleSelected}
             setSelectedAll={setSelectedAll}
             renderRefs={renderRefs}

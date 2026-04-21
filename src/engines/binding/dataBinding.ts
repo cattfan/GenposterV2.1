@@ -22,6 +22,8 @@ export const TEXT_BINDING_OPTIONS: BindingFieldOption[] = [
 
 export const IMAGE_BINDING_OPTIONS: BindingFieldOption[] = [
   { value: "", label: "Cố định (URL/upload)", group: "Cố định" },
+  { value: "asset.random", label: "Ảnh ngẫu nhiên của quán", group: "Asset" },
+  { value: "asset.random_global", label: "Ảnh ngẫu nhiên toàn bộ thư viện", group: "Asset" },
   { value: "asset.cover", label: "Ảnh chính của entity (cover)", group: "Asset" },
   { value: "asset.byRole:facade", label: "Ảnh role: facade", group: "Asset" },
   { value: "asset.byRole:food_closeup", label: "Ảnh role: food_closeup", group: "Asset" },
@@ -37,13 +39,27 @@ function toDisplayText(value: unknown, fallback: string | undefined): string {
   return text || (fallback ?? "");
 }
 
+function stableHash(input: string): number {
+  let hash = 0;
+  for (let index = 0; index < input.length; index += 1) {
+    hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
+
+function pickStableRandomAsset(pool: Asset[], seed: string): Asset | undefined {
+  if (pool.length === 0) return undefined;
+  const ordered = pool.slice().sort((a, b) => a.assetId.localeCompare(b.assetId));
+  return ordered[stableHash(seed) % ordered.length];
+}
+
 export function resolveTextBinding(
   bindingPath: string | undefined,
   entity: Entity | undefined,
   fallback: string | undefined,
 ): string {
   if (!bindingPath) return fallback ?? "";
-  if (!entity) return `{{${bindingPath}}}`;
+  if (!entity) return fallback ?? `{{${bindingPath}}}`;
   if (bindingPath === "entity.signatureDish") {
     return toDisplayText(entity.metadata?.signatureDish, fallback);
   }
@@ -66,8 +82,28 @@ export function resolveImageBinding(
   fallback: string | undefined,
 ): { src?: string; assetId?: string; entityId?: string } {
   if (!bindingPath) return { src: fallback };
+  if (bindingPath === "asset.random_global") {
+    const randomAsset = pickStableRandomAsset(assets, entity?.entityId ?? "global");
+    return randomAsset
+      ? {
+          src: randomAsset.sourceValue,
+          assetId: randomAsset.assetId,
+          entityId: randomAsset.entityId,
+        }
+      : { src: fallback };
+  }
   if (!entity) return { src: fallback };
   const pool = assets.filter((a) => a.entityId === entity.entityId);
+  if (bindingPath === "asset.random") {
+    const randomAsset = pickStableRandomAsset(pool, entity.entityId);
+    return randomAsset
+      ? {
+          src: randomAsset.sourceValue,
+          assetId: randomAsset.assetId,
+          entityId: entity.entityId,
+        }
+      : { src: fallback };
+  }
   if (bindingPath === "asset.cover") {
     const cover = pool.find((a) => a.isCover) ?? pool.find((a) => a.role === "cover") ?? pool[0];
     return cover ? { src: cover.sourceValue, assetId: cover.assetId, entityId: entity.entityId } : { src: fallback };

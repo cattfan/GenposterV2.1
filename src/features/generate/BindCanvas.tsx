@@ -18,6 +18,7 @@ import {
   type PlannedImage,
   type SlotImagePlan,
 } from "@/engines/binding/imagePlan";
+import { LayoutGuides } from "@/features/render/LayoutGuides";
 import { useResolvedImageSrc } from "@/storage/imageSrc";
 import { expandPageWithCardGroups } from "@/engines/binding/cardRepeater";
 
@@ -112,6 +113,8 @@ export function BindCanvas({
         boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
       }}
     >
+      <LayoutGuides width={width} height={height} scale={scale} />
+
       {ghostSlots.map((slot) => {
         const cardEntity = resolveEntityForSlot(slot);
         return (
@@ -146,6 +149,7 @@ export function BindCanvas({
             <BindSlot
               key={slot.slotId}
               slot={slot}
+              template={template}
               scale={scale}
               selected={selectedSlotIds.includes(slot.slotId)}
               onSelect={(additive) => onSelectSlot(slot.slotId, additive)}
@@ -250,6 +254,7 @@ function GhostSlot({
 
 function BindSlot({
   slot,
+  template,
   scale,
   selected,
   onSelect,
@@ -258,6 +263,7 @@ function BindSlot({
   cardBadge,
 }: {
   slot: Slot;
+  template: PageTemplate;
   scale: number;
   selected: boolean;
   onSelect: (additive: boolean) => void;

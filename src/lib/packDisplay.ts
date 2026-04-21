@@ -35,7 +35,7 @@ export function buildBundlePageMeta(
   const bundleSize = Math.max(1, pack.orderedPages.length);
 
   return job.pages.map((page, index) => {
-    const pageTemplate = templateMap.get(page.pageTemplateId);
+    const pageTemplate = page.workingTemplate ?? templateMap.get(page.pageTemplateId);
     const bundleIndex = getBundleIndex(index, bundleSize, job.pages.length);
     const bundleLabel = `Bộ ${bundleIndex}`;
     const pageOrderInBundle = index % bundleSize;

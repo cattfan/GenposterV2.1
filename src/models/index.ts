@@ -300,6 +300,8 @@ export interface RenderedPage {
   entityName?: string;
   /** Override binding tạm thời designer áp lên page này khi generate. */
   bindOverrides?: Record<string, string | undefined>;
+  /** Bản chỉnh cục bộ của page output trong /generate, không đụng template gốc. */
+  workingTemplate?: PageTemplate;
 }
 
 export interface DataSourceInfo {
@@ -428,6 +430,146 @@ export type GapLevel = "have" | "mappable" | "missing_required" | "missing_optio
 
 export type DraftReadiness = "ready" | "needs_data" | "skeleton_only";
 
+export type BlueprintBlockRole =
+  | "background"
+  | "title"
+  | "subtitle"
+  | "eyebrow"
+  | "list_line"
+  | "list_group"
+  | "section_title"
+  | "image_holder"
+  | "shape_label"
+  | "badge"
+  | "body_text"
+  | "cta"
+  | "decor"
+  | "other";
+
+export type BlueprintImportance = "high" | "medium" | "low";
+
+export interface BlueprintBlock {
+  name: string;
+  role: BlueprintBlockRole;
+  kind: "text" | "image" | "shape";
+  importance?: BlueprintImportance;
+  clusterId?: string;
+  lineIndex?: number;
+  shapeKind?: "rectangle" | "circle" | "badge" | "line" | "divider";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  z?: number;
+  rotation?: number;
+  placeholder?: string;
+  notes?: string;
+  style?: {
+    fontSize?: number;
+    fontFamily?: string;
+    fontWeight?: number;
+    color?: string;
+    fill?: string;
+    borderRadius?: number;
+    textAlign?: "left" | "center" | "right";
+    textTransform?: "none" | "uppercase" | "lowercase";
+    lineHeight?: number;
+    letterSpacing?: number;
+    opacity?: number;
+    overlayColor?: string;
+    textShadow?: string;
+    textStrokeColor?: string;
+    textStrokeWidth?: number;
+    padding?: number;
+    fit?: "cover" | "contain" | "stretch";
+    shadowColor?: string;
+    shadowBlur?: number;
+    shadowX?: number;
+    shadowY?: number;
+  };
+}
+
+export interface VisualBlueprint {
+  canvas?: { bgColor?: string };
+  blocks: BlueprintBlock[];
+  confidence?: number;
+  warnings?: string[];
+}
+
+export interface BlueprintRequirementHint {
+  fieldKey: string;
+  label: string;
+  scope: "pack" | "page" | "section" | "item" | "asset";
+  required: boolean;
+  kind?: RequirementKind;
+  bindCandidate?: string;
+  bindCandidates?: string[];
+  examples?: string[];
+  notes?: string;
+  acceptsManualInput?: boolean;
+  minRecords?: number;
+  assetRoleHint?: string;
+  confidence?: number;
+}
+
+export interface BlueprintUiRegionHint {
+  kind: AnalyzedUiRegion["kind"];
+  label: string;
+  description: string;
+  estimatedItems?: number;
+}
+
+export interface DataBlueprintBindingHint {
+  blockName: string;
+  bindingPath?: string;
+  manualLiteral?: boolean;
+  required?: boolean;
+  notes?: string;
+  confidence?: number;
+  clusterId?: string;
+  lineIndex?: number;
+}
+
+export interface DataBlueprintSectionHint {
+  clusterId: string;
+  title?: string;
+  repeatedItemCount?: number;
+  imageRepresentsCluster?: boolean;
+  notes?: string;
+  confidence?: number;
+}
+
+export interface DataBlueprint {
+  pageRole: string;
+  pageType: AnalyzedPageType;
+  summary: string;
+  layoutDensity: "low" | "medium" | "high";
+  numberOfSections: number;
+  estimatedItemCount: number;
+  hasMainTitle: boolean;
+  hasSubtitle: boolean;
+  hasBackgroundImage: boolean;
+  hasPanel: boolean;
+  hasSectionImages: boolean;
+  hasListRepeater: boolean;
+  hasSlotRepeater: boolean;
+  hasPriceBadge: boolean;
+  hasCTA: boolean;
+  uiRegions: BlueprintUiRegionHint[];
+  requiredFields: BlueprintRequirementHint[];
+  bindings?: DataBlueprintBindingHint[];
+  sections?: DataBlueprintSectionHint[];
+  structureConfidence?: number;
+  bindingConfidence?: number;
+  warnings?: string[];
+}
+
+export interface CombinedLayoutBlueprint {
+  version: 2;
+  visualBlueprint: VisualBlueprint;
+  dataBlueprint?: DataBlueprint;
+}
+
 export interface AnalyzedUiRegion {
   regionId: ID;
   kind:
@@ -554,6 +696,11 @@ export interface AnalyzedPage {
   requiredFields: InferredDataRequirement[];
   compatibility: CompatibilityReport;
   layoutJson?: string;
+  visualBlueprint?: VisualBlueprint;
+  dataBlueprint?: DataBlueprint;
+  visualConfidence?: number;
+  structureConfidence?: number;
+  bindingConfidence?: number;
 }
 
 export interface AnalyzedPack {

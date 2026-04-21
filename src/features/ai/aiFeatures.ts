@@ -3,6 +3,7 @@
 
 import { callAi } from "./aiClient";
 import { AI_POSTER_FONT_FAMILIES } from "@/features/editor/fonts";
+import { buildCombinedLayoutJson } from "./visionPipeline";
 
 // ============================================================
 // 1. Generate page layout từ 1 ảnh
@@ -100,21 +101,27 @@ function buildLayoutSystem(input?: {
     "Mục tiêu là bám sát visual của ảnh mẫu, không tự động biến mọi thứ thành layout generic. " +
     "Quy tắc TUYỆT ĐỐI:\n" +
     "1. CHỈ tạo khung + placeholder. KHÔNG bịa nội dung text thật.\n" +
-    "2. Mọi text phải là placeholder có nghĩa như {{title}}, {{eyebrow}}, {{subtitle}}, {{section_title_1}}, {{items_group_1}}, {{items_group_2}}, {{cta}}, {{price}}.\n" +
+    "2. Mọi text phải là placeholder có nghĩa như {{title}}, {{eyebrow}}, {{subtitle}}, {{section_title_1}}, {{name_1}}, {{address_1}}, {{phone_1}}, {{price_1}}, {{hero_image_1}}, {{cta}}.\n" +
     "3. Toạ độ x/y/w/h là tỉ lệ 0..1 so với canvas portrait 1080x1350.\n" +
-    "4. Nếu ảnh mẫu là poster có 1 ảnh nền full-page tối, hãy dùng 1 image slot phủ toàn canvas + overlayColor để giữ đúng cảm giác nền tối.\n" +
-    "5. Ảnh phụ/thumbnail nên dùng kind=image với borderRadius bo góc 20-40. Chỉ dùng circle khi ảnh mẫu thực sự tròn.\n" +
-    "6. Được phép dùng 12-20 slot nếu cần để bám mẫu. Đừng ép đơn giản hóa quá mức khi ảnh mẫu có nhiều cụm text/ảnh.\n" +
-    "7. Với poster list như du lịch/ăn uống/dịch vụ, ưu tiên 2-4 text block lớn kiểu {{items_group_1}}, {{items_group_2}} thay vì quá nhiều text line nhỏ lẻ. Các block cùng một cụm phải dùng numbering nhất quán như {{section_title_1}} + {{items_group_1}} + {{hero_image_1}}.\n" +
-    "8. Hãy tận dụng z, opacity, overlayColor, textShadow, textStrokeColor/textStrokeWidth, lineHeight, letterSpacing, padding, shadow và rotation khi ảnh mẫu có các hiệu ứng đó.\n" +
-    "9. Với title nổi bật kiểu chữ vàng/cam trên nền tối, phải encode rõ style tương ứng để template preview nhìn gần mẫu.\n" +
-    "10. Không tự xoá các ảnh nổi bật thả quanh canvas nếu đó là đặc trưng chính của bố cục. Giữ nhịp collage/editorial của ảnh mẫu.\n" +
-    `11. Font family chỉ được chọn trong danh sách sau: ${AI_POSTER_FONT_FAMILIES.join(", ")}.\n` +
-    "12. Nếu ảnh mẫu giống poster bullet list, đừng biến thành layout card/service generic. Hãy giữ title, image holder và các nhóm list như mắt người thường nhìn thấy.\n" +
-    "13. KHÔNG trả lời bằng văn xuôi. Chỉ gọi tool build_layout.\n" +
-    `14. Mức ưu tiên hiện tại: ${fidelityInstruction(fidelity)}\n` +
-    (roleHint ? `15. Hint vai trò page: ${roleHint}\n` : "") +
-    (customInstructions ? `16. Yêu cầu thêm từ người dùng: ${customInstructions}\n` : "")
+    "4. Phải tuân thủ nguyên tắc bleed/trim/safe zone: background full-page có thể bleed ra sát mép; nhưng mọi text, shape chứa text, danh sách và image holder quan trọng phải nằm trong safe zone, tránh sát mép canvas.\n" +
+    "5. Safe zone mặc định coi như cách mép khoảng 5% mỗi cạnh. Chỉ background hoặc overlay nền mới được phủ toàn canvas.\n" +
+    "6. Nếu ảnh mẫu là poster có 1 ảnh nền full-page tối, hãy dùng 1 image slot phủ toàn canvas + overlayColor để giữ đúng cảm giác nền tối.\n" +
+    "7. Ảnh phụ/thumbnail nên dùng kind=image với borderRadius bo góc 20-40. Chỉ dùng circle khi ảnh mẫu thực sự tròn.\n" +
+    "8. Được phép dùng 12-48 slot nếu cần để bám mẫu. Đừng ép đơn giản hóa quá mức khi ảnh mẫu có nhiều cụm text/ảnh.\n" +
+    "9. Với poster list như du lịch/ăn uống/dịch vụ, nếu mắt người nhìn thấy nhiều dòng item riêng biệt thì PHẢI tạo từng dòng riêng, không được dồn thành 1 text block chung. Ví dụ 16 dòng quán thì phải có các placeholder riêng như {{name_1}}..{{name_16}} và {{address_1}}..{{address_16}}.\n" +
+    "10. Nếu đã tách thành {{name_n}} / {{address_n}} thì KHÔNG được tạo thêm block tổng kiểu {{items_group_1}} chồng lên trên cùng khu vực.\n" +
+    "11. Bullet không được dùng placeholder kiểu {{bullet}}. Bullet phải là shape tròn nhỏ hoặc ký tự bullet tĩnh.\n" +
+    "12. Các block cùng một cụm phải dùng numbering nhất quán như {{section_title_1}} + {{hero_image_1}} + {{name_1}} + {{address_1}} + {{name_2}} + {{address_2}}...\n" +
+    "13. Nếu ảnh mẫu chỉ có 4 image holder nhưng có 16 dòng quán, vẫn giữ 4 image holder, nhưng text phải tách đủ từng dòng item riêng biệt.\n" +
+    "14. Hãy tận dụng z, opacity, overlayColor, textShadow, textStrokeColor/textStrokeWidth, lineHeight, letterSpacing, padding, shadow và rotation khi ảnh mẫu có các hiệu ứng đó.\n" +
+    "15. Với title nổi bật kiểu chữ vàng/cam trên nền tối, phải encode rõ style tương ứng để template preview nhìn gần mẫu.\n" +
+    "16. Không tự xoá các ảnh nổi bật thả quanh canvas nếu đó là đặc trưng chính của bố cục. Giữ nhịp collage/editorial của ảnh mẫu.\n" +
+    `17. Font family chỉ được chọn trong danh sách sau: ${AI_POSTER_FONT_FAMILIES.join(", ")}.\n` +
+    "18. Nếu ảnh mẫu giống poster bullet list, đừng biến thành layout card/service generic. Hãy giữ title, image holder và các nhóm list như mắt người thường nhìn thấy.\n" +
+    "19. KHÔNG trả lời bằng văn xuôi. Chỉ gọi tool build_layout.\n" +
+    `20. Mức ưu tiên hiện tại: ${fidelityInstruction(fidelity)}\n` +
+    (roleHint ? `21. Hint vai trò page: ${roleHint}\n` : "") +
+    (customInstructions ? `22. Yêu cầu thêm từ người dùng: ${customInstructions}\n` : "")
   );
 }
 
@@ -122,37 +129,9 @@ export async function aiGenerateTemplateFromImage(input: {
   imageDataUrl: string;
   fidelity?: LayoutFidelity;
   customInstructions?: string;
+  preferVisibleLines?: boolean;
 }) {
-  const result = await callAi({
-    useVisionModel: true,
-    messages: [
-      {
-        role: "system",
-        content: buildLayoutSystem({
-          fidelity: input.fidelity,
-          customInstructions: input.customInstructions,
-        }),
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text:
-              "Phân tích ảnh và sinh khung layout JSON theo tool build_layout. " +
-              "Ưu tiên giữ đúng nhịp thị giác, khoảng cách, thứ bậc title và vị trí ảnh phụ của mẫu.",
-          },
-          { type: "image_url", image_url: { url: input.imageDataUrl } },
-        ],
-      },
-    ],
-    tools: [TEMPLATE_TOOL],
-    tool_choice: { type: "function", function: { name: "build_layout" } },
-    temperature: 0.2,
-  });
-  if (!result.ok) return { ok: false as const, error: result.error };
-  if (!result.toolArgs) return { ok: false as const, error: "AI không trả layout JSON hợp lệ" };
-  return { ok: true as const, layoutJson: JSON.stringify(result.toolArgs) };
+  return buildCombinedLayoutJson(input);
 }
 
 // ============================================================
@@ -348,36 +327,10 @@ async function genOnePageWithHint(
     roleHint: string;
     fidelity?: LayoutFidelity;
     customInstructions?: string;
+    preferVisibleLines?: boolean;
   },
 ): Promise<{ ok: true; layoutJson: string } | { ok: false; error: string }> {
-  const { imageDataUrl, roleHint, fidelity, customInstructions } = input;
-  const result = await callAi({
-    useVisionModel: true,
-    messages: [
-      {
-        role: "system",
-        content: buildLayoutSystem({ fidelity, customInstructions, roleHint }),
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text:
-              `Đây là page có vai trò: ${roleHint}. Sinh khung layout bám sát ảnh mẫu. ` +
-              "Nếu ảnh mẫu là poster list, hãy giữ các cụm danh sách và các ảnh phụ floating quanh canvas.",
-          },
-          { type: "image_url", image_url: { url: imageDataUrl } },
-        ],
-      },
-    ],
-    tools: [TEMPLATE_TOOL],
-    tool_choice: { type: "function", function: { name: "build_layout" } },
-    temperature: 0.2,
-  });
-  if (!result.ok) return { ok: false, error: result.error };
-  if (!result.toolArgs) return { ok: false, error: "AI không trả layout" };
-  return { ok: true, layoutJson: JSON.stringify(result.toolArgs) };
+  return buildCombinedLayoutJson(input);
 }
 
 export async function aiGenerateComboFromImages(input: {
@@ -385,6 +338,7 @@ export async function aiGenerateComboFromImages(input: {
   packNameHint?: string;
   customInstructions?: string;
   layoutFidelity?: LayoutFidelity;
+  preferVisibleLines?: boolean;
   onProgress?: (step: string, progress: number) => void;
 }): Promise<ComboResult | { ok: false; error: string }> {
   if (input.images.length === 0) return { ok: false, error: "Cần ít nhất 1 ảnh" };
@@ -481,6 +435,7 @@ export async function aiGenerateComboFromImages(input: {
       roleHint,
       fidelity: input.layoutFidelity,
       customInstructions: input.customInstructions,
+      preferVisibleLines: input.preferVisibleLines,
     });
     done++;
     input.onProgress?.(
