@@ -6,6 +6,8 @@ import type { CardGroupConfig, Entity, PageTemplate, Slot } from "@/models";
 export interface ExpandedSlot extends Slot {
   /** Slot gốc trong template (id không đổi cho card index 0). */
   originalSlotId: string;
+  /** Thứ tự render ổn định để giữ layering khi slot được expand. */
+  renderOrder: number;
   /** Index card trong group (0 = bản gốc). */
   cardIndex: number;
   /** Group config nguồn. */
@@ -20,6 +22,12 @@ export interface ExpandResult {
   entityBySlotId: Map<string, Entity>;
   /** Map slotId gốc → cardEntities[] để UI hiển thị tên. */
   cardsByGroup: Map<string, Entity[]>;
+}
+
+export interface EntityBindingTarget {
+  targetId: string;
+  slotIds: string[];
+  candidateEntities: Entity[];
 }
 
 /**
@@ -65,10 +73,16 @@ function filterPool(pool: Entity[], cfg: CardGroupConfig): Entity[] {
 /**
  * Tính bbox (min/max) của tất cả slot trong 1 group.
  */
-function bboxOfGroup(slots: Slot[], groupId: string): { x: number; y: number; w: number; h: number } | null {
+function bboxOfGroup(
+  slots: Slot[],
+  groupId: string,
+): { x: number; y: number; w: number; h: number } | null {
   const items = slots.filter((s) => s.groupId === groupId);
   if (items.length === 0) return null;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
   for (const s of items) {
     minX = Math.min(minX, s.x);
     minY = Math.min(minY, s.y);
@@ -88,16 +102,18 @@ function autoClusterSlots(
   slots: Slot[],
   excludeGroupIds: Set<string>,
 ): Array<{ key: string; slots: Slot[] }> {
-  const clusterAlongAxis = (items: Slot[], axis: "x" | "y", prefix: string): Array<{ key: string; slots: Slot[] }> => {
+  const clusterAlongAxis = (
+    items: Slot[],
+    axis: "x" | "y",
+    prefix: string,
+  ): Array<{ key: string; slots: Slot[] }> => {
     if (items.length === 0) return [];
     const sorted = items.slice().sort((a, b) => {
       const primary = axis === "y" ? a.y - b.y : a.x - b.x;
       if (primary !== 0) return primary;
       return axis === "y" ? a.x - b.x : a.y - b.y;
     });
-    const sizes = sorted
-      .map((s) => (axis === "y" ? s.height : s.width))
-      .sort((a, b) => a - b);
+    const sizes = sorted.map((s) => (axis === "y" ? s.height : s.width)).sort((a, b) => a - b);
     const medianSize = sizes[Math.floor(sizes.length / 2)] ?? 80;
     const gapThreshold = medianSize * 0.6;
 
@@ -210,12 +226,20 @@ export function expandPageWithCardGroups(
   entityPool: Entity[],
 ): ExpandResult {
   const cardGroups = template.cardGroups ?? [];
+  const originalOrder = new Map(template.slots.map((slot, index) => [slot.slotId, index]));
+  const orderOf = (slotId: string, cardIndex = 0) =>
+    (originalOrder.get(slotId) ?? 0) + cardIndex * template.slots.length;
   const entityBySlotId = new Map<string, Entity>();
   const cardsByGroup = new Map<string, Entity[]>();
 
   if (cardGroups.length === 0 && entityPool.length === 0) {
     return {
-      slots: template.slots.map((s) => ({ ...s, originalSlotId: s.slotId, cardIndex: 0 })),
+      slots: template.slots.map((s) => ({
+        ...s,
+        originalSlotId: s.slotId,
+        renderOrder: orderOf(s.slotId),
+        cardIndex: 0,
+      })),
       entityBySlotId,
       cardsByGroup,
     };
@@ -237,6 +261,7 @@ export function expandPageWithCardGroups(
         const cloned: ExpandedSlot = {
           ...s,
           originalSlotId: s.slotId,
+          renderOrder: orderOf(s.slotId),
           cardIndex: 0,
           cardGroupId: cluster.key,
           __cardEntityId: ent?.entityId,
@@ -251,19 +276,24 @@ export function expandPageWithCardGroups(
 
   // 2) Slot không bị consumed và không thuộc cardGroups → giữ nguyên
   const untouched: ExpandedSlot[] = template.slots
-    .filter((s) => !consumedSlotIds.has(s.slotId) && (!s.groupId || !configuredGroupIds.has(s.groupId)))
-    .map((s) => ({ ...s, originalSlotId: s.slotId, cardIndex: 0 }));
+    .filter(
+      (s) => !consumedSlotIds.has(s.slotId) && (!s.groupId || !configuredGroupIds.has(s.groupId)),
+    )
+    .map((s) => ({
+      ...s,
+      originalSlotId: s.slotId,
+      renderOrder: orderOf(s.slotId),
+      cardIndex: 0,
+    }));
   expanded.push(...untouched);
 
   // 3) cardGroups (Card Repeater rõ ràng): clone N card
-  const sortedCardGroups = cardGroups
-    .slice()
-    .sort((a, b) => {
-      const boxA = bboxOfGroup(template.slots, a.groupId);
-      const boxB = bboxOfGroup(template.slots, b.groupId);
-      if (!boxA || !boxB) return 0;
-      return boxA.y - boxB.y || boxA.x - boxB.x;
-    });
+  const sortedCardGroups = cardGroups.slice().sort((a, b) => {
+    const boxA = bboxOfGroup(template.slots, a.groupId);
+    const boxB = bboxOfGroup(template.slots, b.groupId);
+    if (!boxA || !boxB) return 0;
+    return boxA.y - boxB.y || boxA.x - boxB.x;
+  });
 
   for (const cfg of sortedCardGroups) {
     const bbox = bboxOfGroup(template.slots, cfg.groupId);
@@ -287,6 +317,7 @@ export function expandPageWithCardGroups(
           x: s.x + dx * i,
           y: s.y + dy * i,
           originalSlotId: s.slotId,
+          renderOrder: orderOf(s.slotId, i),
           cardIndex: i,
           cardGroupId: cfg.groupId,
           __cardEntityId: ent?.entityId,
@@ -301,4 +332,47 @@ export function expandPageWithCardGroups(
   }
 
   return { slots: expanded, entityBySlotId, cardsByGroup };
+}
+
+export function buildEntityBindingTargets(
+  template: PageTemplate,
+  entityPool: Entity[],
+): EntityBindingTarget[] {
+  const cardGroups = template.cardGroups ?? [];
+  const configuredGroupIds = new Set(cardGroups.map((group) => group.groupId));
+  const targets: EntityBindingTarget[] = [];
+
+  const clusters = autoClusterSlots(template.slots, configuredGroupIds);
+  for (const cluster of clusters) {
+    targets.push({
+      targetId: cluster.key,
+      slotIds: cluster.slots.map((slot) => slot.slotId),
+      candidateEntities: entityPool,
+    });
+  }
+
+  const sortedCardGroups = cardGroups.slice().sort((a, b) => {
+    const boxA = bboxOfGroup(template.slots, a.groupId);
+    const boxB = bboxOfGroup(template.slots, b.groupId);
+    if (!boxA || !boxB) return 0;
+    return boxA.y - boxB.y || boxA.x - boxB.x;
+  });
+
+  for (const group of sortedCardGroups) {
+    const groupSlots = template.slots.filter((slot) => slot.groupId === group.groupId);
+    const pool = filterPool(entityPool, group);
+    const repeat = Math.max(1, Math.floor(group.repeatCount));
+
+    for (let cardIndex = 0; cardIndex < repeat; cardIndex += 1) {
+      targets.push({
+        targetId: `${group.groupId}__card_${cardIndex}`,
+        slotIds: groupSlots.map((slot) =>
+          cardIndex === 0 ? slot.slotId : `${slot.slotId}__c${cardIndex}`,
+        ),
+        candidateEntities: pool,
+      });
+    }
+  }
+
+  return targets;
 }

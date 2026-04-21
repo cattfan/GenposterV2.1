@@ -1,6 +1,12 @@
 // Reports: partners summary, partners detailed CSV, manifests
 
-import type { Entity, GenerationJob, PageTemplate, RenderManifest } from "@/models";
+import type { Entity, GenerationJob, PackTemplate, PageTemplate, RenderManifest } from "@/models";
+import { buildBundlePageMeta, type BundlePageMeta } from "@/lib/packDisplay";
+
+export interface PartnerProofEntry {
+  entity: Entity;
+  pages: BundlePageMeta[];
+}
 
 export function buildRenderManifest(job: GenerationJob): RenderManifest {
   return {
@@ -34,44 +40,42 @@ export function buildFinalManifest(job: GenerationJob): RenderManifest {
 
 export function buildPartnersSummaryTxt(
   job: GenerationJob,
+  pack: PackTemplate,
   entities: Entity[],
+  pageTemplates: PageTemplate[],
   finalOnly = true,
 ): string {
-  const pages = finalOnly ? job.pages.filter((p) => p.selected) : job.pages;
-  const nameMap = new Map(entities.map((e) => [e.entityId, e]));
-  const occurMap = new Map<string, { entity: Entity; pages: string[] }>();
-  for (const p of pages) {
-    for (const it of p.items) {
-      if (!it.entityId) continue;
-      const ent = nameMap.get(it.entityId);
-      if (!ent || !ent.partnerFlag) continue;
-      const cur = occurMap.get(it.entityId) ?? { entity: ent, pages: [] };
-      if (!cur.pages.includes(p.pageFile)) cur.pages.push(p.pageFile);
-      occurMap.set(it.entityId, cur);
-    }
-  }
+  const proofs = buildPartnerProofEntries(job, pack, entities, pageTemplates, finalOnly);
   const lines: string[] = [];
   lines.push(`# Báo cáo đối tác - ${job.packTemplateName}`);
   lines.push(`Job: ${job.jobId}`);
   lines.push(`Loại báo cáo: ${finalOnly ? "FINAL EXPORT" : "PREVIEW"}`);
-  lines.push(`Tổng số đối tác xuất hiện: ${occurMap.size}`);
+  lines.push(`Tổng số đối tác xuất hiện: ${proofs.length}`);
   lines.push("");
-  for (const { entity, pages } of occurMap.values()) {
-    lines.push(`- ${entity.name} (priority ${entity.partnerPriority}) → ${pages.length} page`);
-    pages.forEach((pf) => lines.push(`    • ${pf}`));
+  for (const proof of proofs) {
+    lines.push(
+      `- ${proof.entity.name} (priority ${proof.entity.partnerPriority}) → ${proof.pages.length} page`,
+    );
+    proof.pages.forEach((page) =>
+      lines.push(
+        `    • ${page.bundleLabel} · ${page.pageTemplate?.name ?? page.page.pageTemplateId} · ${page.displayPageName}`,
+      ),
+    );
   }
   return lines.join("\n");
 }
 
 export function buildPartnersDetailedCsv(
   job: GenerationJob,
+  pack: PackTemplate,
   entities: Entity[],
   pageTemplates: PageTemplate[],
 ): string {
-  const tplMap = new Map(pageTemplates.map((p) => [p.pageTemplateId, p]));
-  const entMap = new Map(entities.map((e) => [e.entityId, e]));
   const headers = [
     "job_id",
+    "bundle_index",
+    "bundle_label",
+    "display_page_name",
     "page_file",
     "page_template_id",
     "page_template_name",
@@ -86,27 +90,58 @@ export function buildPartnersDetailedCsv(
     "rendered_at",
   ];
   const rows: string[][] = [headers];
-  for (const p of job.pages) {
-    for (const it of p.items) {
-      const ent = it.entityId ? entMap.get(it.entityId) : undefined;
+  for (const meta of buildBundlePageMeta(job, pack, entities, pageTemplates)) {
+    for (const item of meta.page.items) {
+      const entity = item.entityId
+        ? entities.find((entry) => entry.entityId === item.entityId)
+        : undefined;
       rows.push([
         job.jobId,
-        p.pageFile,
-        p.pageTemplateId,
-        tplMap.get(p.pageTemplateId)?.name ?? "",
-        it.sectionId ?? "",
-        it.slotId ?? "",
-        it.entityId ?? "",
-        ent?.name ?? "",
-        String(ent?.partnerFlag ?? ""),
-        String(ent?.partnerPriority ?? ""),
-        it.assetId ?? "",
-        String(p.selected),
-        new Date(p.renderedAt).toISOString(),
+        String(meta.bundleIndex),
+        meta.bundleLabel,
+        meta.displayPageName,
+        meta.page.pageFile,
+        meta.page.pageTemplateId,
+        meta.pageTemplate?.name ?? "",
+        item.sectionId ?? "",
+        item.slotId ?? "",
+        item.entityId ?? "",
+        entity?.name ?? "",
+        String(entity?.partnerFlag ?? ""),
+        String(entity?.partnerPriority ?? ""),
+        item.assetId ?? "",
+        String(meta.page.selected),
+        new Date(meta.page.renderedAt).toISOString(),
       ]);
     }
   }
   return rows.map((r) => r.map(csvEscape).join(",")).join("\n");
+}
+
+export function buildPartnerProofEntries(
+  job: GenerationJob,
+  pack: PackTemplate,
+  entities: Entity[],
+  pageTemplates: PageTemplate[],
+  finalOnly = true,
+): PartnerProofEntry[] {
+  const filtered = finalOnly ? { ...job, pages: job.pages.filter((page) => page.selected) } : job;
+  const entityMap = new Map(entities.map((entity) => [entity.entityId, entity]));
+  const proofs = new Map<string, PartnerProofEntry>();
+
+  for (const meta of buildBundlePageMeta(filtered, pack, entities, pageTemplates)) {
+    for (const entityId of meta.partnerEntityIds) {
+      const entity = entityMap.get(entityId);
+      if (!entity) continue;
+      const current = proofs.get(entityId) ?? { entity, pages: [] };
+      current.pages.push(meta);
+      proofs.set(entityId, current);
+    }
+  }
+
+  return Array.from(proofs.values()).sort((a, b) =>
+    a.entity.name.localeCompare(b.entity.name, "vi"),
+  );
 }
 
 function csvEscape(v: string): string {

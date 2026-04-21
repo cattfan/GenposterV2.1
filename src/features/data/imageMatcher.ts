@@ -47,10 +47,13 @@ function lev(a: string, b: string): number {
 
 export interface MatchResult {
   fileName: string;
+  relativePath?: string;
   matchedEntityId: string | null;
   matchedEntityName: string | null;
   score: number; // 0-100
   reason: "exact" | "contains" | "fuzzy" | "no_match";
+  autoAssign: boolean;
+  needsReview: boolean;
 }
 
 export interface MatchOptions {
@@ -58,12 +61,44 @@ export interface MatchOptions {
   fuzzyThreshold?: number;
 }
 
+export interface MatchInputFile {
+  fileName: string;
+  relativePath?: string;
+}
+
+function normalizeInput(input: string | MatchInputFile): MatchInputFile {
+  if (typeof input === "string") return { fileName: input };
+  return input;
+}
+
+function pathContextSlug(relativePath?: string): string {
+  if (!relativePath) return "";
+  return slugify(
+    relativePath
+      .split(/[\\/]/)
+      .slice(0, -1)
+      .join(" "),
+  );
+}
+
+function entityContextScore(fileContext: string, entity: Entity): number {
+  if (!fileContext) return 0;
+  let score = 0;
+  const category = slugify(entity.categoryMain ?? "");
+  const sub = slugify(entity.categorySub ?? "");
+  const sheet = slugify(entity.sheetName ?? "");
+  if (category && fileContext.includes(category)) score += 0.08;
+  if (sub && fileContext.includes(sub)) score += 0.05;
+  if (sheet && fileContext.includes(sheet)) score += 0.08;
+  return score;
+}
+
 /**
  * Match danh sách file với danh sách entity.
  * Ưu tiên: exact slug → contains → fuzzy (Levenshtein normalized).
  */
 export function matchFilesToEntities(
-  fileNames: string[],
+  fileNames: Array<string | MatchInputFile>,
   entities: Entity[],
   opts: MatchOptions = {},
 ): MatchResult[] {
@@ -73,19 +108,27 @@ export function matchFilesToEntities(
     slug: slugify(e.name),
   }));
 
-  return fileNames.map((fn) => {
+  return fileNames.map((entry) => {
+    const normalizedInput = normalizeInput(entry);
+    const fn = normalizedInput.fileName;
     const cleaned = cleanFileName(fn);
     const fileSlug = slugify(cleaned);
+    const contextSlug = pathContextSlug(normalizedInput.relativePath);
 
     // 1. Exact match
-    const exact = entitySlugs.find((es) => es.slug === fileSlug);
+    const exact = entitySlugs.find(
+      (es) => es.slug === fileSlug || (contextSlug && contextSlug.includes(es.slug)),
+    );
     if (exact) {
       return {
         fileName: fn,
+        relativePath: normalizedInput.relativePath,
         matchedEntityId: exact.entity.entityId,
         matchedEntityName: exact.entity.name,
         score: 100,
         reason: "exact",
+        autoAssign: true,
+        needsReview: false,
       };
     }
 
@@ -93,21 +136,28 @@ export function matchFilesToEntities(
     let bestContain: { e: typeof entitySlugs[0]; score: number } | null = null;
     for (const es of entitySlugs) {
       if (!es.slug) continue;
-      if (fileSlug.includes(es.slug) || es.slug.includes(fileSlug)) {
-        const overlap = Math.min(fileSlug.length, es.slug.length) /
-          Math.max(fileSlug.length, es.slug.length);
+      const nameOverlap =
+        fileSlug.includes(es.slug) || es.slug.includes(fileSlug)
+          ? Math.min(fileSlug.length, es.slug.length) / Math.max(fileSlug.length, es.slug.length)
+          : 0;
+      const overlap = nameOverlap + entityContextScore(contextSlug, es.entity);
+      if (nameOverlap > 0 || overlap > 0.12) {
         if (!bestContain || overlap > bestContain.score) {
           bestContain = { e: es, score: overlap };
         }
       }
     }
     if (bestContain && bestContain.score >= 0.5) {
+      const containScore = Math.min(99, Math.round(82 + bestContain.score * 12));
       return {
         fileName: fn,
+        relativePath: normalizedInput.relativePath,
         matchedEntityId: bestContain.e.entity.entityId,
         matchedEntityName: bestContain.e.entity.name,
-        score: Math.round(85 + bestContain.score * 10),
+        score: containScore,
         reason: "contains",
+        autoAssign: containScore >= 92,
+        needsReview: containScore < 92,
       };
     }
 
@@ -116,27 +166,35 @@ export function matchFilesToEntities(
     for (const es of entitySlugs) {
       if (!es.slug) continue;
       const dist = lev(fileSlug, es.slug);
-      const sim = 1 - dist / Math.max(fileSlug.length, es.slug.length);
+      const sim =
+        1 - dist / Math.max(fileSlug.length, es.slug.length) + entityContextScore(contextSlug, es.entity);
       if (!bestFuzzy || sim > bestFuzzy.sim) {
         bestFuzzy = { e: es, sim };
       }
     }
     if (bestFuzzy && bestFuzzy.sim >= threshold) {
+      const fuzzyScore = Math.min(95, Math.round(bestFuzzy.sim * 80));
       return {
         fileName: fn,
+        relativePath: normalizedInput.relativePath,
         matchedEntityId: bestFuzzy.e.entity.entityId,
         matchedEntityName: bestFuzzy.e.entity.name,
-        score: Math.round(bestFuzzy.sim * 80),
+        score: fuzzyScore,
         reason: "fuzzy",
+        autoAssign: fuzzyScore >= 90,
+        needsReview: true,
       };
     }
 
     return {
       fileName: fn,
+      relativePath: normalizedInput.relativePath,
       matchedEntityId: null,
       matchedEntityName: null,
       score: 0,
       reason: "no_match",
+      autoAssign: false,
+      needsReview: true,
     };
   });
 }

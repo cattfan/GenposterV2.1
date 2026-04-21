@@ -1,12 +1,4 @@
 // Plan ảnh cho cả 1 page: đảm bảo các block ảnh/shape không bị trùng asset.
-// Logic:
-//  - Duyệt slot có bindingPath kiểu "asset.*" theo (zIndex asc, slotId).
-//  - Với mỗi slot, ưu tiên asset chưa được dùng:
-//      asset.cover           → cover của entity (nếu chưa dùng), không thì asset chưa dùng có quality cao nhất, fallback chính cover (có cảnh báo trùng).
-//      asset.byRole:<role>   → đúng role chưa dùng, không thì role khác chưa dùng theo quality, fallback role gốc nếu hết.
-//  - Trả Map<slotId, {src, assetId, fallback?}> để renderer dùng.
-//
-// Lưu ý: dùng src `idb://...` hoặc URL — caller (PageRenderer/BindCanvas) sẽ resolve qua useResolvedImageSrc.
 
 import type { Asset, AssetRole, Entity, PageTemplate, Slot } from "@/models";
 
@@ -14,13 +6,17 @@ export interface PlannedImage {
   src: string;
   assetId: string;
   entityId: string;
-  fallback?: boolean; // true nếu phải dùng lại ảnh đã được slot khác dùng
+  fallback?: boolean;
 }
 
 export type SlotImagePlan = Map<string, PlannedImage>;
 
-function isImageBindingSlot(s: Slot): boolean {
-  return (s.kind === "image" || s.kind === "shape") && !!s.bindingPath && s.bindingPath.startsWith("asset.");
+function isImageBindingSlot(slot: Slot): boolean {
+  return (
+    (slot.kind === "image" || slot.kind === "shape") &&
+    !!slot.bindingPath &&
+    slot.bindingPath.startsWith("asset.")
+  );
 }
 
 function pickBest(pool: Asset[]): Asset | undefined {
@@ -28,57 +24,59 @@ function pickBest(pool: Asset[]): Asset | undefined {
   return pool.slice().sort((a, b) => (b.qualityScore ?? 0) - (a.qualityScore ?? 0))[0];
 }
 
-export function buildSlotImagePlan(
-  template: PageTemplate,
-  entity: Entity | undefined,
+function buildImagePlanForSlots(
+  slots: Slot[],
+  resolveEntity: (slot: Slot) => Entity | undefined,
   assets: Asset[],
 ): SlotImagePlan {
   const plan: SlotImagePlan = new Map();
-  if (!entity) return plan;
+  const usedAssetIdsByEntity = new Map<string, Set<string>>();
 
-  const pool = assets.filter((a) => a.entityId === entity.entityId);
-  if (pool.length === 0) return plan;
-
-  // Sort slot deterministic: zIndex asc, slotId tie-breaker
-  const slots = template.slots
+  const bindableSlots = slots
     .filter(isImageBindingSlot)
     .slice()
     .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0) || a.slotId.localeCompare(b.slotId));
 
-  const usedAssetIds = new Set<string>();
+  for (const slot of bindableSlots) {
+    const entity = resolveEntity(slot);
+    if (!entity) continue;
 
-  for (const slot of slots) {
-    const bp = slot.bindingPath!;
+    const pool = assets.filter((asset) => asset.entityId === entity.entityId);
+    if (pool.length === 0) continue;
+
+    const usedAssetIds =
+      usedAssetIdsByEntity.get(entity.entityId) ?? new Set<string>();
+    usedAssetIdsByEntity.set(entity.entityId, usedAssetIds);
+
+    const bindingPath = slot.bindingPath!;
     let chosen: Asset | undefined;
     let fallback = false;
 
-    if (bp === "asset.cover") {
-      const cover = pool.find((a) => a.isCover) ?? pool.find((a) => a.role === "cover");
+    if (bindingPath === "asset.cover") {
+      const cover = pool.find((asset) => asset.isCover) ?? pool.find((asset) => asset.role === "cover");
       if (cover && !usedAssetIds.has(cover.assetId)) {
         chosen = cover;
       } else {
-        // Lấy asset chưa dùng có quality cao nhất
-        const free = pool.filter((a) => !usedAssetIds.has(a.assetId));
+        const free = pool.filter((asset) => !usedAssetIds.has(asset.assetId));
         chosen = pickBest(free);
         if (!chosen) {
-          // Hết ảnh: fallback dùng lại cover
           chosen = cover ?? pool[0];
           fallback = true;
         }
       }
-    } else if (bp.startsWith("asset.byRole:")) {
-      const role = bp.slice("asset.byRole:".length) as AssetRole;
-      const sameRoleFree = pool.filter((a) => a.role === role && !usedAssetIds.has(a.assetId));
+    } else if (bindingPath.startsWith("asset.byRole:")) {
+      const role = bindingPath.slice("asset.byRole:".length) as AssetRole;
+      const sameRoleFree = pool.filter(
+        (asset) => asset.role === role && !usedAssetIds.has(asset.assetId),
+      );
       chosen = pickBest(sameRoleFree);
       if (!chosen) {
-        // Role khác chưa dùng (ưu tiên cover trước)
-        const free = pool.filter((a) => !usedAssetIds.has(a.assetId));
-        chosen = free.find((a) => a.isCover) ?? pickBest(free);
+        const free = pool.filter((asset) => !usedAssetIds.has(asset.assetId));
+        chosen = free.find((asset) => asset.isCover) ?? pickBest(free);
         if (chosen) fallback = true;
       }
       if (!chosen) {
-        // Hết hoàn toàn: lấy bất kỳ ảnh role gốc, hoặc cover
-        chosen = pool.find((a) => a.role === role) ?? pool.find((a) => a.isCover) ?? pool[0];
+        chosen = pool.find((asset) => asset.role === role) ?? pool.find((asset) => asset.isCover) ?? pool[0];
         fallback = true;
       }
     }
@@ -95,4 +93,21 @@ export function buildSlotImagePlan(
   }
 
   return plan;
+}
+
+export function buildSlotImagePlan(
+  template: PageTemplate,
+  entity: Entity | undefined,
+  assets: Asset[],
+): SlotImagePlan {
+  if (!entity) return new Map();
+  return buildImagePlanForSlots(template.slots, () => entity, assets);
+}
+
+export function buildExpandedSlotImagePlan(
+  slots: Slot[],
+  assets: Asset[],
+  resolveEntity: (slot: Slot) => Entity | undefined,
+): SlotImagePlan {
+  return buildImagePlanForSlots(slots, resolveEntity, assets);
 }

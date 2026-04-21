@@ -7,15 +7,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   buildFinalManifest,
+  buildPartnerProofEntries,
   buildPartnersDetailedCsv,
   buildPartnersSummaryTxt,
   buildRenderManifest,
 } from "@/engines/reports/reports";
+import type { PartnerProofEntry } from "@/engines/reports/reports";
 import { downloadJSON, downloadText } from "@/features/render/exportPng";
 import { generateCaptions } from "@/engines/captions/generator";
 import { toast } from "sonner";
 import { useMemo, useState } from "react";
-import type { CaptionMode, CaptionVariant } from "@/models";
+import type { Asset, CaptionMode, CaptionVariant, Entity } from "@/models";
 import {
   Select,
   SelectContent,
@@ -24,6 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Copy } from "lucide-react";
+import { PageRenderer } from "@/features/render/PageRenderer";
 
 export const Route = createFileRoute("/reports")({
   component: ReportsPage,
@@ -32,6 +35,7 @@ export const Route = createFileRoute("/reports")({
 function ReportsPage() {
   const { currentJob } = useJobStore();
   const entities = useLiveQuery(() => db.entities.toArray(), []) ?? [];
+  const assets = useLiveQuery(() => db.assets.toArray(), []) ?? [];
   const tpls = useLiveQuery(() => db.pageTemplates.toArray(), []) ?? [];
   const packs = useLiveQuery(() => db.packTemplates.toArray(), []) ?? [];
   const [mode, setMode] = useState<CaptionMode>("save_post");
@@ -47,23 +51,42 @@ function ReportsPage() {
     return (
       <div className="p-8">
         <h1 className="text-3xl font-bold mb-4">Báo cáo & Caption</h1>
-        <Card><CardContent className="p-10 text-center text-muted-foreground">
-          Chưa có job. Mở "Tạo nội dung" và generate trước.
-        </CardContent></Card>
+        <Card>
+          <CardContent className="p-10 text-center text-muted-foreground">
+            Chưa có job. Mở "Tạo nội dung" và generate trước.
+          </CardContent>
+        </Card>
       </div>
     );
   }
 
-  const partnersTxt = buildPartnersSummaryTxt(currentJob, entities, true);
-  const partnersTxtPreview = buildPartnersSummaryTxt(currentJob, entities, false);
+  const pack = packs.find((p) => p.packTemplateId === currentJob.packTemplateId);
+  if (!pack) {
+    return (
+      <div className="p-8">
+        <h1 className="text-3xl font-bold mb-4">Báo cáo & Caption</h1>
+        <Card>
+          <CardContent className="p-10 text-center text-muted-foreground">
+            Không tìm thấy pack template cho job hiện tại.
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const partnersTxt = buildPartnersSummaryTxt(currentJob, pack, entities, tpls, true);
+  const partnersTxtPreview = buildPartnersSummaryTxt(currentJob, pack, entities, tpls, false);
   const csvFinal = buildPartnersDetailedCsv(
     { ...currentJob, pages: currentJob.pages.filter((p) => p.selected) },
+    pack,
     entities,
     tpls,
   );
-  const csvAll = buildPartnersDetailedCsv(currentJob, entities, tpls);
+  const csvAll = buildPartnersDetailedCsv(currentJob, pack, entities, tpls);
   const finalManifest = buildFinalManifest(currentJob);
   const previewManifest = buildRenderManifest(currentJob);
+  const finalProofs = buildPartnerProofEntries(currentJob, pack, entities, tpls, true);
+  const previewProofs = buildPartnerProofEntries(currentJob, pack, entities, tpls, false);
 
   return (
     <div className="p-8 max-w-6xl space-y-6">
@@ -82,36 +105,77 @@ function ReportsPage() {
               <CardTitle>Final exposure (page đã chọn export)</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              <pre className="text-xs bg-muted p-3 rounded max-h-64 overflow-y-auto whitespace-pre-wrap">{partnersTxt}</pre>
+              <pre className="text-xs bg-muted p-3 rounded max-h-64 overflow-y-auto whitespace-pre-wrap">
+                {partnersTxt}
+              </pre>
               <div className="flex gap-2">
-                <Button onClick={() => downloadText(partnersTxt, "partners_summary.txt")}>Download TXT</Button>
-                <Button variant="outline" onClick={() => downloadText(csvFinal, "partners_detailed.csv", "text/csv")}>Download CSV</Button>
+                <Button onClick={() => downloadText(partnersTxt, "partners_summary.txt")}>
+                  Download TXT
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => downloadText(csvFinal, "partners_detailed.csv", "text/csv")}
+                >
+                  Download CSV
+                </Button>
               </div>
             </CardContent>
           </Card>
+          <PartnerProofGrid
+            title="Final brand proof"
+            proofs={finalProofs}
+            entities={entities}
+            assets={assets}
+          />
           <Card>
             <CardHeader>
               <CardTitle>Preview exposure (toàn bộ page generated)</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              <pre className="text-xs bg-muted p-3 rounded max-h-64 overflow-y-auto whitespace-pre-wrap">{partnersTxtPreview}</pre>
-              <Button variant="outline" onClick={() => downloadText(csvAll, "partners_preview.csv", "text/csv")}>Download CSV preview</Button>
+              <pre className="text-xs bg-muted p-3 rounded max-h-64 overflow-y-auto whitespace-pre-wrap">
+                {partnersTxtPreview}
+              </pre>
+              <Button
+                variant="outline"
+                onClick={() => downloadText(csvAll, "partners_preview.csv", "text/csv")}
+              >
+                Download CSV preview
+              </Button>
             </CardContent>
           </Card>
+          <PartnerProofGrid
+            title="Preview brand proof"
+            proofs={previewProofs}
+            entities={entities}
+            assets={assets}
+          />
         </TabsContent>
 
         <TabsContent value="manifest" className="space-y-4">
           <Card>
-            <CardHeader><CardTitle>final_export_manifest.json</CardTitle></CardHeader>
+            <CardHeader>
+              <CardTitle>final_export_manifest.json</CardTitle>
+            </CardHeader>
             <CardContent className="space-y-3">
-              <pre className="text-xs bg-muted p-3 rounded max-h-80 overflow-auto">{JSON.stringify(finalManifest, null, 2)}</pre>
-              <Button onClick={() => downloadJSON(finalManifest, "final_export_manifest.json")}>Download</Button>
+              <pre className="text-xs bg-muted p-3 rounded max-h-80 overflow-auto">
+                {JSON.stringify(finalManifest, null, 2)}
+              </pre>
+              <Button onClick={() => downloadJSON(finalManifest, "final_export_manifest.json")}>
+                Download
+              </Button>
             </CardContent>
           </Card>
           <Card>
-            <CardHeader><CardTitle>render_manifest.json (preview)</CardTitle></CardHeader>
+            <CardHeader>
+              <CardTitle>render_manifest.json (preview)</CardTitle>
+            </CardHeader>
             <CardContent className="space-y-3">
-              <Button variant="outline" onClick={() => downloadJSON(previewManifest, "render_manifest.json")}>Download</Button>
+              <Button
+                variant="outline"
+                onClick={() => downloadJSON(previewManifest, "render_manifest.json")}
+              >
+                Download
+              </Button>
             </CardContent>
           </Card>
         </TabsContent>
@@ -121,7 +185,9 @@ function ReportsPage() {
             <CardContent className="p-4 flex items-center gap-3">
               <span className="text-sm">Mode:</span>
               <Select value={mode} onValueChange={(v) => setMode(v as CaptionMode)}>
-                <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="w-48">
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="save_post">save_post</SelectItem>
                   <SelectItem value="newbie_guide">newbie_guide</SelectItem>
@@ -161,5 +227,75 @@ function ReportsPage() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+function PartnerProofGrid({
+  title,
+  proofs,
+  entities,
+  assets,
+}: {
+  title: string;
+  proofs: PartnerProofEntry[];
+  entities: Entity[];
+  assets: Asset[];
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {proofs.length === 0 ? (
+          <div className="text-sm text-muted-foreground">
+            Không có đối tác nào trong phạm vi này.
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {proofs.map((proof) => (
+              <div key={proof.entity.entityId} className="space-y-3">
+                <div className="flex items-center gap-3">
+                  <div className="font-semibold">{proof.entity.name}</div>
+                  <Badge variant="secondary">{proof.pages.length} lần xuất hiện</Badge>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {proof.pages.map((meta) => {
+                    const template = meta.pageTemplate;
+                    if (!template) return null;
+                    return (
+                      <Card key={`${proof.entity.entityId}-${meta.page.pageIndex}`}>
+                        <CardContent className="p-3 space-y-2">
+                          <div className="text-sm font-medium">{meta.bundleLabel}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {template.name} · {meta.displayPageName}
+                          </div>
+                          <div className="overflow-hidden rounded border bg-muted/30">
+                            <PageRenderer
+                              template={template}
+                              page={meta.page}
+                              entities={entities}
+                              assets={assets}
+                              entity={
+                                meta.page.entityId
+                                  ? entities.find(
+                                      (entity) => entity.entityId === meta.page.entityId,
+                                    )
+                                  : undefined
+                              }
+                              scale={220 / template.canvas.width}
+                            />
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

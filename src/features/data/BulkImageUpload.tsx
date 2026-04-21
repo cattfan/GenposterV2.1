@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState, type InputHTMLAttributes } from "react";
 import { nanoid } from "nanoid";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, saveBlob } from "@/storage/db";
@@ -26,6 +26,7 @@ interface PendingFile {
 
 export function BulkImageUpload() {
   const entities = useLiveQuery(() => db.entities.toArray(), []) ?? [];
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [pending, setPending] = useState<PendingFile[]>([]);
   const [threshold, setThreshold] = useState(0.78);
   const [busy, setBusy] = useState(false);
@@ -37,32 +38,46 @@ export function BulkImageUpload() {
       return;
     }
     const arr = Array.from(files);
-    const fileNames = arr.map((f) => f.name);
-    const matches = matchFilesToEntities(fileNames, entities, { fuzzyThreshold: threshold });
+    const matchInputs = arr.map((file) => ({
+      fileName: file.name,
+      relativePath:
+        "webkitRelativePath" in file && typeof file.webkitRelativePath === "string"
+          ? file.webkitRelativePath || undefined
+          : undefined,
+    }));
+    const matches = matchFilesToEntities(matchInputs, entities, { fuzzyThreshold: threshold });
     const next: PendingFile[] = arr.map((f, i) => ({
       file: f,
       match: matches[i],
-      manualEntityId: matches[i].matchedEntityId,
+      manualEntityId: matches[i].autoAssign ? matches[i].matchedEntityId : null,
       role: "cover",
     }));
     setPending(next);
     const matched = next.filter((p) => p.manualEntityId).length;
-    toast.success(`${arr.length} ảnh • Khớp tự động: ${matched}/${arr.length}`);
+    const needsReview = next.filter((p) => p.match.needsReview).length;
+    toast.success(`${arr.length} ảnh • Khớp tự động: ${matched}/${arr.length} • Cần review: ${needsReview}`);
   };
 
   const rerunMatch = () => {
     if (pending.length === 0) return;
-    const fileNames = pending.map((p) => p.file.name);
-    const matches = matchFilesToEntities(fileNames, entities, { fuzzyThreshold: threshold });
+    const matchInputs = pending.map((p) => ({
+      fileName: p.file.name,
+      relativePath:
+        "webkitRelativePath" in p.file && typeof p.file.webkitRelativePath === "string"
+          ? p.file.webkitRelativePath || undefined
+          : undefined,
+    }));
+    const matches = matchFilesToEntities(matchInputs, entities, { fuzzyThreshold: threshold });
     setPending(
       pending.map((p, i) => ({
         ...p,
         match: matches[i],
-        manualEntityId: matches[i].matchedEntityId,
+        manualEntityId: matches[i].autoAssign ? matches[i].matchedEntityId : null,
       })),
     );
-    const matched = matches.filter((m) => m.matchedEntityId).length;
-    toast.success(`Đã match lại: ${matched}/${matches.length}`);
+    const matched = matches.filter((m) => m.autoAssign && m.matchedEntityId).length;
+    const needsReview = matches.filter((m) => m.needsReview).length;
+    toast.success(`Đã match lại: ${matched}/${matches.length} • Cần review: ${needsReview}`);
   };
 
   const setManual = (idx: number, entityId: string | null) => {
@@ -142,8 +157,8 @@ export function BulkImageUpload() {
         <CardContent className="space-y-3">
           <div className="text-sm text-muted-foreground space-y-1">
             <p>1. Đặt tên file ảnh theo tên quán (có thể bỏ dấu, dùng <code>-1</code>, <code>-2</code> cho ảnh phụ).</p>
-            <p>2. Chọn nhiều ảnh cùng lúc bên dưới. App sẽ tự gán ảnh vào đúng quán.</p>
-            <p>3. Kiểm tra cột "Quán" — chỉnh tay nếu match sai — rồi bấm Import.</p>
+            <p>2. Có thể chọn nhiều ảnh hoặc chọn cả thư mục ảnh quán. App sẽ tự gán ảnh vào đúng quán nếu confidence đủ mạnh.</p>
+            <p>3. Các match yếu sẽ để trống và gắn nhãn cần review để bạn kiểm tra trước khi Import.</p>
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
@@ -154,6 +169,28 @@ export function BulkImageUpload() {
               onChange={(e) => onFiles(e.target.files)}
               className="text-sm"
             />
+            <input
+              ref={(node) => {
+                folderInputRef.current = node;
+              }}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              {...({ webkitdirectory: "true", directory: "true" } as unknown as InputHTMLAttributes<HTMLInputElement>)}
+              onChange={(e) => {
+                onFiles(e.target.files);
+                e.currentTarget.value = "";
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => folderInputRef.current?.click()}
+            >
+              Chọn thư mục ảnh
+            </Button>
             <div className="flex items-center gap-2 text-xs">
               <span>Ngưỡng fuzzy:</span>
               <div className="w-32">
@@ -212,20 +249,32 @@ export function BulkImageUpload() {
                         </td>
                         <td className="p-2 font-mono max-w-48 truncate">{p.file.name}</td>
                         <td className="p-2">
-                          <Badge
-                            variant={
-                              p.match.reason === "exact"
-                                ? "default"
-                                : p.match.reason === "no_match"
-                                  ? "destructive"
-                                  : "secondary"
-                            }
-                          >
-                            {p.match.reason === "exact" && "Khớp 100%"}
-                            {p.match.reason === "contains" && `Chứa ${p.match.score}%`}
-                            {p.match.reason === "fuzzy" && `Gần đúng ${p.match.score}%`}
-                            {p.match.reason === "no_match" && "Không khớp"}
-                          </Badge>
+                          <div className="space-y-1">
+                            <Badge
+                              variant={
+                                p.match.reason === "exact"
+                                  ? "default"
+                                  : p.match.reason === "no_match"
+                                    ? "destructive"
+                                    : p.match.needsReview
+                                      ? "outline"
+                                      : "secondary"
+                              }
+                            >
+                              {p.match.reason === "exact" && "Khớp 100%"}
+                              {p.match.reason === "contains" && `Chứa ${p.match.score}%`}
+                              {p.match.reason === "fuzzy" && `Gần đúng ${p.match.score}%`}
+                              {p.match.reason === "no_match" && "Không khớp"}
+                            </Badge>
+                            {p.match.needsReview && (
+                              <div className="text-[10px] text-amber-600">Cần review</div>
+                            )}
+                            {p.match.relativePath && (
+                              <div className="max-w-40 truncate text-[10px] text-muted-foreground">
+                                {p.match.relativePath}
+                              </div>
+                            )}
+                          </div>
                         </td>
                         <td className="p-2">
                           <Select

@@ -6,6 +6,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -17,7 +25,11 @@ import { toast } from "sonner";
 import { useEffect, useRef, useState } from "react";
 import type { PageTemplate } from "@/models";
 import { PageRenderer } from "@/features/render/PageRenderer";
-import { aiGenerateTemplateFromImage, aiGenerateComboFromImages } from "@/features/ai/aiFeatures";
+import {
+  aiGenerateTemplateFromImage,
+  aiGenerateComboFromImages,
+  type LayoutFidelity,
+} from "@/features/ai/aiFeatures";
 import { aiLayoutToTemplate } from "@/features/ai/templateFromImage";
 import { buildComboFromAiResult, persistCombo } from "@/features/ai/comboFromImages";
 import { cloneDayPage } from "@/storage/seedFlex";
@@ -33,12 +45,20 @@ function TemplatesPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const comboFileRef = useRef<HTMLInputElement>(null);
   const [aiBusy, setAiBusy] = useState(false);
+  const [singleOpen, setSingleOpen] = useState(false);
+  const [singleFileName, setSingleFileName] = useState("");
+  const [singlePreview, setSinglePreview] = useState("");
+  const [singleTemplateName, setSingleTemplateName] = useState("");
+  const [singleFidelity, setSingleFidelity] = useState<LayoutFidelity>("strict");
+  const [singleInstructions, setSingleInstructions] = useState("");
 
   // Combo state
   const [comboOpen, setComboOpen] = useState(false);
   const [comboFiles, setComboFiles] = useState<File[]>([]);
   const [comboPreviews, setComboPreviews] = useState<string[]>([]);
   const [comboPackName, setComboPackName] = useState("");
+  const [comboFidelity, setComboFidelity] = useState<LayoutFidelity>("strict");
+  const [comboInstructions, setComboInstructions] = useState("");
   const [comboBusy, setComboBusy] = useState(false);
   const [comboStep, setComboStep] = useState("");
   const [comboProgress, setComboProgress] = useState(0);
@@ -76,7 +96,6 @@ function TemplatesPage() {
     e.target.value = "";
     if (!f) return;
     if (f.size > 6_000_000) return toast.error("Ảnh > 6MB. Resize trước nhé.");
-    setAiBusy(true);
     try {
       const dataUrl = await new Promise<string>((res, rej) => {
         const r = new FileReader();
@@ -84,15 +103,42 @@ function TemplatesPage() {
         r.onerror = () => rej(new Error("Đọc ảnh lỗi"));
         r.readAsDataURL(f);
       });
-      const out = await aiGenerateTemplateFromImage(dataUrl);
+      setSingleFileName(f.name);
+      setSinglePreview(dataUrl);
+      setSingleTemplateName("AI: " + f.name.replace(/\.[^.]+$/, ""));
+      setSingleFidelity("strict");
+      setSingleInstructions("");
+      setSingleOpen(true);
+    } catch (err) {
+      toast.error("AI lỗi: " + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  const startSingleImageGeneration = async () => {
+    if (!singlePreview) return;
+    setAiBusy(true);
+    try {
+      const out = await aiGenerateTemplateFromImage({
+        imageDataUrl: singlePreview,
+        fidelity: singleFidelity,
+        customInstructions: singleInstructions,
+      });
       if (!out.ok) {
         toast.error(out.error);
         return;
       }
       const layout = JSON.parse(out.layoutJson);
-      const tpl = aiLayoutToTemplate(layout, "AI: " + f.name.replace(/\.[^.]+$/, ""));
+      const tpl = aiLayoutToTemplate(
+        layout,
+        singleTemplateName.trim() || "AI: " + singleFileName.replace(/\.[^.]+$/, ""),
+      );
       await db.pageTemplates.put(tpl);
       toast.success("AI dựng xong — mở editor để chỉnh");
+      setSingleOpen(false);
+      setSinglePreview("");
+      setSingleFileName("");
+      setSingleTemplateName("");
+      setSingleInstructions("");
       navigate({ to: "/templates/$id/edit", params: { id: tpl.pageTemplateId } });
     } catch (err) {
       toast.error("AI lỗi: " + (err instanceof Error ? err.message : String(err)));
@@ -147,6 +193,8 @@ function TemplatesPage() {
     setComboFiles(list);
     setComboPreviews(previews);
     setComboPackName("");
+    setComboFidelity("strict");
+    setComboInstructions("");
     setComboOpen(true);
   };
 
@@ -164,6 +212,8 @@ function TemplatesPage() {
       const out = await aiGenerateComboFromImages({
         images: comboPreviews.map((dataUrl) => ({ dataUrl })),
         packNameHint: comboPackName.trim() || undefined,
+        layoutFidelity: comboFidelity,
+        customInstructions: comboInstructions.trim() || undefined,
         onProgress: (step, progress) => {
           setComboStep(step);
           setComboProgress(progress);
@@ -189,6 +239,7 @@ function TemplatesPage() {
       setComboOpen(false);
       setComboFiles([]);
       setComboPreviews([]);
+      setComboInstructions("");
       navigate({ to: "/packs", search: { open: packId } });
     } catch (err) {
       toast.error("Lỗi: " + (err instanceof Error ? err.message : String(err)));
@@ -229,6 +280,73 @@ function TemplatesPage() {
         </div>
       </div>
 
+      <Dialog open={singleOpen} onOpenChange={(o) => !aiBusy && setSingleOpen(o)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>AI dựng template từ ảnh</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {singlePreview && (
+              <div className="overflow-hidden rounded-lg border bg-muted">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={singlePreview} alt={singleFileName} className="max-h-[420px] w-full object-contain" />
+              </div>
+            )}
+
+            <div>
+              <Label>Tên template</Label>
+              <Input
+                value={singleTemplateName}
+                onChange={(e) => setSingleTemplateName(e.target.value)}
+                placeholder="AI: Ten-template"
+                disabled={aiBusy}
+              />
+            </div>
+
+            <div>
+              <Label>Mức bám sát mẫu</Label>
+              <Select
+                value={singleFidelity}
+                onValueChange={(value) => setSingleFidelity(value as LayoutFidelity)}
+              >
+                <SelectTrigger className="mt-2">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="strict">Bám sát mẫu</SelectItem>
+                  <SelectItem value="balanced">Cân bằng</SelectItem>
+                  <SelectItem value="creative">Sáng tạo nhẹ</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label>Ghi chú cho AI</Label>
+              <Textarea
+                value={singleInstructions}
+                onChange={(e) => setSingleInstructions(e.target.value)}
+                placeholder="Ví dụ: giữ nền tối, title vàng nổi, ảnh bo góc đặt hai bên, chia danh sách thành nhiều cụm giống ảnh mẫu."
+                className="mt-2 min-h-[110px]"
+                disabled={aiBusy}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSingleOpen(false)} disabled={aiBusy}>
+              Huỷ
+            </Button>
+            <Button onClick={startSingleImageGeneration} disabled={aiBusy || !singlePreview}>
+              {aiBusy ? (
+                <Loader2 className="size-4 mr-2 animate-spin" />
+              ) : (
+                <Sparkles className="size-4 mr-2" />
+              )}
+              Dựng template
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={comboOpen} onOpenChange={(o) => !comboBusy && setComboOpen(o)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -241,6 +359,32 @@ function TemplatesPage() {
                 value={comboPackName}
                 onChange={(e) => setComboPackName(e.target.value)}
                 placeholder="Vd: Đà Lạt 4N3Đ"
+                disabled={comboBusy}
+              />
+            </div>
+            <div>
+              <Label>Mức bám sát mẫu</Label>
+              <Select
+                value={comboFidelity}
+                onValueChange={(value) => setComboFidelity(value as LayoutFidelity)}
+              >
+                <SelectTrigger className="mt-2">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="strict">Bám sát mẫu</SelectItem>
+                  <SelectItem value="balanced">Cân bằng</SelectItem>
+                  <SelectItem value="creative">Sáng tạo nhẹ</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Ghi chú cho AI</Label>
+              <Textarea
+                value={comboInstructions}
+                onChange={(e) => setComboInstructions(e.target.value)}
+                placeholder="Ví dụ: giữ đúng kiểu poster nền tối, title vàng nổi, 3-4 ảnh bo góc floating quanh canvas, danh sách bullet chia nhiều cụm như ảnh mẫu."
+                className="mt-2 min-h-[110px]"
                 disabled={comboBusy}
               />
             </div>

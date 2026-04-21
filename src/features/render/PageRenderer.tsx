@@ -1,11 +1,12 @@
 // PageRenderer: render 1 page template + dữ liệu thực ra HTML pixel-chuẩn (1080x...)
-// Dùng cho cả preview thumbnail và export PNG (html-to-image)
+// Dùng cho cả preview thumbnail và export PNG
 
 import { useMemo } from "react";
 import type {
   Asset,
   Entity,
   PageTemplate,
+  RenderedItem,
   RenderedPage,
   Section,
   Slot,
@@ -22,7 +23,11 @@ import {
   shapeBorderRadius,
   shapeClipPath,
 } from "@/engines/binding/dataBinding";
-import { buildSlotImagePlan, type PlannedImage, type SlotImagePlan } from "@/engines/binding/imagePlan";
+import {
+  buildExpandedSlotImagePlan,
+  type PlannedImage,
+  type SlotImagePlan,
+} from "@/engines/binding/imagePlan";
 import { useResolvedImageSrc } from "@/storage/imageSrc";
 import { expandPageWithCardGroups } from "@/engines/binding/cardRepeater";
 
@@ -34,10 +39,9 @@ interface Props {
   scale?: number;
   debug?: boolean;
   innerRef?: React.Ref<HTMLDivElement>;
-  // Chế độ generate-theo-entity: 1 entity ăn vào tất cả block có bindingPath
   entity?: Entity;
-  /** Pool entity dùng cho Card Repeater (template.cardGroups). Mặc định = [entity]. */
   entityPool?: Entity[];
+  slotItems?: RenderedItem[];
 }
 
 export function PageRenderer({
@@ -50,46 +54,73 @@ export function PageRenderer({
   innerRef,
   entity,
   entityPool,
+  slotItems,
 }: Props) {
-  const entityMap = useMemo(() => new Map(entities.map((e) => [e.entityId, e])), [entities]);
-  const assetMap = useMemo(() => new Map(assets.map((a) => [a.assetId, a])), [assets]);
+  const entityMap = useMemo(
+    () => new Map(entities.map((item) => [item.entityId, item])),
+    [entities],
+  );
+  const assetMap = useMemo(() => new Map(assets.map((item) => [item.assetId, item])), [assets]);
 
   const { width, height, background, backgroundImage } = template.canvas;
   const resolvedBg = useResolvedImageSrc(backgroundImage);
   const bgUsable = resolvedBg && !resolvedBg.startsWith("idb://") ? resolvedBg : undefined;
+  const effectiveSlotItems = page?.items ?? slotItems ?? [];
 
   const sectionItemsMap = useMemo(() => {
-    const m = new Map<string, Array<{ entityId?: string; assetId?: string }>>();
-    if (!page) return m;
-    for (const it of page.items) {
-      if (!it.sectionId) continue;
-      const arr = m.get(it.sectionId) ?? [];
-      arr.push({ entityId: it.entityId, assetId: it.assetId });
-      m.set(it.sectionId, arr);
+    const map = new Map<string, Array<{ entityId?: string; assetId?: string }>>();
+    for (const item of effectiveSlotItems) {
+      if (!item.sectionId) continue;
+      const bucket = map.get(item.sectionId) ?? [];
+      bucket.push({ entityId: item.entityId, assetId: item.assetId });
+      map.set(item.sectionId, bucket);
     }
-    return m;
-  }, [page]);
+    return map;
+  }, [effectiveSlotItems]);
 
   const slotEntityOverride = useMemo(() => {
-    const m = new Map<string, { entityId?: string; assetId?: string }>();
-    if (!page) return m;
-    for (const it of page.items) {
-      if (it.slotId) m.set(it.slotId, { entityId: it.entityId, assetId: it.assetId });
+    const map = new Map<string, { entityId?: string; assetId?: string }>();
+    for (const item of effectiveSlotItems) {
+      if (item.slotId) {
+        map.set(item.slotId, { entityId: item.entityId, assetId: item.assetId });
+      }
     }
-    return m;
-  }, [page]);
+    return map;
+  }, [effectiveSlotItems]);
 
-  // Plan ảnh cấp page: rotate asset không trùng cho các block bind asset.*
-  const imagePlan: SlotImagePlan = useMemo(
-    () => buildSlotImagePlan(template, entity, assets),
-    [template, entity, assets],
-  );
-
-  // Card Repeater: expand cardGroups thành slot clone (mỗi clone có entity riêng).
   const expanded = useMemo(() => {
-    const pool = entityPool && entityPool.length > 0 ? entityPool : entity ? [entity] : [];
+    const pool =
+      effectiveSlotItems.length > 0
+        ? []
+        : entityPool && entityPool.length > 0
+          ? entityPool
+          : entity
+            ? [entity]
+            : [];
     return expandPageWithCardGroups(template, pool);
-  }, [template, entityPool, entity]);
+  }, [template, entityPool, entity, effectiveSlotItems]);
+
+  const resolveEntityForSlot = (
+    slot: Slot & { originalSlotId?: string; __cardEntityId?: string },
+  ) => {
+    const override =
+      slotEntityOverride.get(slot.slotId) ??
+      slotEntityOverride.get(slot.originalSlotId ?? slot.slotId);
+    if (override?.entityId) return entityMap.get(override.entityId);
+    if (slot.sectionRefId) {
+      const sectionItems = sectionItemsMap.get(slot.sectionRefId) ?? [];
+      const firstEntityId = sectionItems.find((item) => item.entityId)?.entityId;
+      if (firstEntityId) return entityMap.get(firstEntityId);
+    }
+    if (effectiveSlotItems.length > 0) return undefined;
+    if (slot.__cardEntityId) return entityMap.get(slot.__cardEntityId);
+    return entity;
+  };
+
+  const imagePlan: SlotImagePlan = useMemo(
+    () => buildExpandedSlotImagePlan(expanded.slots, assets, resolveEntityForSlot),
+    [expanded.slots, assets, entityMap, slotEntityOverride, entity],
+  );
 
   return (
     <div
@@ -99,7 +130,6 @@ export function PageRenderer({
         width: width * scale,
         height: height * scale,
         position: "relative",
-        // Nếu template không set background → để trong suốt (không fallback #fff).
         background: background ?? "transparent",
         backgroundImage: bgUsable ? `url(${bgUsable})` : undefined,
         backgroundSize: "cover",
@@ -110,30 +140,27 @@ export function PageRenderer({
     >
       {expanded.slots
         .slice()
-        .filter((s) => !s.style?.hidden)
-        .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))
-        .map((slot) => {
-          const cardEnt = slot.__cardEntityId ? entityMap.get(slot.__cardEntityId) : undefined;
-          const effectiveEntity = cardEnt ?? entity;
-          // imagePlan key theo slotId gốc (originalSlotId)
-          const plannedHere = imagePlan.get(slot.originalSlotId ?? slot.slotId);
-          return (
-            <SlotRenderer
-              key={slot.slotId}
-              slot={slot}
-              scale={scale}
-              template={template}
-              entityMap={entityMap}
-              assetMap={assetMap}
-              assets={assets}
-              entity={effectiveEntity}
-              sectionItemsMap={sectionItemsMap}
-              slotOverride={slotEntityOverride.get(slot.originalSlotId ?? slot.slotId)}
-              planned={cardEnt ? undefined : plannedHere}
-              debug={debug}
-            />
-          );
-        })}
+        .filter((slot) => !slot.style?.hidden)
+        .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0) || a.renderOrder - b.renderOrder)
+        .map((slot) => (
+          <SlotRenderer
+            key={slot.slotId}
+            slot={slot}
+            scale={scale}
+            template={template}
+            entityMap={entityMap}
+            assetMap={assetMap}
+            assets={assets}
+            entity={resolveEntityForSlot(slot)}
+            sectionItemsMap={sectionItemsMap}
+            slotOverride={
+              slotEntityOverride.get(slot.slotId) ??
+              slotEntityOverride.get(slot.originalSlotId ?? slot.slotId)
+            }
+            planned={imagePlan.get(slot.slotId)}
+            debug={debug}
+          />
+        ))}
     </div>
   );
 }
@@ -180,19 +207,24 @@ function SlotRenderer({
   };
 
   if (slot.kind === "shape") {
-    // Shape có thể bind ảnh — ưu tiên planned (anti-trùng), fallback resolveImageBinding theo slot, cuối cùng staticImage.
     let rawSrc = slot.staticImage;
     if (planned?.src) {
       rawSrc = planned.src;
     } else if (slot.bindingPath && entity) {
-      const r = resolveImageBinding(slot.bindingPath, entity, assets, rawSrc);
-      if (r.src) rawSrc = r.src;
+      const result = resolveImageBinding(slot.bindingPath, entity, assets, rawSrc);
+      if (result.src) rawSrc = result.src;
     }
+
     const resolvedShapeSrc = useResolvedImageSrc(rawSrc);
-    const usableSrc = resolvedShapeSrc && !resolvedShapeSrc.startsWith("idb://")
-      ? resolvedShapeSrc
-      : (rawSrc && !rawSrc.startsWith("idb://") ? rawSrc : undefined);
-    const fit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
+    const usableSrc =
+      resolvedShapeSrc && !resolvedShapeSrc.startsWith("idb://")
+        ? resolvedShapeSrc
+        : rawSrc && !rawSrc.startsWith("idb://")
+          ? rawSrc
+          : undefined;
+    const fit = (
+      slot.style?.fit === "stretch" ? "fill" : (slot.style?.fit ?? "cover")
+    ) as React.CSSProperties["objectFit"];
     const filter = buildCssFilter(slot.style);
     const radius = shapeBorderRadius(slot.shapeKind, slot.style?.borderRadius, scale);
     const clip = slot.shapeKind ? shapeClipPath(slot.shapeKind) : undefined;
@@ -212,7 +244,9 @@ function SlotRenderer({
             ...baseStyle,
             background: gradient ?? slot.style?.fill ?? "#000",
             height: Math.max(1, (slot.style?.strokeWidth ?? 2) * scale),
-            top: (slot.y + slot.height / 2) * scale - Math.max(1, (slot.style?.strokeWidth ?? 2) * scale) / 2,
+            top:
+              (slot.y + slot.height / 2) * scale -
+              Math.max(1, (slot.style?.strokeWidth ?? 2) * scale) / 2,
           }}
         >
           <DebugBadge debug={debug} text="line" />
@@ -247,7 +281,9 @@ function SlotRenderer({
               }}
             />
             {slot.style?.overlayColor && (
-              <div style={{ position: "absolute", inset: 0, background: slot.style.overlayColor }} />
+              <div
+                style={{ position: "absolute", inset: 0, background: slot.style.overlayColor }}
+              />
             )}
           </>
         )}
@@ -279,42 +315,56 @@ function SlotRenderer({
     let rawSrc = slot.staticImage;
     let entityIdLog: string | undefined;
     let assetIdLog: string | undefined;
-    // Ưu tiên: plan ảnh đã rotate cho cả page (chống trùng).
+
     if (planned?.src) {
       rawSrc = planned.src;
       assetIdLog = planned.assetId;
       entityIdLog = planned.entityId;
     } else if (slot.bindingPath && entity) {
-      const r = resolveImageBinding(slot.bindingPath, entity, assets, rawSrc);
-      if (r.src) {
-        rawSrc = r.src;
-        assetIdLog = r.assetId;
-        entityIdLog = r.entityId;
+      const result = resolveImageBinding(slot.bindingPath, entity, assets, rawSrc);
+      if (result.src) {
+        rawSrc = result.src;
+        assetIdLog = result.assetId;
+        entityIdLog = result.entityId;
       }
     }
-    // Fallback: page items override (luồng pack/section cũ)
+
     if (!rawSrc && slotOverride?.assetId) {
-      const a = assetMap.get(slotOverride.assetId);
-      if (a) {
-        rawSrc = a.sourceValue;
-        assetIdLog = a.assetId;
-        entityIdLog = a.entityId;
+      const asset = assetMap.get(slotOverride.assetId);
+      if (asset) {
+        rawSrc = asset.sourceValue;
+        assetIdLog = asset.assetId;
+        entityIdLog = asset.entityId;
       }
     }
+
     const resolvedImgSrc = useResolvedImageSrc(rawSrc);
-    const usableSrc = resolvedImgSrc && !resolvedImgSrc.startsWith("idb://")
-      ? resolvedImgSrc
-      : (rawSrc && !rawSrc.startsWith("idb://") ? rawSrc : undefined);
+    const usableSrc =
+      resolvedImgSrc && !resolvedImgSrc.startsWith("idb://")
+        ? resolvedImgSrc
+        : rawSrc && !rawSrc.startsWith("idb://")
+          ? rawSrc
+          : undefined;
     const filter = buildCssFilter(slot.style);
-    const objectFit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
+    const objectFit = (
+      slot.style?.fit === "stretch" ? "fill" : (slot.style?.fit ?? "cover")
+    ) as React.CSSProperties["objectFit"];
     const crop = slot.crop;
+
     return (
-      <div style={{ ...baseStyle, overflow: "hidden", borderRadius: (slot.style?.borderRadius ?? 0) * scale }}>
+      <div
+        style={{
+          ...baseStyle,
+          overflow: "hidden",
+          borderRadius: (slot.style?.borderRadius ?? 0) * scale,
+        }}
+      >
         {usableSrc ? (
           crop ? (
             <img
               src={usableSrc}
               crossOrigin="anonymous"
+              alt=""
               style={{
                 position: "absolute",
                 left: `${-crop.x * 100}%`,
@@ -325,12 +375,12 @@ function SlotRenderer({
                 filter,
                 display: "block",
               }}
-              alt=""
             />
           ) : (
             <img
               src={usableSrc}
               crossOrigin="anonymous"
+              alt=""
               style={{
                 width: "100%",
                 height: "100%",
@@ -338,7 +388,6 @@ function SlotRenderer({
                 filter,
                 display: "block",
               }}
-              alt=""
             />
           )
         ) : (
@@ -366,7 +415,10 @@ function SlotRenderer({
             }}
           />
         )}
-        <DebugBadge debug={debug} text={`img${planned?.fallback ? "*" : ""} ${entityIdLog?.slice(0, 4) ?? ""} ${assetIdLog?.slice(0, 4) ?? ""}`} />
+        <DebugBadge
+          debug={debug}
+          text={`img${planned?.fallback ? "*" : ""} ${entityIdLog?.slice(0, 4) ?? ""} ${assetIdLog?.slice(0, 4) ?? ""}`}
+        />
       </div>
     );
   }
@@ -391,12 +443,13 @@ function SlotRenderer({
 
   if (slot.kind === "section") {
     if (!slot.sectionRefId) return null;
-    const section = template.sections.find((s) => s.sectionId === slot.sectionRefId);
+    const section = template.sections.find((item) => item.sectionId === slot.sectionRefId);
     if (!section) return null;
     const items = sectionItemsMap.get(section.sectionId) ?? [];
     return (
       <div style={baseStyle}>
         <SectionView
+          slot={slot}
           section={section}
           items={items}
           entityMap={entityMap}
@@ -414,6 +467,7 @@ function SlotRenderer({
 }
 
 function SectionView({
+  slot,
   section,
   items,
   entityMap,
@@ -423,6 +477,7 @@ function SectionView({
   height,
   debug,
 }: {
+  slot: Slot;
   section: Section;
   items: Array<{ entityId?: string; assetId?: string }>;
   entityMap: Map<string, Entity>;
@@ -432,6 +487,86 @@ function SectionView({
   height: number;
   debug?: boolean;
 }) {
+  const isPosterList = section.layoutMode === "poster_list";
+  const baseColor = slot.style?.color ?? (isPosterList ? "#ffffff" : "#0f172a");
+  const titleText = section.title?.trim();
+  const placeholderCount = Math.max(section.minItems || 0, Math.min(section.maxItems || 4, 4));
+
+  if (isPosterList) {
+    const textStyle = buildTextStyle(
+      {
+        fontFamily: slot.style?.fontFamily ?? "Be Vietnam Pro",
+        fontSize: slot.style?.fontSize ?? 28,
+        fontWeight: slot.style?.fontWeight ?? 600,
+        color: baseColor,
+        lineHeight: slot.style?.lineHeight ?? 1.4,
+        letterSpacing: slot.style?.letterSpacing ?? 0,
+        textAlign: slot.style?.textAlign ?? "left",
+        textShadow: slot.style?.textShadow,
+        textStrokeColor: slot.style?.textStrokeColor,
+        textStrokeWidth: slot.style?.textStrokeWidth,
+      },
+      scale,
+    );
+
+    const placeholderLines = Array.from({ length: placeholderCount }, (_, index) => ({
+      key: `placeholder-${index}`,
+      text: `• {{tên}} - {{địa chỉ}}`,
+      muted: true,
+    }));
+
+    const posterLines =
+      items.length === 0
+        ? placeholderLines
+        : items.flatMap((item, index) => {
+            const entity = item.entityId ? entityMap.get(item.entityId) : undefined;
+            if (!entity) return [];
+            const line = [entity.name, entity.address].filter(Boolean).join(" - ");
+            return [{ key: `${entity.entityId}-${index}`, text: `• ${line}`, muted: false }];
+          });
+
+    return (
+      <div
+        style={{
+          width: width * scale,
+          height: height * scale,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8 * scale,
+          overflow: "hidden",
+          padding: (slot.style?.padding ?? 0) * scale,
+          background: slot.style?.background ?? "transparent",
+        }}
+      >
+        {titleText ? (
+          <div
+            style={{
+              ...textStyle,
+              fontWeight: Math.max(Number(slot.style?.fontWeight ?? 700), 700),
+              marginBottom: 4 * scale,
+            }}
+          >
+            {titleText}
+          </div>
+        ) : null}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 * scale, flex: 1 }}>
+          {posterLines.map((line) => (
+            <div
+              key={line.key}
+              style={{
+                ...textStyle,
+                color: line.muted ? "rgba(255,255,255,0.6)" : baseColor,
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {line.text}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
@@ -447,40 +582,43 @@ function SectionView({
         overflow: "hidden",
       }}
     >
-      <div
-        style={{
-          fontWeight: 800,
-          fontSize: 28 * scale,
-          color: "#0f172a",
-          marginBottom: 4 * scale,
-        }}
-      >
-        {section.title}
-      </div>
+      {titleText ? (
+        <div
+          style={{
+            fontWeight: 800,
+            fontSize: 28 * scale,
+            color: "#0f172a",
+            marginBottom: 4 * scale,
+          }}
+        >
+          {titleText}
+        </div>
+      ) : null}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 * scale, flex: 1 }}>
         {items.length === 0 ? (
           <div style={{ color: "#94a3b8", fontSize: 16 * scale }}>(không có dữ liệu)</div>
         ) : (
-          items.map((it, idx) => {
-            const ent = it.entityId ? entityMap.get(it.entityId) : undefined;
-            const asset = it.assetId ? assetMap.get(it.assetId) : undefined;
-            if (!ent) return null;
+          items.map((item, index) => {
+            const entity = item.entityId ? entityMap.get(item.entityId) : undefined;
+            const asset = item.assetId ? assetMap.get(item.assetId) : undefined;
+            if (!entity) return null;
             const isZigzag = section.layoutMode === "zigzag";
-            const flipRow = isZigzag && idx % 2 === 1;
+            const flipRow = isZigzag && index % 2 === 1;
             const priceFromMeta =
-              (ent.metadata?.price as string | number | undefined) ??
-              (ent.metadata?.priceUsd as string | number | undefined);
-            const priceText = ent.priceRange ?? (priceFromMeta != null ? String(priceFromMeta) : undefined);
+              (entity.metadata?.price as string | number | undefined) ??
+              (entity.metadata?.priceUsd as string | number | undefined);
+            const priceText =
+              entity.priceRange ?? (priceFromMeta != null ? String(priceFromMeta) : undefined);
             return (
               <div
-                key={idx}
+                key={index}
                 style={{
                   display: "flex",
                   flexDirection: flipRow ? "row-reverse" : "row",
                   gap: 12 * scale,
                   alignItems: "center",
                   padding: 8 * scale,
-                  background: ent.partnerFlag ? "rgba(253, 224, 71, 0.25)" : "transparent",
+                  background: entity.partnerFlag ? "rgba(253, 224, 71, 0.25)" : "transparent",
                   borderRadius: 12 * scale,
                 }}
               >
@@ -488,6 +626,7 @@ function SectionView({
                   <img
                     src={asset.sourceValue}
                     crossOrigin="anonymous"
+                    alt=""
                     style={{
                       width: 80 * scale,
                       height: 80 * scale,
@@ -495,7 +634,6 @@ function SectionView({
                       borderRadius: isZigzag ? 9999 : 12 * scale,
                       flexShrink: 0,
                     }}
-                    alt=""
                   />
                 )}
                 <div style={{ flex: 1, minWidth: 0, textAlign: flipRow ? "right" : "left" }}>
@@ -509,9 +647,13 @@ function SectionView({
                       textOverflow: "ellipsis",
                     }}
                   >
-                    {section.listStyle === "number" ? `${idx + 1}. ` : section.listStyle === "dot" ? "• " : ""}
-                    {ent.name}
-                    {ent.partnerFlag && (
+                    {section.listStyle === "number"
+                      ? `${index + 1}. `
+                      : section.listStyle === "dot"
+                        ? "• "
+                        : ""}
+                    {entity.name}
+                    {entity.partnerFlag && (
                       <span
                         style={{
                           marginLeft: 8 * scale,
@@ -526,7 +668,7 @@ function SectionView({
                       </span>
                     )}
                   </div>
-                  {ent.address && (
+                  {entity.address && (
                     <div
                       style={{
                         fontSize: 16 * scale,
@@ -536,7 +678,7 @@ function SectionView({
                         textOverflow: "ellipsis",
                       }}
                     >
-                      📍 {ent.address}
+                      📍 {entity.address}
                     </div>
                   )}
                   {priceText && (
@@ -556,7 +698,10 @@ function SectionView({
                     </div>
                   )}
                 </div>
-                <DebugBadge debug={debug} text={`${ent.entityId.slice(0, 4)}/${asset?.assetId.slice(0, 4) ?? "-"}`} />
+                <DebugBadge
+                  debug={debug}
+                  text={`${entity.entityId.slice(0, 4)}/${asset?.assetId.slice(0, 4) ?? "-"}`}
+                />
               </div>
             );
           })

@@ -30,11 +30,13 @@ function looksLikeImageUrl(v: unknown): boolean {
   const s = v.trim().toLowerCase();
   if (!s) return false;
   if (s.startsWith("http://") || s.startsWith("https://") || s.startsWith("data:image"))
-    return /\.(png|jpe?g|gif|webp|avif|svg)(\?|#|$)/.test(s) ||
+    return (
+      /\.(png|jpe?g|gif|webp|avif|svg)(\?|#|$)/.test(s) ||
       s.includes("googleusercontent") ||
       s.includes("drive.google.com") ||
       s.includes("imgur") ||
-      s.includes("cloudinary");
+      s.includes("cloudinary")
+    );
   return false;
 }
 
@@ -49,7 +51,7 @@ export function SheetFieldsPanel({
   sheetOptions,
   selectedSheet,
   onSelectSheet,
-  selectedSlot,
+  selectedSlots,
   previewEntity,
   onBindToSelectedSlot,
 }: {
@@ -57,9 +59,9 @@ export function SheetFieldsPanel({
   sheetOptions: string[];
   selectedSheet: string; // "__all__" hoặc tên sheet
   onSelectSheet: (s: string) => void;
-  selectedSlot: Slot | undefined;
+  selectedSlots: Slot[];
   previewEntity: Entity | undefined;
-  onBindToSelectedSlot: (path: string) => void;
+  onBindToSelectedSlot: (path: string, isImageLike: boolean) => void;
 }) {
   // Tập entity thuộc sheet đang xem (để tính union field thật)
   const sheetEntities = useMemo(() => {
@@ -97,7 +99,9 @@ export function SheetFieldsPanel({
         metaKeys.set(k, cur);
       }
     }
-    const sortedMeta = Array.from(metaKeys.entries()).sort((a, b) => a[0].localeCompare(b[0], "vi"));
+    const sortedMeta = Array.from(metaKeys.entries()).sort((a, b) =>
+      a[0].localeCompare(b[0], "vi"),
+    );
     for (const [k, info] of sortedMeta) {
       const path = `entity.metadata.${k}`;
       if (seen.has(path)) continue;
@@ -115,13 +119,20 @@ export function SheetFieldsPanel({
   }, [sheetEntities, previewEntity]);
 
   // Field nào enable cho slot đang chọn
-  const slotKind = selectedSlot?.kind;
-  const shapeActsAsText = slotKind === "shape" && !!selectedSlot?.staticText?.trim();
-  const canBindNow = slotKind === "text" || slotKind === "image" || slotKind === "shape";
+  const getSlotMode = (slot: Slot): "text" | "image" | null => {
+    if (slot.kind === "text") return "text";
+    if (slot.kind === "image") return "image";
+    if (slot.kind === "shape") return slot.staticText?.trim() ? "text" : "image";
+    return null;
+  };
+  const selectedModes = selectedSlots
+    .map(getSlotMode)
+    .filter((mode): mode is "text" | "image" => !!mode);
+  const canBindNow = selectedModes.length > 0;
   const fieldEnabled = (f: FieldItem): boolean => {
     if (!canBindNow) return false;
-    if (slotKind === "text" || shapeActsAsText) return !f.isImageLike; // text / shape có chữ bind text-like
-    return f.isImageLike; // image/shape chỉ bind cột chứa URL ảnh (nếu sheet có)
+    if (!f.isImageLike) return selectedModes.includes("text");
+    return selectedModes.includes("image");
   };
 
   return (
@@ -132,7 +143,7 @@ export function SheetFieldsPanel({
       </div>
 
       {/* Tabs sheet */}
-      <div className="flex gap-1 overflow-x-auto pb-1 -mx-1 px-1">
+      <div className="flex flex-wrap gap-1 pb-1">
         <button
           onClick={() => onSelectSheet("__all__")}
           className={cn(
@@ -164,12 +175,12 @@ export function SheetFieldsPanel({
       {!canBindNow && (
         <div className="text-[11px] text-muted-foreground italic flex items-center gap-1">
           <MousePointerClick className="size-3" />
-          Chọn 1 block trên canvas để click field bind data.
+          Chọn 1 hoặc nhiều block trên canvas để click field bind data.
         </div>
       )}
       {canBindNow && (
         <div className="text-[11px] text-muted-foreground">
-          Click 1 field bên dưới để gán vào block <b>{slotKind}</b> đang chọn.
+          Click 1 field bên dưới để gán vào các block tương thích đang chọn.
         </div>
       )}
 
@@ -179,15 +190,15 @@ export function SheetFieldsPanel({
           Sheet này chưa có cột dữ liệu nào có giá trị.
         </div>
       ) : (
-        <div className="space-y-1 max-h-[260px] overflow-y-auto pr-1">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
           {fields.map((f) => {
             const enabled = fieldEnabled(f);
-            const active = selectedSlot?.bindingPath === f.path;
+            const active = selectedSlots.some((slot) => slot.bindingPath === f.path);
             return (
               <button
                 key={f.path}
                 disabled={!enabled}
-                onClick={() => enabled && onBindToSelectedSlot(f.path)}
+                onClick={() => enabled && onBindToSelectedSlot(f.path, f.isImageLike)}
                 title={f.path}
                 className={cn(
                   "w-full text-left rounded border px-2 py-1.5 text-xs transition-colors",

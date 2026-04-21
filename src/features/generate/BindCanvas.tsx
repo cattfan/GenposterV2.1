@@ -1,7 +1,7 @@
 // Canvas read-only, chỉ để chọn block và bind data ở trang Tạo nội dung.
 // Render giống PageRenderer nhưng cho phép click + outline khi chọn / đã bind.
 import { useMemo } from "react";
-import type { Asset, Entity, PageTemplate, Slot } from "@/models";
+import type { Asset, Entity, PageTemplate, RenderedItem, Slot } from "@/models";
 import {
   buildBoxShadow,
   buildCssFilter,
@@ -13,50 +13,91 @@ import {
   shapeBorderRadius,
   shapeClipPath,
 } from "@/engines/binding/dataBinding";
-import { buildSlotImagePlan, type PlannedImage, type SlotImagePlan } from "@/engines/binding/imagePlan";
+import {
+  buildExpandedSlotImagePlan,
+  type PlannedImage,
+  type SlotImagePlan,
+} from "@/engines/binding/imagePlan";
 import { useResolvedImageSrc } from "@/storage/imageSrc";
 import { expandPageWithCardGroups } from "@/engines/binding/cardRepeater";
 
 export function BindCanvas({
   template,
   scale,
-  selectedSlotId,
+  selectedSlotIds,
   onSelectSlot,
   entity,
   assets,
   entityPool,
+  slotItems,
 }: {
   template: PageTemplate;
   scale: number;
-  selectedSlotId: string | null;
-  onSelectSlot: (id: string | null) => void;
+  selectedSlotIds: string[];
+  onSelectSlot: (id: string | null, additive?: boolean) => void;
   entity?: Entity;
   assets: Asset[];
   entityPool?: Entity[];
+  slotItems?: RenderedItem[];
 }) {
   const { width, height, background, backgroundImage } = template.canvas;
   const resolvedBg = useResolvedImageSrc(backgroundImage);
   const bgUsable = resolvedBg && !resolvedBg.startsWith("idb://") ? resolvedBg : undefined;
 
-  const imagePlan: SlotImagePlan = useMemo(
-    () => buildSlotImagePlan(template, entity, assets),
-    [template, entity, assets],
-  );
+  const entityLookup = useMemo(() => {
+    const ordered = [entity, ...(entityPool ?? [])].filter((item): item is Entity => !!item);
+    return new Map(ordered.map((item) => [item.entityId, item]));
+  }, [entity, entityPool]);
 
-  // Card Repeater: ghost preview các card clone (cardIndex >= 1) — mờ, không clickable.
+  const slotEntityOverride = useMemo(() => {
+    const map = new Map<string, { entityId?: string; assetId?: string }>();
+    for (const item of slotItems ?? []) {
+      if (item.slotId) {
+        map.set(item.slotId, { entityId: item.entityId, assetId: item.assetId });
+      }
+    }
+    return map;
+  }, [slotItems]);
+
   const expanded = useMemo(() => {
-    const pool = entityPool && entityPool.length > 0 ? entityPool : entity ? [entity] : [];
+    const pool =
+      slotItems && slotItems.length > 0
+        ? []
+        : entityPool && entityPool.length > 0
+          ? entityPool
+          : entity
+            ? [entity]
+            : [];
     return expandPageWithCardGroups(template, pool);
-  }, [template, entityPool, entity]);
-  const ghostSlots = useMemo(
-    () => expanded.slots.filter((s) => s.cardIndex > 0),
-    [expanded],
+  }, [template, entityPool, entity, slotItems]);
+
+  const ghostSlots = useMemo(() => expanded.slots.filter((slot) => slot.cardIndex > 0), [expanded]);
+
+  const resolveEntityForSlot = (
+    slot: Slot & { originalSlotId?: string; __cardEntityId?: string },
+  ) => {
+    const override =
+      slotEntityOverride.get(slot.slotId) ??
+      slotEntityOverride.get(slot.originalSlotId ?? slot.slotId);
+    if (override?.entityId) return entityLookup.get(override.entityId);
+    if (slot.sectionRefId) {
+      const sectionEntity = (slotItems ?? []).find((item) => item.sectionId === slot.sectionRefId)?.entityId;
+      if (sectionEntity) return entityLookup.get(sectionEntity);
+    }
+    if (slotItems && slotItems.length > 0) return undefined;
+    if (slot.__cardEntityId) return entityLookup.get(slot.__cardEntityId);
+    return entity;
+  };
+
+  const imagePlan: SlotImagePlan = useMemo(
+    () => buildExpandedSlotImagePlan(expanded.slots, assets, resolveEntityForSlot),
+    [expanded.slots, assets, entityLookup, slotEntityOverride, entity],
   );
 
   return (
     <div
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onSelectSlot(null);
+        if (e.target === e.currentTarget) onSelectSlot(null, false);
       }}
       style={{
         width: width * scale,
@@ -71,20 +112,17 @@ export function BindCanvas({
         boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
       }}
     >
-      {/* Ghost cards (clone) — render TRƯỚC để slot gốc nằm trên */}
       {ghostSlots.map((slot) => {
-        const cardEnt = slot.__cardEntityId
-          ? expanded.entityBySlotId.get(slot.slotId)
-          : undefined;
+        const cardEntity = resolveEntityForSlot(slot);
         return (
           <GhostSlot
             key={slot.slotId}
             slot={slot}
             scale={scale}
-            entity={cardEnt}
+            entity={cardEntity}
             label={
               slot.cardIndex === 1 && isFirstSlotOfCard(slot, expanded.slots)
-                ? `Card ${slot.cardIndex + 1}: ${cardEnt?.name ?? "—"}`
+                ? `Card ${slot.cardIndex + 1}: ${cardEntity?.name ?? "—"}`
                 : undefined
             }
           />
@@ -93,26 +131,25 @@ export function BindCanvas({
 
       {expanded.slots
         .slice()
-        .filter((s) => s.cardIndex === 0)
-        .filter((s) => !s.style?.hidden)
-        .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))
+        .filter((slot) => slot.cardIndex === 0)
+        .filter((slot) => !slot.style?.hidden)
+        .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0) || a.renderOrder - b.renderOrder)
         .map((slot) => {
-          const cardEnt = slot.__cardEntityId
-            ? expanded.entityBySlotId.get(slot.slotId)
-            : undefined;
-          const inCardGroup = !!slot.groupId &&
-            (template.cardGroups ?? []).some((g) => g.groupId === slot.groupId);
+          const resolvedEntity = resolveEntityForSlot(slot);
+          const inCardGroup =
+            !!slot.groupId &&
+            (template.cardGroups ?? []).some((group) => group.groupId === slot.groupId);
           const cardCfg = inCardGroup
-            ? (template.cardGroups ?? []).find((g) => g.groupId === slot.groupId)
+            ? (template.cardGroups ?? []).find((group) => group.groupId === slot.groupId)
             : undefined;
           return (
             <BindSlot
               key={slot.slotId}
               slot={slot}
               scale={scale}
-              selected={slot.slotId === selectedSlotId}
-              onSelect={() => onSelectSlot(slot.slotId)}
-              entity={cardEnt ?? entity}
+              selected={selectedSlotIds.includes(slot.slotId)}
+              onSelect={(additive) => onSelectSlot(slot.slotId, additive)}
+              entity={resolvedEntity}
               planned={imagePlan.get(slot.slotId)}
               cardBadge={cardCfg ? `↻ ${cardCfg.repeatCount}` : undefined}
             />
@@ -122,12 +159,14 @@ export function BindCanvas({
   );
 }
 
-/** Slot đầu tiên của 1 card (theo y/x nhỏ nhất trong cùng cardIndex+cardGroupId). */
-function isFirstSlotOfCard(slot: Slot & { cardIndex: number; cardGroupId?: string }, allExpanded: Array<Slot & { cardIndex: number; cardGroupId?: string }>): boolean {
+function isFirstSlotOfCard(
+  slot: Slot & { cardIndex: number; cardGroupId?: string },
+  allExpanded: Array<Slot & { cardIndex: number; cardGroupId?: string }>,
+): boolean {
   const sameCard = allExpanded.filter(
-    (s) => s.cardGroupId === slot.cardGroupId && s.cardIndex === slot.cardIndex,
+    (item) => item.cardGroupId === slot.cardGroupId && item.cardIndex === slot.cardIndex,
   );
-  const top = sameCard.reduce((acc, s) => (s.y < acc.y ? s : acc), sameCard[0]);
+  const top = sameCard.reduce((acc, item) => (item.y < acc.y ? item : acc), sameCard[0]);
   return top.slotId === slot.slotId;
 }
 
@@ -158,7 +197,9 @@ function GhostSlot({
 
   let inner: React.ReactNode = null;
   if (slot.kind === "text") {
-    const text = slot.bindingPath ? resolveTextBinding(slot.bindingPath, entity, slot.staticText) : (slot.staticText ?? "");
+    const text = slot.bindingPath
+      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText)
+      : (slot.staticText ?? "");
     const textCss = buildTextStyle(slot.style, scale);
     inner = <div style={textCss}>{text}</div>;
   } else if (slot.kind === "image" || slot.kind === "shape") {
@@ -167,7 +208,8 @@ function GhostSlot({
         style={{
           width: "100%",
           height: "100%",
-          background: slot.kind === "shape" ? slot.style?.fill ?? "hsl(var(--muted))" : "hsl(var(--muted))",
+          background:
+            slot.kind === "shape" ? (slot.style?.fill ?? "hsl(var(--muted))") : "hsl(var(--muted))",
           borderRadius: shapeBorderRadius(slot.shapeKind, slot.style?.borderRadius, scale),
           display: "grid",
           placeItems: "center",
@@ -218,7 +260,7 @@ function BindSlot({
   slot: Slot;
   scale: number;
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (additive: boolean) => void;
   entity?: Entity;
   planned?: PlannedImage;
   cardBadge?: string;
@@ -255,20 +297,23 @@ function BindSlot({
 
   const onClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (isBindable) onSelect();
+    if (isBindable) onSelect(e.metaKey || e.ctrlKey || e.shiftKey);
   };
 
-  // Determine raw src for image/shape (priority: planned bind > staticImage)
-  const rawSrc = (slot.kind === "image" || slot.kind === "shape")
-    ? (planned?.src ?? slot.staticImage)
-    : undefined;
+  const rawSrc =
+    slot.kind === "image" || slot.kind === "shape" ? (planned?.src ?? slot.staticImage) : undefined;
   const resolvedRaw = useResolvedImageSrc(rawSrc);
-  const usableSrc = resolvedRaw && !resolvedRaw.startsWith("idb://")
-    ? resolvedRaw
-    : (rawSrc && !rawSrc.startsWith("idb://") ? rawSrc : undefined);
+  const usableSrc =
+    resolvedRaw && !resolvedRaw.startsWith("idb://")
+      ? resolvedRaw
+      : rawSrc && !rawSrc.startsWith("idb://")
+        ? rawSrc
+        : undefined;
 
   if (slot.kind === "shape") {
-    const fit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
+    const fit = (
+      slot.style?.fit === "stretch" ? "fill" : (slot.style?.fit ?? "cover")
+    ) as React.CSSProperties["objectFit"];
     const filter = buildCssFilter(slot.style);
     const radius = shapeBorderRadius(slot.shapeKind, slot.style?.borderRadius, scale);
     const clip = slot.shapeKind ? shapeClipPath(slot.shapeKind) : undefined;
@@ -298,7 +343,7 @@ function BindSlot({
         onMouseDown={onClick}
         style={{
           ...baseStyle,
-          background: usableSrc ? undefined : gradient ?? slot.style?.fill ?? "#e5e7eb",
+          background: usableSrc ? undefined : (gradient ?? slot.style?.fill ?? "#e5e7eb"),
           borderRadius: radius,
           clipPath: clip,
           border: usableSrc ? undefined : border,
@@ -311,10 +356,23 @@ function BindSlot({
               src={usableSrc}
               alt=""
               draggable={false}
-              style={{ width: "100%", height: "100%", objectFit: fit, filter, pointerEvents: "none" }}
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit: fit,
+                filter,
+                pointerEvents: "none",
+              }}
             />
             {slot.style?.overlayColor && (
-              <div style={{ position: "absolute", inset: 0, background: slot.style.overlayColor, pointerEvents: "none" }} />
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  background: slot.style.overlayColor,
+                  pointerEvents: "none",
+                }}
+              />
             )}
           </>
         ) : null}
@@ -344,10 +402,19 @@ function BindSlot({
 
   if (slot.kind === "image") {
     const filter = buildCssFilter(slot.style);
-    const objectFit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
+    const objectFit = (
+      slot.style?.fit === "stretch" ? "fill" : (slot.style?.fit ?? "cover")
+    ) as React.CSSProperties["objectFit"];
     const crop = slot.crop;
     return (
-      <div onMouseDown={onClick} style={{ ...baseStyle, overflow: "hidden", borderRadius: (slot.style?.borderRadius ?? 0) * scale }}>
+      <div
+        onMouseDown={onClick}
+        style={{
+          ...baseStyle,
+          overflow: "hidden",
+          borderRadius: (slot.style?.borderRadius ?? 0) * scale,
+        }}
+      >
         {usableSrc ? (
           crop ? (
             <img
@@ -370,7 +437,13 @@ function BindSlot({
               src={usableSrc}
               alt=""
               draggable={false}
-              style={{ width: "100%", height: "100%", objectFit, filter, pointerEvents: "none" }}
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit,
+                filter,
+                pointerEvents: "none",
+              }}
             />
           )
         ) : (
@@ -431,23 +504,28 @@ function BindSlot({
   }
 
   if (slot.kind === "section") {
+    const section = template.sections.find((item) => item.sectionId === slot.sectionRefId);
     return (
       <div
         onMouseDown={(e) => {
           e.stopPropagation();
-          onSelect();
+          onSelect(e.metaKey || e.ctrlKey || e.shiftKey);
         }}
         style={{
           ...baseStyle,
-          background: "hsl(var(--accent) / 0.3)",
+          background:
+            section?.layoutMode === "poster_list" ? "transparent" : "hsl(var(--accent) / 0.3)",
           border: "1px dashed hsl(var(--border))",
           display: "grid",
           placeItems: "center",
-          color: "hsl(var(--muted-foreground))",
+          color:
+            section?.layoutMode === "poster_list"
+              ? (slot.style?.color ?? "#ffffff")
+              : "hsl(var(--muted-foreground))",
           fontSize: 12,
         }}
       >
-        Section
+        {section?.layoutMode === "poster_list" ? "Poster list" : "Section"}
       </div>
     );
   }

@@ -9,6 +9,7 @@ import type {
   ManualOverride,
   BlobRecord,
   AppSettings,
+  AnalysisRecord,
 } from "@/models";
 
 class CPGDatabase extends Dexie {
@@ -21,6 +22,7 @@ class CPGDatabase extends Dexie {
   overrides!: Table<ManualOverride, string>;
   blobs!: Table<BlobRecord, string>;
   settings!: Table<AppSettings & { id: string }, string>;
+  analyses!: Table<AnalysisRecord, string>;
 
   constructor() {
     super("ContentPackGenerator");
@@ -37,6 +39,9 @@ class CPGDatabase extends Dexie {
     });
     this.version(2).stores({
       entities: "entityId, name, categoryMain, partnerFlag, status, sheetName",
+    });
+    this.version(3).stores({
+      analyses: "analysisId, createdAt, updatedAt, title, mode",
     });
   }
 }
@@ -71,5 +76,6 @@ export async function clearAll(): Promise<void> {
     db.jobs.clear(),
     db.overrides.clear(),
     db.blobs.clear(),
+    db.analyses.clear(),
   ]);
 }

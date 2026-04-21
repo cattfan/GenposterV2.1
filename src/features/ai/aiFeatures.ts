@@ -2,10 +2,13 @@
 // Thay thế server functions trong src/server/aiTemplate.ts (server fn không gọi được localhost).
 
 import { callAi } from "./aiClient";
+import { AI_POSTER_FONT_FAMILIES } from "@/features/editor/fonts";
 
 // ============================================================
 // 1. Generate page layout từ 1 ảnh
 // ============================================================
+
+export type LayoutFidelity = "strict" | "balanced" | "creative";
 
 const TEMPLATE_TOOL = {
   type: "function" as const,
@@ -25,23 +28,40 @@ const TEMPLATE_TOOL = {
           items: {
             type: "object",
             properties: {
+              name: { type: "string" },
               kind: { type: "string", enum: ["text", "image", "shape"] },
-              shapeKind: { type: "string", enum: ["rectangle", "circle", "badge"] },
+              shapeKind: { type: "string", enum: ["rectangle", "circle", "badge", "line", "divider"] },
               x: { type: "number" },
               y: { type: "number" },
               w: { type: "number" },
               h: { type: "number" },
+              z: { type: "number" },
+              rotation: { type: "number" },
               placeholder: { type: "string" },
               style: {
                 type: "object",
                 properties: {
                   fontSize: { type: "number" },
+                  fontFamily: { type: "string" },
                   fontWeight: { type: "number" },
                   color: { type: "string" },
                   fill: { type: "string" },
                   borderRadius: { type: "number" },
                   textAlign: { type: "string", enum: ["left", "center", "right"] },
                   textTransform: { type: "string", enum: ["none", "uppercase", "lowercase"] },
+                  lineHeight: { type: "number" },
+                  letterSpacing: { type: "number" },
+                  opacity: { type: "number" },
+                  overlayColor: { type: "string" },
+                  textShadow: { type: "string" },
+                  textStrokeColor: { type: "string" },
+                  textStrokeWidth: { type: "number" },
+                  padding: { type: "number" },
+                  fit: { type: "string", enum: ["cover", "contain", "stretch"] },
+                  shadowColor: { type: "string" },
+                  shadowBlur: { type: "number" },
+                  shadowX: { type: "number" },
+                  shadowY: { type: "number" },
                 },
               },
             },
@@ -54,30 +74,75 @@ const TEMPLATE_TOOL = {
   },
 };
 
-const LAYOUT_SYSTEM =
-  "Bạn là designer chuyển ảnh mẫu Instagram/Threads thành khung layout JSON. " +
-  "Quy tắc TUYỆT ĐỐI:\n" +
-  "1. CHỈ tạo khung + placeholder. KHÔNG bịa nội dung text thật.\n" +
-  "2. Mọi text phải là placeholder dạng {{tên}}, {{địa chỉ}}, {{giá}}, {{ngày}}, {{tiêu đề}}, {{mô tả}}.\n" +
-  "3. Toạ độ x/y/w/h là tỉ lệ 0..1 so với canvas portrait (cao gấp 1.25 rộng).\n" +
-  "4. Ảnh đại diện địa điểm dùng kind=shape + shapeKind=circle.\n" +
-  "5. Badge giá tiền dùng kind=shape + shapeKind=badge + fill cam '#F97316', kèm 1 text overlay '{{giá}}' màu trắng.\n" +
-  "6. Header ngày dùng shape badge fill đỏ '#dc2626' + text '{{tiêu đề}}' trắng.\n" +
-  "7. ƯU TIÊN layout gọn, cân đối, ít block: tối đa 12 slot, tối đa 3 nhóm item lặp, chừa margin ngoài 4%.\n" +
-  "8. KHÔNG xếp chồng chéo text/image. Mỗi block phải có khoảng thở rõ ràng; tránh item rơi ra mép dưới canvas.\n" +
-  "9. Nếu ảnh mẫu quá rối, hãy đơn giản hoá về bố cục editorial sạch thay vì copy y nguyên.\n" +
-  "10. Trả về qua tool build_layout, KHÔNG nói gì thêm.";
+function fidelityInstruction(fidelity: LayoutFidelity): string {
+  switch (fidelity) {
+    case "strict":
+      return "Ưu tiên bám sát bố cục, nhịp ảnh, số cụm text, tỷ lệ tiêu đề và vị trí các ảnh phụ giống ảnh mẫu nhất có thể. Chỉ đơn giản hóa khi chi tiết thật sự không đọc được.";
+    case "creative":
+      return "Giữ tinh thần ảnh mẫu nhưng được phép sáng tạo nhẹ để layout sạch hơn, miễn vẫn nhận ra cùng visual language.";
+    case "balanced":
+    default:
+      return "Giữ bố cục và visual language gần ảnh mẫu, nhưng vẫn tối ưu để template dễ chỉnh và dễ bind dữ liệu.";
+  }
+}
 
-export async function aiGenerateTemplateFromImage(imageDataUrl: string) {
+function buildLayoutSystem(input?: {
+  fidelity?: LayoutFidelity;
+  customInstructions?: string;
+  roleHint?: string;
+}) {
+  const fidelity = input?.fidelity ?? "strict";
+  const customInstructions = input?.customInstructions?.trim();
+  const roleHint = input?.roleHint?.trim();
+
+  return (
+    "Bạn là designer chuyển ảnh mẫu Instagram/Threads thành khung layout JSON có thể chỉnh sửa. " +
+    "Mục tiêu là bám sát visual của ảnh mẫu, không tự động biến mọi thứ thành layout generic. " +
+    "Quy tắc TUYỆT ĐỐI:\n" +
+    "1. CHỈ tạo khung + placeholder. KHÔNG bịa nội dung text thật.\n" +
+    "2. Mọi text phải là placeholder có nghĩa như {{title}}, {{eyebrow}}, {{subtitle}}, {{section_title_1}}, {{items_group_1}}, {{items_group_2}}, {{cta}}, {{price}}.\n" +
+    "3. Toạ độ x/y/w/h là tỉ lệ 0..1 so với canvas portrait 1080x1350.\n" +
+    "4. Nếu ảnh mẫu là poster có 1 ảnh nền full-page tối, hãy dùng 1 image slot phủ toàn canvas + overlayColor để giữ đúng cảm giác nền tối.\n" +
+    "5. Ảnh phụ/thumbnail nên dùng kind=image với borderRadius bo góc 20-40. Chỉ dùng circle khi ảnh mẫu thực sự tròn.\n" +
+    "6. Được phép dùng 12-20 slot nếu cần để bám mẫu. Đừng ép đơn giản hóa quá mức khi ảnh mẫu có nhiều cụm text/ảnh.\n" +
+    "7. Với poster list như du lịch/ăn uống/dịch vụ, ưu tiên 2-4 text block lớn kiểu {{items_group_1}}, {{items_group_2}} thay vì quá nhiều text line nhỏ lẻ. Các block cùng một cụm phải dùng numbering nhất quán như {{section_title_1}} + {{items_group_1}} + {{hero_image_1}}.\n" +
+    "8. Hãy tận dụng z, opacity, overlayColor, textShadow, textStrokeColor/textStrokeWidth, lineHeight, letterSpacing, padding, shadow và rotation khi ảnh mẫu có các hiệu ứng đó.\n" +
+    "9. Với title nổi bật kiểu chữ vàng/cam trên nền tối, phải encode rõ style tương ứng để template preview nhìn gần mẫu.\n" +
+    "10. Không tự xoá các ảnh nổi bật thả quanh canvas nếu đó là đặc trưng chính của bố cục. Giữ nhịp collage/editorial của ảnh mẫu.\n" +
+    `11. Font family chỉ được chọn trong danh sách sau: ${AI_POSTER_FONT_FAMILIES.join(", ")}.\n` +
+    "12. Nếu ảnh mẫu giống poster bullet list, đừng biến thành layout card/service generic. Hãy giữ title, image holder và các nhóm list như mắt người thường nhìn thấy.\n" +
+    "13. KHÔNG trả lời bằng văn xuôi. Chỉ gọi tool build_layout.\n" +
+    `14. Mức ưu tiên hiện tại: ${fidelityInstruction(fidelity)}\n` +
+    (roleHint ? `15. Hint vai trò page: ${roleHint}\n` : "") +
+    (customInstructions ? `16. Yêu cầu thêm từ người dùng: ${customInstructions}\n` : "")
+  );
+}
+
+export async function aiGenerateTemplateFromImage(input: {
+  imageDataUrl: string;
+  fidelity?: LayoutFidelity;
+  customInstructions?: string;
+}) {
   const result = await callAi({
     useVisionModel: true,
     messages: [
-      { role: "system", content: LAYOUT_SYSTEM },
+      {
+        role: "system",
+        content: buildLayoutSystem({
+          fidelity: input.fidelity,
+          customInstructions: input.customInstructions,
+        }),
+      },
       {
         role: "user",
         content: [
-          { type: "text", text: "Phân tích ảnh và sinh khung layout JSON theo tool build_layout." },
-          { type: "image_url", image_url: { url: imageDataUrl } },
+          {
+            type: "text",
+            text:
+              "Phân tích ảnh và sinh khung layout JSON theo tool build_layout. " +
+              "Ưu tiên giữ đúng nhịp thị giác, khoảng cách, thứ bậc title và vị trí ảnh phụ của mẫu.",
+          },
+          { type: "image_url", image_url: { url: input.imageDataUrl } },
         ],
       },
     ],
@@ -278,17 +343,30 @@ async function runWithLimit<T, R>(
 }
 
 async function genOnePageWithHint(
-  imageDataUrl: string,
-  roleHint: string,
+  input: {
+    imageDataUrl: string;
+    roleHint: string;
+    fidelity?: LayoutFidelity;
+    customInstructions?: string;
+  },
 ): Promise<{ ok: true; layoutJson: string } | { ok: false; error: string }> {
+  const { imageDataUrl, roleHint, fidelity, customInstructions } = input;
   const result = await callAi({
     useVisionModel: true,
     messages: [
-      { role: "system", content: LAYOUT_SYSTEM + `\n8. Hint vai trò page: ${roleHint}` },
+      {
+        role: "system",
+        content: buildLayoutSystem({ fidelity, customInstructions, roleHint }),
+      },
       {
         role: "user",
         content: [
-          { type: "text", text: `Đây là page có vai trò: ${roleHint}. Sinh khung layout.` },
+          {
+            type: "text",
+            text:
+              `Đây là page có vai trò: ${roleHint}. Sinh khung layout bám sát ảnh mẫu. ` +
+              "Nếu ảnh mẫu là poster list, hãy giữ các cụm danh sách và các ảnh phụ floating quanh canvas.",
+          },
           { type: "image_url", image_url: { url: imageDataUrl } },
         ],
       },
@@ -305,6 +383,8 @@ async function genOnePageWithHint(
 export async function aiGenerateComboFromImages(input: {
   images: Array<{ dataUrl: string }>;
   packNameHint?: string;
+  customInstructions?: string;
+  layoutFidelity?: LayoutFidelity;
   onProgress?: (step: string, progress: number) => void;
 }): Promise<ComboResult | { ok: false; error: string }> {
   if (input.images.length === 0) return { ok: false, error: "Cần ít nhất 1 ảnh" };
@@ -319,6 +399,7 @@ export async function aiGenerateComboFromImages(input: {
       text:
         `Có ${input.images.length} ảnh (index 0..${input.images.length - 1}). ` +
         (input.packNameHint ? `Pack hint: "${input.packNameHint}". ` : "") +
+        (input.customInstructions ? `Yêu cầu thêm: "${input.customInstructions}". ` : "") +
         "Phân loại + suy ra packMeta.",
     },
   ];
@@ -333,7 +414,8 @@ export async function aiGenerateComboFromImages(input: {
         role: "system",
         content:
           "Bạn nhìn tổng thể nhiều ảnh content pack du lịch/ẩm thực → suy ra vai trò mỗi page và pack metadata. " +
-          "Quy tắc: ảnh đầu thường cover; ảnh có 'NGÀY X'/lịch trình là day; transport/homestay tổng hợp là utilities; CTA cuối là outro.",
+          "Quy tắc: ảnh đầu thường cover; ảnh có 'NGÀY X'/lịch trình là day; transport/homestay tổng hợp là utilities; CTA cuối là outro. " +
+          "Nếu bộ ảnh có visual language rất đồng nhất, hãy giữ naming và phân vai trò đủ cụ thể để các page sau dựng lại được gần ảnh mẫu.",
       },
       { role: "user", content: userContent },
     ],
@@ -386,15 +468,20 @@ export async function aiGenerateComboFromImages(input: {
   const layouts = await runWithLimit(classified, 3, async (c) => {
       const roleHint =
       c.role === "cover"
-        ? "Trang bìa: 1 hero image lớn, tiêu đề lớn, sub-title ngắn, tối đa 5 slot."
+        ? "Trang bìa / poster hero: 1 ảnh nền lớn full-page, eyebrow nhỏ, title lớn nổi bật, có thể có subtitle ngắn. Giữ đúng cảm giác poster của ảnh mẫu."
         : c.role === "utilities"
-          ? "Trang tiện ích: danh sách ngắn 3-4 item card, canh hàng thẳng, tránh nhồi quá nhiều block."
+          ? "Trang tiện ích / directory poster: nền ảnh full-page tối, title lớn ở top-center, 2-4 cụm bullet list, 3-4 ảnh bo góc floating quanh canvas, ưu tiên rất giống ảnh mẫu."
           : c.role === "day"
-            ? `Trang lịch trình Ngày ${c.dayNumber ?? "?"}: badge header đỏ, 3-4 item card rõ ràng có ảnh tròn + tên + địa chỉ + badge giá cam, ưu tiên zigzag sạch.`
+            ? `Trang lịch trình / quán ăn Ngày ${c.dayNumber ?? "?"}: poster nền full-page, title mạnh, nhiều cụm list theo bữa hoặc theo block, ảnh minh họa bo góc xen kẽ, ưu tiên bám sát mẫu thay vì generic card list.`
             : c.role === "outro"
               ? "Trang kết / CTA: ít thành phần, tập trung 1 lời kêu gọi hành động rõ ràng."
-              : "Page nội dung tự do nhưng tối đa 8 slot, bố cục sạch và dễ bind dữ liệu.";
-    const r = await genOnePageWithHint(input.images[c.index].dataUrl, roleHint);
+              : "Page nội dung editorial: có thể dùng nền ảnh lớn, title nổi, vài cụm text và ảnh phụ nổi bật. Đừng ép thành layout generic nếu mẫu có cá tính rõ.";
+    const r = await genOnePageWithHint({
+      imageDataUrl: input.images[c.index].dataUrl,
+      roleHint,
+      fidelity: input.layoutFidelity,
+      customInstructions: input.customInstructions,
+    });
     done++;
     input.onProgress?.(
       `Dựng ${done}/${classified.length}...`,

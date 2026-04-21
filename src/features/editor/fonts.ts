@@ -13,19 +13,34 @@ export const FONTS: FontDef[] = [
   // Sans (Vietnamese-ready)
   { family: "Be Vietnam Pro", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700, 800, 900], italic: true },
   { family: "Inter", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700, 800, 900], italic: true },
+  { family: "Nunito", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700, 800, 900], italic: true },
+  { family: "Nunito Sans", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700, 800, 900], italic: true },
   { family: "Manrope", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700, 800] },
   { family: "Plus Jakarta Sans", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700, 800], italic: true },
   { family: "DM Sans", category: "Sans", vietnamese: true, weights: [400, 500, 700, 900], italic: true },
+  { family: "Poppins", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700, 800, 900], italic: true },
+  { family: "Montserrat", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700, 800, 900], italic: true },
+  { family: "Quicksand", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700], italic: false },
+  { family: "Signika", category: "Sans", vietnamese: true, weights: [300, 400, 500, 600, 700], italic: false },
+  { family: "Urbanist", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700, 800, 900], italic: true },
   { family: "Lexend", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700, 800, 900] },
   { family: "Outfit", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700, 800, 900] },
   { family: "Sora", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700, 800] },
   { family: "Space Grotesk", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700] },
+  { family: "Baloo 2", category: "Display", vietnamese: true, weights: [400, 500, 600, 700, 800] },
+  { family: "Mali", category: "Script", vietnamese: true, weights: [300, 400, 500, 600, 700], italic: true },
   // Sans bold/poster
   { family: "Archivo Black", category: "Display", vietnamese: true, weights: [400] },
   { family: "Anton", category: "Display", vietnamese: true, weights: [400] },
   { family: "Barlow Condensed", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700, 800, 900], italic: true },
   { family: "Bebas Neue", category: "Display", vietnamese: false, weights: [400] },
   { family: "Oswald", category: "Sans", vietnamese: true, weights: [400, 500, 600, 700] },
+  { family: "Paytone One", category: "Display", vietnamese: false, weights: [400] },
+  { family: "Fredoka", category: "Display", vietnamese: false, weights: [300, 400, 500, 600, 700] },
+  { family: "Coiny", category: "Display", vietnamese: false, weights: [400] },
+  { family: "Lilita One", category: "Display", vietnamese: false, weights: [400] },
+  { family: "Rowdies", category: "Display", vietnamese: false, weights: [300, 400, 700] },
+  { family: "Rubik Bubbles", category: "Display", vietnamese: false, weights: [400] },
   // Serif
   { family: "Playfair Display", category: "Serif", vietnamese: true, weights: [400, 500, 600, 700, 800, 900], italic: true },
   { family: "Lora", category: "Serif", vietnamese: true, weights: [400, 500, 600, 700], italic: true },
@@ -49,6 +64,8 @@ export const FONTS: FontDef[] = [
 ];
 
 export const FONT_CATEGORIES: FontCategory[] = ["Sans", "Serif", "Display", "Script", "Mono"];
+
+export const AI_POSTER_FONT_FAMILIES = FONTS.map((font) => font.family);
 
 /** Build URL Google Fonts duy nhất, gộp tất cả family với weight + italic đầy đủ. */
 export function buildGoogleFontsUrl(): string {

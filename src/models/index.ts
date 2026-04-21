@@ -187,7 +187,7 @@ export interface FilterRule {
   value: string | number | string[];
 }
 
-export type SectionLayoutMode = "stack" | "zigzag" | "grid";
+export type SectionLayoutMode = "stack" | "zigzag" | "grid" | "poster_list";
 
 export interface Section {
   sectionId: ID;
@@ -390,4 +390,204 @@ export interface AppSettings {
   defaultCanvas: CanvasSize;
   theme?: "light" | "dark";
   ai?: AiProviderConfig;
+}
+
+export type AnalysisMode = "quick" | "deep_draft" | "draft_only";
+
+export type AnalyzedPageType =
+  | "cover"
+  | "board"
+  | "mixed_board"
+  | "itinerary"
+  | "checklist"
+  | "service_directory"
+  | "recap"
+  | "closing"
+  | "unknown";
+
+export type CompatibilityLevel =
+  | "very_compatible"
+  | "partial"
+  | "significant_missing"
+  | "not_ready";
+
+export type RequirementKind = "data_field" | "asset" | "structural" | "manual_literal";
+
+export type GapCategory = "field" | "asset" | "structure" | "manual" | "risk";
+
+export type SheetSemanticProfile =
+  | "food"
+  | "cafe"
+  | "service"
+  | "homestay"
+  | "checkin"
+  | "mixed"
+  | "other";
+
+export type GapLevel = "have" | "mappable" | "missing_required" | "missing_optional" | "risk";
+
+export type DraftReadiness = "ready" | "needs_data" | "skeleton_only";
+
+export interface AnalyzedUiRegion {
+  regionId: ID;
+  kind:
+    | "cover"
+    | "background"
+    | "title"
+    | "subtitle"
+    | "panel"
+    | "section"
+    | "bullet_list"
+    | "image_slot"
+    | "price_badge"
+    | "item_list"
+    | "cta"
+    | "other";
+  label: string;
+  description: string;
+  estimatedItems?: number;
+}
+
+export interface InferredDataRequirement {
+  requirementId: ID;
+  fieldKey: string;
+  label: string;
+  scope: "pack" | "page" | "section" | "item" | "asset";
+  required: boolean;
+  kind?: RequirementKind;
+  bindCandidate?: string;
+  bindCandidates?: string[];
+  examples?: string[];
+  notes?: string;
+  acceptsManualInput?: boolean;
+  minRecords?: number;
+  assetRoleHint?: string;
+  structuralHint?: string;
+  confidence?: number;
+}
+
+export interface GapItem {
+  gapId: ID;
+  level: GapLevel;
+  fieldKey: string;
+  message: string;
+  category?: GapCategory;
+  pageIndex?: number;
+  sectionKey?: string;
+  sheetName?: string;
+}
+
+export interface SheetCompatibilityDetail {
+  sheetName: string;
+  score: number;
+  label: CompatibilityLevel;
+  profileKind?: SheetSemanticProfile;
+  availableFields: string[];
+  mappableFields: string[];
+  missingRequired: string[];
+  missingOptional: string[];
+  assetCoverage: string[];
+  sectionCoverage: string[];
+  structuralCoverage?: string[];
+  reasons?: string[];
+  reasonSummary?: string;
+  notes: string[];
+}
+
+export interface CompatibilityReport {
+  score: number;
+  label: CompatibilityLevel;
+  bestMatchSheet?: string;
+  sheets: SheetCompatibilityDetail[];
+  groups: Record<GapLevel, GapItem[]>;
+  reasonSummary?: string;
+}
+
+export interface DraftPageSuggestion {
+  pageTemplateId: ID;
+  pageIndex: number;
+  pageName: string;
+  pageType: AnalyzedPageType;
+  readiness: DraftReadiness;
+  readinessLabel: string;
+  sectionCount: number;
+  estimatedItemCount: number;
+  autoBindingCount: number;
+  warnings: string[];
+}
+
+export interface DraftTemplateSuggestion {
+  packTemplate?: PackTemplate;
+  pageTemplates: PageTemplate[];
+  suggestedBindings: Array<{
+    pageTemplateId: ID;
+    slotId: ID;
+    bindingPath: string;
+    confidence: number;
+  }>;
+  readiness?: DraftReadiness;
+  readinessLabel?: string;
+  pageDrafts?: DraftPageSuggestion[];
+  warnings: string[];
+}
+
+export interface AnalyzedPage {
+  pageIndex: number;
+  pageRole: string;
+  pageType: AnalyzedPageType;
+  suggestedName: string;
+  summary: string;
+  layoutDensity: "low" | "medium" | "high";
+  numberOfSections: number;
+  estimatedItemCount: number;
+  hasMainTitle: boolean;
+  hasSubtitle: boolean;
+  hasBackgroundImage: boolean;
+  hasPanel: boolean;
+  hasSectionImages: boolean;
+  hasListRepeater: boolean;
+  hasSlotRepeater: boolean;
+  hasPriceBadge: boolean;
+  hasCTA: boolean;
+  confidenceScore: number;
+  uiRegions: AnalyzedUiRegion[];
+  requiredFields: InferredDataRequirement[];
+  compatibility: CompatibilityReport;
+  layoutJson?: string;
+}
+
+export interface AnalyzedPack {
+  title: string;
+  mode: AnalysisMode;
+  imageCount: number;
+  summary: string;
+  predictedPurpose?: string;
+  predictedGoal?: string;
+  predictedTone?: string;
+  predictedCta?: string;
+  structureSummary: string[];
+  pages: AnalyzedPage[];
+  compatibility: CompatibilityReport;
+  warnings: string[];
+  uiBlueprint: string[];
+  dataBlueprint: InferredDataRequirement[];
+  dataBlueprintGroups?: {
+    pageLevel: InferredDataRequirement[];
+    sectionLevel: InferredDataRequirement[];
+    itemLevel: InferredDataRequirement[];
+    assetLevel: InferredDataRequirement[];
+  };
+}
+
+export interface AnalysisRecord {
+  analysisId: ID;
+  title: string;
+  mode: AnalysisMode;
+  imageBlobKeys: string[];
+  imageNames: string[];
+  imageOrder: string[];
+  pack: AnalyzedPack;
+  draft?: DraftTemplateSuggestion;
+  createdAt: number;
+  updatedAt: number;
 }

@@ -12,6 +12,7 @@ import {
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
+  Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { seedDemo, isSeeded } from "@/storage/seed";
@@ -26,6 +27,7 @@ const NAV = [
   { to: "/reports", label: "Báo cáo & Caption", icon: FileText },
   { to: "/history", label: "Lịch sử", icon: History },
   { to: "/settings", label: "Cài đặt", icon: Settings },
+  { to: "/analysis", label: "Phân tích bộ ảnh", icon: Search },
 ] as const;
 
 const STORAGE_KEY = "appShell.collapsed";
@@ -103,9 +105,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <nav className={cn("flex-1 overflow-y-auto py-4 space-y-1", collapsed ? "px-2" : "px-3")}>
           {NAV.map((item) => {
             const active =
-              item.to === "/"
-                ? location.pathname === "/"
-                : location.pathname.startsWith(item.to);
+              item.to === "/" ? location.pathname === "/" : location.pathname.startsWith(item.to);
             const Icon = item.icon;
             return (
               <Link

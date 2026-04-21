@@ -15,6 +15,11 @@ import type {
 import { selectForSection } from "../selection/engine";
 import { pickAssetForEntity } from "../binding/assetSafe";
 import type { ScoreContext } from "../scoring/score";
+import {
+  allocateEntityBindingsForTemplate,
+  buildEntityAllocationOrder,
+} from "./entityBindAllocator";
+import { buildEntityBindingTargets } from "../binding/cardRepeater";
 
 export type PackBindMode = "section" | "one-entity-per-pack" | "one-entity-per-page";
 
@@ -30,6 +35,8 @@ export interface GenerateInput {
   entityPool?: Entity[];
   /** Bind override per-page-template designer set trong UI. */
   bindOverrides?: Record<string, Record<string, string | undefined>>;
+  partnerQuotaPerPage?: number;
+  prioritizePartner?: boolean;
 }
 
 export function generatePackJob(input: GenerateInput): GenerationJob {
@@ -42,11 +49,21 @@ export function generatePackJob(input: GenerateInput): GenerationJob {
     mode = "section",
     entityPool = [],
     bindOverrides = {},
+    partnerQuotaPerPage = 0,
+    prioritizePartner = true,
   } = input;
 
   // === Branch: bind theo entity (không section selection) ===
   if (mode === "one-entity-per-pack" || mode === "one-entity-per-page") {
-    return generateEntityBindJob(pack, pageTemplates, entityPool, mode, bindOverrides);
+    return generateEntityBindJob(
+      pack,
+      pageTemplates,
+      entityPool,
+      mode,
+      bindOverrides,
+      partnerQuotaPerPage,
+      prioritizePartner,
+    );
   }
 
   const ctx: ScoreContext = {
@@ -109,12 +126,7 @@ export function generatePackJob(input: GenerateInput): GenerationJob {
       if (heroSlot) {
         const partnerEnt = entities.find((e) => e.partnerFlag) ?? entities[0];
         if (partnerEnt) {
-          const { asset } = pickAssetForEntity(
-            partnerEnt,
-            assets,
-            heroSlot.allowedAssetRoles,
-            ctx,
-          );
+          const { asset } = pickAssetForEntity(partnerEnt, assets, heroSlot.allowedAssetRoles, ctx);
           if (asset) {
             items.push({
               slotId: heroSlot.slotId,
@@ -168,6 +180,8 @@ function generateEntityBindJob(
   entityPool: Entity[],
   mode: "one-entity-per-pack" | "one-entity-per-page",
   bindOverrides: Record<string, Record<string, string | undefined>>,
+  partnerQuotaPerPage: number,
+  prioritizePartner: boolean,
 ): GenerationJob {
   const pageMap = new Map(pageTemplates.map((p) => [p.pageTemplateId, p]));
   const renderedPages: RenderedPage[] = [];
@@ -186,19 +200,51 @@ function generateEntityBindJob(
     };
   }
 
+  const applyPageBindOverrides = (
+    template: PageTemplate,
+    overridesForPage: Record<string, string | undefined> | undefined,
+  ): PageTemplate => {
+    if (!overridesForPage || Object.keys(overridesForPage).length === 0) return template;
+    return {
+      ...template,
+      slots: template.slots.map((slot) => {
+        if (!(slot.slotId in overridesForPage)) return slot;
+        const value = overridesForPage[slot.slotId];
+        return { ...slot, bindingPath: value ? value : undefined };
+      }),
+    };
+  };
+
+  const randomizedEntityOrder = buildEntityAllocationOrder(entityPool, prioritizePartner);
+  const batchState = { usedEntityIds: new Set<string>() };
   let pageIndex = 0;
   const pushPage = (tpl: PageTemplate, ent: Entity, perPackIdx: number) => {
     const ov = bindOverrides[tpl.pageTemplateId];
+    const effectiveTemplate = applyPageBindOverrides(tpl, ov);
+    const targetCount = buildEntityBindingTargets(effectiveTemplate, entityPool).length;
+    const shouldPinOwner = mode === "one-entity-per-page" || targetCount <= 1;
+    const allocation = allocateEntityBindingsForTemplate({
+      template: effectiveTemplate,
+      orderedEntities: [
+        ent,
+        ...randomizedEntityOrder.filter((entity) => entity.entityId !== ent.entityId),
+      ],
+      pageOwner: shouldPinOwner ? ent : undefined,
+      partnerQuota: partnerQuotaPerPage,
+      prioritizePartner,
+      batchState,
+    });
     const slugEnt = slugify(ent.name);
+    const healthScore = allocation.warnings.length > 0 ? 80 : 100;
     renderedPages.push({
       pageIndex,
       pageFile: `${slugEnt}-p${perPackIdx + 1}-${slugify(tpl.name)}.png`,
       pageTemplateId: tpl.pageTemplateId,
-      state: "accepted",
+      state: allocation.warnings.length > 0 ? "needs_fix" : "accepted",
       selected: true,
-      healthScore: 100,
-      warnings: [],
-      items: [],
+      healthScore,
+      warnings: allocation.warnings,
+      items: allocation.items,
       renderedAt: Date.now(),
       entityId: ent.entityId,
       entityName: ent.name,
@@ -238,9 +284,7 @@ function computeHealth(tpl: PageTemplate, items: RenderedItem[], warnings: strin
     if (count < section.minItems) score -= 20;
   }
   // Trừ nếu thiếu asset cho item cần ảnh
-  const missingAssets = items.filter(
-    (i) => i.sectionItemId && !i.assetId,
-  ).length;
+  const missingAssets = items.filter((i) => i.sectionItemId && !i.assetId).length;
   score -= missingAssets * 10;
   return Math.max(0, Math.min(100, score));
 }
