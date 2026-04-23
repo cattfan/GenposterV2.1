@@ -20,6 +20,7 @@ import { toast } from "sonner";
 
 const NAV = [
   { to: "/", label: "Trang chủ", icon: Home },
+  { to: "/designs", label: "Designs", icon: Palette },
   { to: "/templates", label: "Page Templates", icon: Layers },
   { to: "/packs", label: "Pack Templates", icon: Package },
   { to: "/data", label: "Dữ liệu", icon: Database },

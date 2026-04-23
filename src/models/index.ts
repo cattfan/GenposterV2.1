@@ -217,6 +217,222 @@ export interface CanvasSize {
   backgroundImage?: string;
 }
 
+export type EditorMode = "design" | "template" | "generated";
+
+export interface DataBindingRef {
+  source: "legacy_template" | "entity" | "asset" | "section" | "manual";
+  path: string;
+  label?: string;
+  fallbackText?: string;
+  fallbackImage?: string;
+  meta?: Record<string, unknown>;
+}
+
+export interface DesignGuide {
+  guideId: ID;
+  axis: "x" | "y";
+  value: number;
+  locked?: boolean;
+}
+
+export interface ElementStyle extends SlotStyle {
+  strokeLinecap?: "butt" | "round" | "square";
+  strokeLinejoin?: "miter" | "round" | "bevel";
+  tint?: string;
+  maskShape?: "rectangle" | "circle" | "triangle";
+}
+
+export interface DesignTextRun {
+  runId?: ID;
+  start: number;
+  end: number;
+  style: Partial<ElementStyle>;
+}
+
+export type DesignElementKind =
+  | "text"
+  | "image"
+  | "shape"
+  | "icon"
+  | "svg"
+  | "group"
+  | "frame"
+  | "table";
+
+export interface DesignElementBase {
+  elementId: ID;
+  pageId: ID;
+  parentId?: ID;
+  kind: DesignElementKind;
+  name?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation?: number;
+  zIndex?: number;
+  locked?: boolean;
+  hidden?: boolean;
+  style?: ElementStyle;
+  binding?: DataBindingRef;
+  assetId?: ID;
+  children?: ID[];
+  meta?: Record<string, unknown>;
+}
+
+export interface DesignTextElement extends DesignElementBase {
+  kind: "text";
+  text: string;
+  textRuns?: DesignTextRun[];
+}
+
+export interface DesignImageElement extends DesignElementBase {
+  kind: "image";
+  src?: string;
+  crop?: ImageCrop;
+}
+
+export interface DesignShapeElement extends DesignElementBase {
+  kind: "shape";
+  shapeKind?: NonNullable<Slot["shapeKind"]>;
+  src?: string;
+  crop?: ImageCrop;
+  text?: string;
+}
+
+export interface DesignIconElement extends DesignElementBase {
+  kind: "icon";
+  iconName: string;
+  svgContent?: string;
+}
+
+export interface DesignSvgElement extends DesignElementBase {
+  kind: "svg";
+  svgContent: string;
+}
+
+export interface DesignGroupElement extends DesignElementBase {
+  kind: "group";
+}
+
+export interface DesignFrameElement extends DesignElementBase {
+  kind: "frame";
+  background?: string;
+  padding?: number;
+}
+
+export interface DesignTableCell {
+  cellId: ID;
+  text?: string;
+  colSpan?: number;
+  rowSpan?: number;
+  style?: Partial<ElementStyle>;
+}
+
+export interface DesignTableElement extends DesignElementBase {
+  kind: "table";
+  columns: number;
+  rows: number;
+  cells: DesignTableCell[];
+}
+
+export type DesignElement =
+  | DesignTextElement
+  | DesignImageElement
+  | DesignShapeElement
+  | DesignIconElement
+  | DesignSvgElement
+  | DesignGroupElement
+  | DesignFrameElement
+  | DesignTableElement;
+
+export interface DesignPage {
+  pageId: ID;
+  name: string;
+  width: number;
+  height: number;
+  background?: string;
+  backgroundImage?: string;
+  safeZone?: {
+    top: number;
+    right: number;
+    bottom: number;
+    left: number;
+  };
+  guides?: DesignGuide[];
+}
+
+export type AssetItemKind = "image" | "svg" | "icon" | "logo";
+
+export interface AssetItem {
+  assetId: ID;
+  name: string;
+  kind: AssetItemKind;
+  sourceType: "local" | "url" | "inline";
+  sourceValue: string;
+  blobKey?: string;
+  mime?: string;
+  width?: number;
+  height?: number;
+  tags?: string[];
+  thumbnail?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface FontAsset {
+  fontAssetId: ID;
+  family: string;
+  sourceValue: string;
+  blobKey?: string;
+  format?: string;
+  weight?: number;
+  style?: "normal" | "italic";
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface BrandStylePreset {
+  presetId: ID;
+  name: string;
+  target: "text" | "shape" | "frame";
+  style: Partial<ElementStyle>;
+}
+
+export interface BrandKit {
+  brandKitId: ID;
+  name: string;
+  colors: string[];
+  logoAssetIds: ID[];
+  fontAssetIds: ID[];
+  presets: BrandStylePreset[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DesignDocument {
+  designDocumentId: ID;
+  name: string;
+  pages: DesignPage[];
+  elements: DesignElement[];
+  assetIds?: ID[];
+  brandKitId?: ID;
+  activePageId?: ID;
+  mode: EditorMode;
+  sourcePageTemplateId?: ID;
+  sourceJobId?: ID;
+  documentSettings?: {
+    gridSize: number;
+    snapToGrid: boolean;
+    showGrid: boolean;
+    showSafeZone: boolean;
+    showGuides: boolean;
+  };
+  createdAt: number;
+  updatedAt: number;
+  version: 1;
+}
+
 export interface CardGroupConfig {
   /** ID của group (Slot.groupId) sẽ được lặp. */
   groupId: ID;

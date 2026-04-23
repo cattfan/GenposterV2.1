@@ -3,6 +3,10 @@ import type {
   Project,
   Entity,
   Asset,
+  AssetItem,
+  BrandKit,
+  DesignDocument,
+  FontAsset,
   PageTemplate,
   PackTemplate,
   GenerationJob,
@@ -16,6 +20,10 @@ class CPGDatabase extends Dexie {
   projects!: Table<Project, string>;
   entities!: Table<Entity, string>;
   assets!: Table<Asset, string>;
+  assetLibrary!: Table<AssetItem, string>;
+  brandKits!: Table<BrandKit, string>;
+  designDocuments!: Table<DesignDocument, string>;
+  fontAssets!: Table<FontAsset, string>;
   pageTemplates!: Table<PageTemplate, string>;
   packTemplates!: Table<PackTemplate, string>;
   jobs!: Table<GenerationJob, string>;
@@ -42,6 +50,12 @@ class CPGDatabase extends Dexie {
     });
     this.version(3).stores({
       analyses: "analysisId, createdAt, updatedAt, title, mode",
+    });
+    this.version(4).stores({
+      assetLibrary: "assetId, name, kind, updatedAt",
+      brandKits: "brandKitId, name, updatedAt",
+      designDocuments: "designDocumentId, name, updatedAt, mode, sourcePageTemplateId",
+      fontAssets: "fontAssetId, family, updatedAt",
     });
   }
 }
@@ -71,6 +85,10 @@ export async function clearAll(): Promise<void> {
     db.projects.clear(),
     db.entities.clear(),
     db.assets.clear(),
+    db.assetLibrary.clear(),
+    db.brandKits.clear(),
+    db.designDocuments.clear(),
+    db.fontAssets.clear(),
     db.pageTemplates.clear(),
     db.packTemplates.clear(),
     db.jobs.clear(),

@@ -15,10 +15,12 @@ import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as PacksRouteImport } from './routes/packs'
 import { Route as HistoryRouteImport } from './routes/history'
 import { Route as GenerateRouteImport } from './routes/generate'
+import { Route as DesignsRouteImport } from './routes/designs'
 import { Route as DataRouteImport } from './routes/data'
 import { Route as AnalysisRouteImport } from './routes/analysis'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as TemplatesIdEditRouteImport } from './routes/templates.$id.edit'
+import { Route as DesignsIdEditRouteImport } from './routes/designs.$id.edit'
 
 const TemplatesRoute = TemplatesRouteImport.update({
   id: '/templates',
@@ -50,6 +52,11 @@ const GenerateRoute = GenerateRouteImport.update({
   path: '/generate',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DesignsRoute = DesignsRouteImport.update({
+  id: '/designs',
+  path: '/designs',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DataRoute = DataRouteImport.update({
   id: '/data',
   path: '/data',
@@ -70,29 +77,38 @@ const TemplatesIdEditRoute = TemplatesIdEditRouteImport.update({
   path: '/$id/edit',
   getParentRoute: () => TemplatesRoute,
 } as any)
+const DesignsIdEditRoute = DesignsIdEditRouteImport.update({
+  id: '/$id/edit',
+  path: '/$id/edit',
+  getParentRoute: () => DesignsRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/analysis': typeof AnalysisRoute
   '/data': typeof DataRoute
+  '/designs': typeof DesignsRouteWithChildren
   '/generate': typeof GenerateRoute
   '/history': typeof HistoryRoute
   '/packs': typeof PacksRoute
   '/reports': typeof ReportsRoute
   '/settings': typeof SettingsRoute
   '/templates': typeof TemplatesRouteWithChildren
+  '/designs/$id/edit': typeof DesignsIdEditRoute
   '/templates/$id/edit': typeof TemplatesIdEditRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/analysis': typeof AnalysisRoute
   '/data': typeof DataRoute
+  '/designs': typeof DesignsRouteWithChildren
   '/generate': typeof GenerateRoute
   '/history': typeof HistoryRoute
   '/packs': typeof PacksRoute
   '/reports': typeof ReportsRoute
   '/settings': typeof SettingsRoute
   '/templates': typeof TemplatesRouteWithChildren
+  '/designs/$id/edit': typeof DesignsIdEditRoute
   '/templates/$id/edit': typeof TemplatesIdEditRoute
 }
 export interface FileRoutesById {
@@ -100,12 +116,14 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/analysis': typeof AnalysisRoute
   '/data': typeof DataRoute
+  '/designs': typeof DesignsRouteWithChildren
   '/generate': typeof GenerateRoute
   '/history': typeof HistoryRoute
   '/packs': typeof PacksRoute
   '/reports': typeof ReportsRoute
   '/settings': typeof SettingsRoute
   '/templates': typeof TemplatesRouteWithChildren
+  '/designs/$id/edit': typeof DesignsIdEditRoute
   '/templates/$id/edit': typeof TemplatesIdEditRoute
 }
 export interface FileRouteTypes {
@@ -114,36 +132,42 @@ export interface FileRouteTypes {
     | '/'
     | '/analysis'
     | '/data'
+    | '/designs'
     | '/generate'
     | '/history'
     | '/packs'
     | '/reports'
     | '/settings'
     | '/templates'
+    | '/designs/$id/edit'
     | '/templates/$id/edit'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/analysis'
     | '/data'
+    | '/designs'
     | '/generate'
     | '/history'
     | '/packs'
     | '/reports'
     | '/settings'
     | '/templates'
+    | '/designs/$id/edit'
     | '/templates/$id/edit'
   id:
     | '__root__'
     | '/'
     | '/analysis'
     | '/data'
+    | '/designs'
     | '/generate'
     | '/history'
     | '/packs'
     | '/reports'
     | '/settings'
     | '/templates'
+    | '/designs/$id/edit'
     | '/templates/$id/edit'
   fileRoutesById: FileRoutesById
 }
@@ -151,6 +175,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AnalysisRoute: typeof AnalysisRoute
   DataRoute: typeof DataRoute
+  DesignsRoute: typeof DesignsRouteWithChildren
   GenerateRoute: typeof GenerateRoute
   HistoryRoute: typeof HistoryRoute
   PacksRoute: typeof PacksRoute
@@ -203,6 +228,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof GenerateRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/designs': {
+      id: '/designs'
+      path: '/designs'
+      fullPath: '/designs'
+      preLoaderRoute: typeof DesignsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/data': {
       id: '/data'
       path: '/data'
@@ -231,8 +263,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TemplatesIdEditRouteImport
       parentRoute: typeof TemplatesRoute
     }
+    '/designs/$id/edit': {
+      id: '/designs/$id/edit'
+      path: '/$id/edit'
+      fullPath: '/designs/$id/edit'
+      preLoaderRoute: typeof DesignsIdEditRouteImport
+      parentRoute: typeof DesignsRoute
+    }
   }
 }
+
+interface DesignsRouteChildren {
+  DesignsIdEditRoute: typeof DesignsIdEditRoute
+}
+
+const DesignsRouteChildren: DesignsRouteChildren = {
+  DesignsIdEditRoute: DesignsIdEditRoute,
+}
+
+const DesignsRouteWithChildren =
+  DesignsRoute._addFileChildren(DesignsRouteChildren)
 
 interface TemplatesRouteChildren {
   TemplatesIdEditRoute: typeof TemplatesIdEditRoute
@@ -250,6 +300,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AnalysisRoute: AnalysisRoute,
   DataRoute: DataRoute,
+  DesignsRoute: DesignsRouteWithChildren,
   GenerateRoute: GenerateRoute,
   HistoryRoute: HistoryRoute,
   PacksRoute: PacksRoute,

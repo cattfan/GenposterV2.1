@@ -4,10 +4,16 @@ export function LayoutGuides({
   width,
   height,
   scale = 1,
+  showBleed = true,
+  showTrim = true,
+  showSafeZone = true,
 }: {
   width: number;
   height: number;
   scale?: number;
+  showBleed?: boolean;
+  showTrim?: boolean;
+  showSafeZone?: boolean;
 }) {
   const bleedInset = 2;
   const trimInset = 8;
@@ -26,35 +32,40 @@ export function LayoutGuides({
         zIndex: 999,
       }}
     >
-      <div
-        style={{
-          position: "absolute",
-          inset: bleedInset,
-          border: "1px solid rgba(220, 38, 38, 0.45)",
-          boxSizing: "border-box",
-        }}
-      />
-      <div
-        style={{
-          position: "absolute",
-          inset: trimInset,
-          border: "1px dashed rgba(14, 116, 144, 0.55)",
-          boxSizing: "border-box",
-        }}
-      />
-      <div
-        style={{
-          position: "absolute",
-          left: safeLeft,
-          top: safeTop,
-          width: safeWidth,
-          height: safeHeight,
-          border: "1px solid rgba(34, 197, 94, 0.5)",
-          background: "rgba(34, 197, 94, 0.04)",
-          boxSizing: "border-box",
-        }}
-      />
+      {showBleed ? (
+        <div
+          style={{
+            position: "absolute",
+            inset: bleedInset,
+            border: "1px solid rgba(220, 38, 38, 0.45)",
+            boxSizing: "border-box",
+          }}
+        />
+      ) : null}
+      {showTrim ? (
+        <div
+          style={{
+            position: "absolute",
+            inset: trimInset,
+            border: "1px dashed rgba(14, 116, 144, 0.55)",
+            boxSizing: "border-box",
+          }}
+        />
+      ) : null}
+      {showSafeZone ? (
+        <div
+          style={{
+            position: "absolute",
+            left: safeLeft,
+            top: safeTop,
+            width: safeWidth,
+            height: safeHeight,
+            border: "1px solid rgba(34, 197, 94, 0.5)",
+            background: "rgba(34, 197, 94, 0.04)",
+            boxSizing: "border-box",
+          }}
+        />
+      ) : null}
     </div>
   );
 }
-

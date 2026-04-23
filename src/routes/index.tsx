@@ -4,7 +4,7 @@ import { db } from "@/storage/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Layers, Package, Database, Sparkles, FileText, Download, Upload } from "lucide-react";
+import { Layers, Package, Database, Sparkles, FileText, Download, Upload, Palette } from "lucide-react";
 import { exportProjectJSON, importProjectJSON } from "@/storage/projectIO";
 import { downloadJSON } from "@/features/render/exportPng";
 import { toast } from "sonner";
@@ -17,14 +17,15 @@ export const Route = createFileRoute("/")({
 function Dashboard() {
   const project = useLiveQuery(() => db.projects.toCollection().first(), []);
   const counts = useLiveQuery(async () => {
-    const [tpl, pack, ent, asset, job] = await Promise.all([
+    const [design, tpl, pack, ent, asset, job] = await Promise.all([
+      db.designDocuments.count(),
       db.pageTemplates.count(),
       db.packTemplates.count(),
       db.entities.count(),
       db.assets.count(),
       db.jobs.count(),
     ]);
-    return { tpl, pack, ent, asset, job };
+    return { design, tpl, pack, ent, asset, job };
   }, []);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -75,7 +76,8 @@ function Dashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
+        <StatCard label="Designs" value={counts?.design ?? 0} icon={Palette} to="/designs" />
         <StatCard label="Page Templates" value={counts?.tpl ?? 0} icon={Layers} to="/templates" />
         <StatCard label="Pack Templates" value={counts?.pack ?? 0} icon={Package} to="/packs" />
         <StatCard label="Entities" value={counts?.ent ?? 0} icon={Database} to="/data" />
@@ -98,6 +100,9 @@ function Dashboard() {
             <div className="flex flex-wrap gap-2">
               <Button asChild>
                 <Link to="/generate">Tạo content pack</Link>
+              </Button>
+              <Button variant="outline" asChild>
+                <Link to="/designs">Mở design editor</Link>
               </Button>
               <Button variant="outline" asChild>
                 <Link to="/templates">Xem templates</Link>
