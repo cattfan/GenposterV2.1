@@ -123,6 +123,7 @@ export function BindCanvas({
             slot={slot}
             scale={scale}
             entity={cardEntity}
+            entityPool={entityPool}
             label={
               slot.cardIndex === 1 && isFirstSlotOfCard(slot, expanded.slots)
                 ? `Card ${slot.cardIndex + 1}: ${cardEntity?.name ?? "—"}`
@@ -154,6 +155,7 @@ export function BindCanvas({
               selected={selectedSlotIds.includes(slot.slotId)}
               onSelect={(additive) => onSelectSlot(slot.slotId, additive)}
               entity={resolvedEntity}
+              entityPool={entityPool}
               planned={imagePlan.get(slot.slotId)}
               cardBadge={cardCfg ? `↻ ${cardCfg.repeatCount}` : undefined}
             />
@@ -178,11 +180,13 @@ function GhostSlot({
   slot,
   scale,
   entity,
+  entityPool,
   label,
 }: {
   slot: Slot & { __cardEntityId?: string };
   scale: number;
   entity?: Entity;
+  entityPool?: Entity[];
   label?: string;
 }) {
   const baseStyle: React.CSSProperties = {
@@ -202,7 +206,7 @@ function GhostSlot({
   let inner: React.ReactNode = null;
   if (slot.kind === "text") {
     const text = slot.bindingPath
-      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText)
+      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool)
       : (slot.staticText ?? "");
     const textCss = buildTextStyle(slot.style, scale);
     inner = <div style={textCss}>{text}</div>;
@@ -259,6 +263,7 @@ function BindSlot({
   selected,
   onSelect,
   entity,
+  entityPool,
   planned,
   cardBadge,
 }: {
@@ -268,6 +273,7 @@ function BindSlot({
   selected: boolean;
   onSelect: (additive: boolean) => void;
   entity?: Entity;
+  entityPool?: Entity[];
   planned?: PlannedImage;
   cardBadge?: string;
 }) {
@@ -327,7 +333,7 @@ function BindSlot({
     const border = buildBorder(slot.style, scale);
     const isLine = slot.shapeKind === "line" || slot.shapeKind === "divider";
     const shapeText = slot.bindingPath?.startsWith("entity.")
-      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText)
+      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool)
       : (slot.staticText ?? "");
     const hasShapeText = !!shapeText.trim();
     const textCss = buildTextStyle(slot.style, scale);
@@ -492,7 +498,7 @@ function BindSlot({
 
   if (slot.kind === "text") {
     const text = slot.bindingPath
-      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText)
+      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool)
       : (slot.staticText ?? "Văn bản");
     const textCss = buildTextStyle(slot.style, scale);
     return (

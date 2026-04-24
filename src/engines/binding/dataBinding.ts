@@ -7,6 +7,20 @@ export interface BindingFieldOption {
   group: "Cố định" | "Entity" | "Asset";
 }
 
+export type EntityListBullet = "dot" | "dash" | "number" | "none";
+
+export interface EntityListBindingConfig {
+  fields: string[];
+  count: number;
+  separator?: string;
+  bullet?: EntityListBullet;
+  randomize?: boolean;
+  prioritizePartner?: boolean;
+  seed?: string;
+}
+
+export const ENTITY_LIST_BINDING_PREFIX = "entity.list:";
+
 export const TEXT_BINDING_OPTIONS: BindingFieldOption[] = [
   { value: "", label: "Cố định (nội dung tĩnh)", group: "Cố định" },
   { value: "entity.name", label: "Tên (entity.name)", group: "Entity" },
@@ -47,31 +61,184 @@ function stableHash(input: string): number {
   return hash;
 }
 
+function createSeededRandom(seed: string): () => number {
+  let state = stableHash(seed) || 1;
+  return () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+}
+
+function stableShuffle<T>(items: T[], seed: string): T[] {
+  const next = items.slice();
+  const random = createSeededRandom(seed);
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
+  }
+  return next;
+}
+
 function pickStableRandomAsset(pool: Asset[], seed: string): Asset | undefined {
   if (pool.length === 0) return undefined;
   const ordered = pool.slice().sort((a, b) => a.assetId.localeCompare(b.assetId));
   return ordered[stableHash(seed) % ordered.length];
 }
 
+function normalizeEntityTextPath(path: string): string {
+  if (path.startsWith("entity.")) return path;
+  if (path.startsWith("metadata.")) return `entity.${path}`;
+  return `entity.${path}`;
+}
+
+export function readEntityTextValue(entity: Entity | undefined, path: string): string {
+  if (!entity) return "";
+  const normalized = normalizeEntityTextPath(path);
+  if (normalized === "entity.signatureDish") {
+    return toDisplayText(entity.metadata?.signatureDish, undefined);
+  }
+  if (normalized.startsWith("entity.metadata.")) {
+    const key = normalized.slice("entity.metadata.".length);
+    return toDisplayText(entity.metadata?.[key], undefined);
+  }
+  if (normalized.startsWith("entity.")) {
+    const key = normalized.slice("entity.".length) as keyof Entity;
+    return toDisplayText(entity[key], undefined);
+  }
+  return "";
+}
+
+export function isEntityListBindingPath(bindingPath: string | undefined): boolean {
+  return !!bindingPath && bindingPath.startsWith(ENTITY_LIST_BINDING_PREFIX);
+}
+
+export function buildEntityListBindingPath(config: EntityListBindingConfig): string {
+  const normalized: EntityListBindingConfig = {
+    fields: config.fields.filter(Boolean).map(normalizeEntityTextPath).slice(0, 6),
+    count: Math.max(1, Math.min(50, Math.floor(config.count || 1))),
+    separator: config.separator ?? " - ",
+    bullet: config.bullet ?? "dot",
+    randomize: config.randomize ?? true,
+    prioritizePartner: config.prioritizePartner ?? true,
+    seed: config.seed ?? String(Date.now()),
+  };
+  return ENTITY_LIST_BINDING_PREFIX + encodeURIComponent(JSON.stringify(normalized));
+}
+
+export function parseEntityListBindingPath(
+  bindingPath: string | undefined,
+): EntityListBindingConfig | null {
+  if (!isEntityListBindingPath(bindingPath)) return null;
+  const raw = bindingPath!.slice(ENTITY_LIST_BINDING_PREFIX.length);
+  try {
+    const parsed = JSON.parse(decodeURIComponent(raw)) as Partial<EntityListBindingConfig>;
+    const fields = Array.isArray(parsed.fields)
+      ? parsed.fields.filter((field): field is string => typeof field === "string" && !!field.trim())
+      : ["entity.name"];
+    return {
+      fields: fields.length ? fields.map(normalizeEntityTextPath).slice(0, 6) : ["entity.name"],
+      count: Math.max(1, Math.min(50, Math.floor(Number(parsed.count) || 8))),
+      separator: typeof parsed.separator === "string" ? parsed.separator : " - ",
+      bullet: ["dot", "dash", "number", "none"].includes(String(parsed.bullet))
+        ? (parsed.bullet as EntityListBullet)
+        : "dot",
+      randomize: parsed.randomize !== false,
+      prioritizePartner: parsed.prioritizePartner !== false,
+      seed: typeof parsed.seed === "string" ? parsed.seed : "default",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function groupByPartnerPriority(entities: Entity[], seed: string): Entity[] {
+  const buckets = new Map<number, Entity[]>();
+  for (const entity of entities) {
+    const priority = Number(entity.partnerPriority ?? 0);
+    const bucket = buckets.get(priority) ?? [];
+    bucket.push(entity);
+    buckets.set(priority, bucket);
+  }
+
+  return Array.from(buckets.entries())
+    .sort((a, b) => b[0] - a[0])
+    .flatMap(([priority, bucket]) =>
+      stableShuffle(bucket, `${seed}:partner-priority:${priority}`),
+    );
+}
+
+function orderEntitiesForList(
+  entities: Entity[],
+  config: EntityListBindingConfig,
+  bindingPath: string,
+): Entity[] {
+  const usable = entities.filter((entity) => entity.status !== "archived");
+  const seed = config.seed ?? bindingPath;
+  const alpha = (items: Entity[]) => items.slice().sort((a, b) => a.name.localeCompare(b.name, "vi"));
+
+  if (config.prioritizePartner) {
+    const partners = usable.filter((entity) => entity.partnerFlag);
+    const others = usable.filter((entity) => !entity.partnerFlag);
+    const partnerOrder = config.randomize
+      ? groupByPartnerPriority(partners, seed)
+      : partners.sort(
+          (a, b) =>
+            (b.partnerPriority ?? 0) - (a.partnerPriority ?? 0) ||
+            a.name.localeCompare(b.name, "vi"),
+        );
+    const otherOrder = config.randomize ? stableShuffle(others, `${seed}:others`) : alpha(others);
+    return [...partnerOrder, ...otherOrder];
+  }
+
+  return config.randomize ? stableShuffle(usable, seed) : alpha(usable);
+}
+
+function bulletPrefix(bullet: EntityListBullet, index: number): string {
+  if (bullet === "dot") return "• ";
+  if (bullet === "dash") return "- ";
+  if (bullet === "number") return `${index + 1}. `;
+  return "";
+}
+
+export function resolveEntityListBinding(
+  bindingPath: string,
+  entityPool: Entity[] | undefined,
+  fallback: string | undefined,
+): string {
+  const config = parseEntityListBindingPath(bindingPath);
+  if (!config) return fallback ?? "";
+  const pool = entityPool ?? [];
+  if (pool.length === 0) return fallback ?? "";
+
+  const ordered = orderEntitiesForList(pool, config, bindingPath).slice(0, config.count);
+  const fields = config.fields.length ? config.fields : ["entity.name"];
+  const lines = ordered
+    .map((entity, index) => {
+      const values = fields
+        .map((field) => readEntityTextValue(entity, field))
+        .filter((value) => value.trim().length > 0);
+      if (values.length === 0) return "";
+      return `${bulletPrefix(config.bullet ?? "dot", index)}${values.join(config.separator ?? " - ")}`;
+    })
+    .filter(Boolean);
+
+  return lines.length ? lines.join("\n") : (fallback ?? "");
+}
+
 export function resolveTextBinding(
   bindingPath: string | undefined,
   entity: Entity | undefined,
   fallback: string | undefined,
+  entityPool?: Entity[],
 ): string {
   if (!bindingPath) return fallback ?? "";
+  if (isEntityListBindingPath(bindingPath)) {
+    const pool = entityPool && entityPool.length > 0 ? entityPool : entity ? [entity] : [];
+    return resolveEntityListBinding(bindingPath, pool, fallback);
+  }
   if (!entity) return fallback ?? `{{${bindingPath}}}`;
-  if (bindingPath === "entity.signatureDish") {
-    return toDisplayText(entity.metadata?.signatureDish, fallback);
-  }
-  // Cột raw từ sheet: entity.metadata.<key> (vd entity.metadata.Loai_dich_vu)
-  if (bindingPath.startsWith("entity.metadata.")) {
-    const key = bindingPath.slice("entity.metadata.".length);
-    return toDisplayText(entity.metadata?.[key], fallback);
-  }
-  if (bindingPath.startsWith("entity.")) {
-    const key = bindingPath.slice("entity.".length) as keyof Entity;
-    return toDisplayText(entity[key], fallback);
-  }
+  const text = readEntityTextValue(entity, bindingPath);
+  if (text) return text;
   return fallback ?? "";
 }
 

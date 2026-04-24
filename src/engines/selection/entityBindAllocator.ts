@@ -21,11 +21,25 @@ function shuffleEntities(entities: Entity[]): Entity[] {
   return next;
 }
 
+function shufflePartnersByPriority(entities: Entity[]): Entity[] {
+  const buckets = new Map<number, Entity[]>();
+  for (const entity of entities) {
+    const priority = Number(entity.partnerPriority ?? 0);
+    const bucket = buckets.get(priority) ?? [];
+    bucket.push(entity);
+    buckets.set(priority, bucket);
+  }
+
+  return Array.from(buckets.entries())
+    .sort((a, b) => b[0] - a[0])
+    .flatMap(([, bucket]) => shuffleEntities(bucket));
+}
+
 export function buildEntityAllocationOrder(
   entities: Entity[],
   prioritizePartner: boolean,
 ): Entity[] {
-  const partners = shuffleEntities(entities.filter((entity) => entity.partnerFlag));
+  const partners = shufflePartnersByPriority(entities.filter((entity) => entity.partnerFlag));
   const others = shuffleEntities(entities.filter((entity) => !entity.partnerFlag));
   return prioritizePartner ? [...partners, ...others] : shuffleEntities([...partners, ...others]);
 }

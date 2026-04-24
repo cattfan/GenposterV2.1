@@ -38,7 +38,6 @@ import { toast } from "sonner";
 import { useEffect, useRef, useState } from "react";
 import type { PageTemplate } from "@/models";
 import { PageRenderer } from "@/features/render/PageRenderer";
-import { LayoutGuides } from "@/features/render/LayoutGuides";
 import {
   aiGenerateTemplateFromImage,
   aiGenerateComboFromImages,
@@ -600,7 +599,6 @@ function TemplatePreview({ tpl }: { tpl: PageTemplate }) {
       className="absolute inset-0 overflow-hidden"
       style={{ background: tpl.canvas.background ?? "#fff" }}
     >
-      <LayoutGuides width={tpl.canvas.width} height={tpl.canvas.height} scale={scale} />
       {isEmpty ? (
         <div className="w-full h-full flex items-center justify-center text-muted-foreground text-xs uppercase tracking-wider">
           {tpl.type} · trống

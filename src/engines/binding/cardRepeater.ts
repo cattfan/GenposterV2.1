@@ -160,6 +160,7 @@ function autoClusterSlots(
 
   const bindable = slots.filter((s) => {
     if (!s.bindingPath) return false;
+    if (s.bindingPath.startsWith("entity.list:")) return false;
     if (!s.bindingPath.startsWith("entity.") && !s.bindingPath.startsWith("asset.")) return false;
     if (s.groupId && excludeGroupIds.has(s.groupId)) return false;
     return true;

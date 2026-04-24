@@ -42,9 +42,18 @@ import {
 import { BindCanvas } from "@/features/generate/BindCanvas";
 import { PageRenderer } from "@/features/render/PageRenderer";
 import { SheetFieldsPanel } from "@/features/generate/SheetFieldsPanel";
+import {
+  TextListBindingPanel,
+  type TextListFieldOption,
+} from "@/features/generate/TextListBindingPanel";
+import { TextRewritePanel } from "@/features/generate/TextRewritePanel";
 import { GeneratePageEditor } from "@/features/generate/GeneratePageEditor";
 import { SuggestBindingsModal, type BindSuggestion } from "@/features/ai/SuggestBindingsModal";
-import { aiCaptionFromEntity, aiSuggestBindings } from "@/features/ai/aiFeatures";
+import {
+  aiCaptionFromEntity,
+  aiRewriteTextPreserveMeaning,
+  aiSuggestBindings,
+} from "@/features/ai/aiFeatures";
 import { generateCaptions } from "@/engines/captions/generator";
 import { generatePackJob, type PackBindMode } from "@/engines/selection/generate";
 import {
@@ -123,6 +132,7 @@ export function PackTabContent({
   const [previewEntityId, setPreviewEntityId] = useState<string | undefined>(undefined);
   const [aiBusy, setAiBusy] = useState(false);
   const [captionBusy, setCaptionBusy] = useState(false);
+  const [rewriteBusy, setRewriteBusy] = useState(false);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [suggestions, setSuggestions] = useState<BindSuggestion[]>([]);
   const [suggestPageId, setSuggestPageId] = useState<string | null>(null);
@@ -398,6 +408,65 @@ export function PackTabContent({
     return Array.from(set);
   }, [entities]);
 
+  const textListFieldOptions = useMemo<TextListFieldOption[]>(() => {
+    const truncate = (value: unknown, max = 28) => {
+      if (value == null) return "";
+      const text = String(value).trim();
+      return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+    };
+    const standardFields: Array<{ key: keyof Entity; path: string; label: string }> = [
+      { key: "name", path: "entity.name", label: "Tên quán" },
+      { key: "address", path: "entity.address", label: "Địa chỉ" },
+      { key: "phone", path: "entity.phone", label: "SĐT" },
+      { key: "priceRange", path: "entity.priceRange", label: "Giá" },
+      { key: "openingHours", path: "entity.openingHours", label: "Giờ mở cửa" },
+      { key: "style", path: "entity.style", label: "Phong cách" },
+      { key: "categoryMain", path: "entity.categoryMain", label: "Mô hình / loại" },
+      { key: "categorySub", path: "entity.categorySub", label: "Phong cách phụ" },
+    ];
+    const options: TextListFieldOption[] = [];
+    const seen = new Set<string>();
+
+    for (const field of standardFields) {
+      const sampleEntity =
+        previewEntity && (previewEntity[field.key] as unknown)
+          ? previewEntity
+          : filteredEntities.find((entity) => entity[field.key]);
+      if (!sampleEntity) continue;
+      options.push({
+        path: field.path,
+        label: field.label,
+        sample: truncate(sampleEntity[field.key]),
+      });
+      seen.add(field.path);
+    }
+
+    const metadataKeys = new Set<string>();
+    filteredEntities.forEach((entity) => {
+      Object.entries(entity.metadata ?? {}).forEach(([key, value]) => {
+        if (value != null && value !== "") metadataKeys.add(key);
+      });
+    });
+
+    Array.from(metadataKeys)
+      .sort((a, b) => a.localeCompare(b, "vi"))
+      .forEach((key) => {
+        const path = `entity.metadata.${key}`;
+        if (seen.has(path)) return;
+        const sampleEntity =
+          previewEntity && previewEntity.metadata?.[key]
+            ? previewEntity
+            : filteredEntities.find((entity) => entity.metadata?.[key]);
+        options.push({
+          path,
+          label: key,
+          sample: truncate(sampleEntity?.metadata?.[key]),
+        });
+      });
+
+    return options.length ? options : [{ path: "entity.name", label: "Tên quán" }];
+  }, [filteredEntities, previewEntity]);
+
   const runAiSuggest = async (forAllPages: boolean) => {
     if (!packPages.length) return toast.error("Pack chưa có page");
     setAiBusy(true);
@@ -491,6 +560,51 @@ export function PackTabContent({
       toast.error("AI lỗi: " + (error instanceof Error ? error.message : String(error)));
     } finally {
       setCaptionBusy(false);
+    }
+  };
+
+  const getRewriteCurrentText = (slot: Slot) =>
+    (slot.staticText ?? "").trim() ||
+    (slot.bindingPath
+      ? resolveTextBinding(slot.bindingPath, previewEntity, "", previewEntityPool).trim()
+      : "");
+
+  const runAiRewriteSelectedText = async (sourceText?: string) => {
+    if (!activePage || selectedTextSlots.length !== 1) return;
+    const slot = selectedTextSlots[0];
+    const currentText = getRewriteCurrentText(slot);
+    const source = (sourceText ?? "").trim() || currentText;
+    if (!source) return toast.error("Textbox đang trống, chưa có nội dung để AI viết lại");
+
+    setRewriteBusy(true);
+    try {
+      const out = await aiRewriteTextPreserveMeaning({
+        text: source,
+        toneHint: "tự nhiên, gần với văn phong review/travel social post",
+        avoidText: currentText && currentText !== source ? currentText : undefined,
+        variationSeed: `${slot.slotId}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      });
+      if (!out.ok) return toast.error(out.error);
+      setBinding(activePage.pageTemplateId, slot.slotId, undefined);
+      setPreviewPageDrafts((prev) => {
+        const working = createWorkingTemplate(
+          activePage,
+          packOv[activePage.pageTemplateId],
+          prev[activePage.pageTemplateId],
+        );
+        working.slots = working.slots.map((item) =>
+          item.slotId === slot.slotId
+            ? { ...item, bindingPath: undefined, staticText: out.text }
+            : item,
+        );
+        working.updatedAt = Date.now();
+        return { ...prev, [activePage.pageTemplateId]: working };
+      });
+      toast.success("AI đã viết lại textbox");
+    } catch (error) {
+      toast.error("AI lỗi: " + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setRewriteBusy(false);
     }
   };
 
@@ -1004,20 +1118,46 @@ export function PackTabContent({
                   </div>
                 )}
                 {selectedTextSlots.length === 1 && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="w-full"
-                    onClick={runAiCaption}
-                    disabled={captionBusy || !previewEntity}
-                  >
-                    {captionBusy ? (
-                      <Loader2 className="size-3 mr-1 animate-spin" />
-                    ) : (
-                      <Wand2 className="size-3 mr-1" />
+                  <TextListBindingPanel
+                    selectedSlot={selectedTextSlots[0]}
+                    fieldOptions={textListFieldOptions}
+                    entityPool={previewEntityPool}
+                    prioritizePartnerDefault={prioritizePartner}
+                    onApply={(bindingPath) => {
+                      applyBindingToSlots(
+                        [selectedTextSlots[0]],
+                        activePage.pageTemplateId,
+                        bindingPath,
+                      );
+                      toast.success("Đã áp list vào textbox");
+                    }}
+                  />
+                )}
+                {selectedTextSlots.length === 1 && (
+                  <div className="grid grid-cols-1 gap-2">
+                    <TextRewritePanel
+                      selectedSlotId={selectedTextSlots[0].slotId}
+                      currentText={getRewriteCurrentText(selectedTextSlots[0])}
+                      busy={rewriteBusy}
+                      onRewrite={runAiRewriteSelectedText}
+                    />
+                    {selectedSlot?.kind === "text" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full"
+                        onClick={runAiCaption}
+                        disabled={captionBusy || !previewEntity}
+                      >
+                        {captionBusy ? (
+                          <Loader2 className="size-3 mr-1 animate-spin" />
+                        ) : (
+                          <Wand2 className="size-3 mr-1" />
+                        )}
+                        AI caption (từ data thật)
+                      </Button>
                     )}
-                    AI caption (từ data thật)
-                  </Button>
+                  </div>
                 )}
                 {selectedBindableSlots.some((slot) => !!slot.bindingPath) && (
                   <Button
@@ -1042,6 +1182,7 @@ export function PackTabContent({
                           selectedSlot.bindingPath,
                           previewEntity,
                           selectedSlot.staticText,
+                          previewEntityPool,
                         ) || <span className="text-muted-foreground italic">(trống)</span>}
                       </div>
                     ) : (

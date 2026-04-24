@@ -59,9 +59,9 @@ function defaultDocumentSettings(
   return {
     gridSize: settings?.gridSize ?? 8,
     snapToGrid: settings?.snapToGrid ?? false,
-    showGrid: settings?.showGrid ?? true,
-    showSafeZone: settings?.showSafeZone ?? true,
-    showGuides: settings?.showGuides ?? true,
+    showGrid: settings?.showGrid ?? false,
+    showSafeZone: settings?.showSafeZone ?? false,
+    showGuides: settings?.showGuides ?? false,
   };
 }
 

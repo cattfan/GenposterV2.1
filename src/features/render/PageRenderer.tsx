@@ -152,6 +152,7 @@ export function PageRenderer({
             assetMap={assetMap}
             assets={assets}
             entity={resolveEntityForSlot(slot)}
+            entityPool={entityPool}
             sectionItemsMap={sectionItemsMap}
             slotOverride={
               slotEntityOverride.get(slot.slotId) ??
@@ -173,6 +174,7 @@ function SlotRenderer({
   assetMap,
   assets,
   entity,
+  entityPool,
   sectionItemsMap,
   slotOverride,
   planned,
@@ -185,6 +187,7 @@ function SlotRenderer({
   assetMap: Map<string, Asset>;
   assets: Asset[];
   entity?: Entity;
+  entityPool?: Entity[];
   sectionItemsMap: Map<string, Array<{ entityId?: string; assetId?: string }>>;
   slotOverride?: { entityId?: string; assetId?: string };
   planned?: PlannedImage;
@@ -232,7 +235,7 @@ function SlotRenderer({
     const border = buildBorder(slot.style, scale);
     const isLine = slot.shapeKind === "line" || slot.shapeKind === "divider";
     const shapeText = slot.bindingPath?.startsWith("entity.")
-      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText)
+      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool)
       : (slot.staticText ?? "");
     const hasShapeText = !!shapeText.trim();
     const textCss = buildTextStyle(slot.style, scale);
@@ -427,7 +430,7 @@ function SlotRenderer({
 
   if (slot.kind === "text") {
     const text = slot.bindingPath
-      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText)
+      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool)
       : (slot.staticText ?? "Văn bản");
     const textCss = buildTextStyle(slot.style, scale);
     return (

@@ -247,6 +247,44 @@ export async function aiCaptionFromEntity(input: {
   return { ok: true as const, caption: (result.content ?? "").trim() };
 }
 
+export async function aiRewriteTextPreserveMeaning(input: {
+  text: string;
+  toneHint?: string;
+  avoidText?: string;
+  variationSeed?: string;
+}) {
+  const source = input.text.trim();
+  if (!source) return { ok: false as const, error: "Textbox đang trống." };
+  const avoidText = input.avoidText?.trim();
+  const variationSeed =
+    input.variationSeed ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  const result = await callAi({
+    messages: [
+      {
+        role: "system",
+        content:
+          "Bạn viết lại nội dung tiếng Việt cho textbox poster. Giữ nguyên ý, sự thật, tên riêng, địa chỉ, thứ tự ý và cấu trúc bullet nếu có. " +
+          "Không thêm thông tin mới, không đổi nghĩa, không giải thích. Chỉ trả nội dung đã viết lại.",
+      },
+      {
+        role: "user",
+        content:
+          (input.toneHint ? `Giọng văn mong muốn: ${input.toneHint}\n\n` : "") +
+          (avoidText ? `Tránh lặp lại cách viết này:\n${avoidText}\n\n` : "") +
+          `Mã biến thể: ${variationSeed}\n\n` +
+          "Nội dung gốc:\n" +
+          source,
+      },
+    ],
+    temperature: 0.9,
+  });
+  if (!result.ok) return { ok: false as const, error: result.error };
+  const text = (result.content ?? "").trim();
+  if (!text) return { ok: false as const, error: "AI không trả nội dung mới." };
+  return { ok: true as const, text };
+}
+
 // ============================================================
 // 4. Combo từ nhiều ảnh: classify + gen từng page
 // ============================================================

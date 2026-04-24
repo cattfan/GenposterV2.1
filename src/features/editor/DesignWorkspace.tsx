@@ -1054,6 +1054,12 @@ export function DesignWorkspace({
     moveSelectionBy(dx, dy);
   };
 
+  const alignSelectionFromToolbar = (
+    mode: "left" | "center" | "right" | "top" | "middle" | "bottom",
+  ) => {
+    alignSelectionToPage(mode);
+  };
+
   const showSelectionInfo = () => {
     const bounds = getSelectionBounds(selected);
     if (!primary) return;
@@ -1653,7 +1659,7 @@ export function DesignWorkspace({
                   size="icon"
                   variant="ghost"
                   className="size-8"
-                  onClick={() => editor.alignSelection("left")}
+                  onClick={() => alignSelectionFromToolbar("left")}
                 >
                   <AlignStartHorizontal className="size-4" />
                 </Button>
@@ -1666,7 +1672,7 @@ export function DesignWorkspace({
                   size="icon"
                   variant="ghost"
                   className="size-8"
-                  onClick={() => editor.alignSelection("center")}
+                  onClick={() => alignSelectionFromToolbar("center")}
                 >
                   <AlignCenter className="size-4" />
                 </Button>
@@ -1679,7 +1685,7 @@ export function DesignWorkspace({
                   size="icon"
                   variant="ghost"
                   className="size-8"
-                  onClick={() => editor.alignSelection("right")}
+                  onClick={() => alignSelectionFromToolbar("right")}
                 >
                   <AlignEndHorizontal className="size-4" />
                 </Button>
@@ -1692,7 +1698,7 @@ export function DesignWorkspace({
                   size="icon"
                   variant="ghost"
                   className="size-8"
-                  onClick={() => editor.alignSelection("middle")}
+                  onClick={() => alignSelectionFromToolbar("middle")}
                 >
                   <AlignVerticalJustifyCenter className="size-4" />
                 </Button>
@@ -2817,7 +2823,7 @@ function DesignStage({
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
-            className="relative overflow-hidden border border-border bg-background"
+            className="relative overflow-hidden bg-background shadow-sm"
             data-design-canvas
             style={{ width: page.width * scale, height: page.height * scale, ...gridBackground }}
             onMouseDown={onStageMouseDown}
@@ -2857,46 +2863,9 @@ function DesignStage({
             <div className="pointer-events-none absolute left-3 top-3 rounded bg-background/90 px-2 py-1 text-[11px] text-muted-foreground shadow">
               Select: V · Pan: H / Space · Zoom: Ctrl/Cmd + Wheel
             </div>
-            <div className="pointer-events-none absolute left-0 top-0 h-6 w-full border-b bg-background/80 text-[10px] text-muted-foreground">
-              <div className="relative h-full w-full">
-                {showGuides &&
-                  page.guides?.map((guide) =>
-                    guide.axis === "x" ? (
-                      <div
-                        key={`ruler-x-${guide.guideId}`}
-                        className="absolute top-0 h-full w-px"
-                        style={{ left: guide.value * scale, background: guideColor }}
-                      />
-                    ) : null,
-                  )}
-              </div>
-            </div>
-            <div className="pointer-events-none absolute left-0 top-0 h-full w-6 border-r bg-background/80 text-[10px] text-muted-foreground">
-              <div className="relative h-full w-full">
-                {showGuides &&
-                  page.guides?.map((guide) =>
-                    guide.axis === "y" ? (
-                      <div
-                        key={`ruler-y-${guide.guideId}`}
-                        className="absolute left-0 h-px w-full"
-                        style={{ top: guide.value * scale, background: guideColor }}
-                      />
-                    ) : null,
-                  )}
-              </div>
-            </div>
             <div
-              className="pointer-events-none absolute left-0 top-0 grid h-full w-full"
-              style={{ gridTemplateColumns: "24px 1fr", gridTemplateRows: "24px 1fr" }}
-            >
-              <div className="border-b border-r bg-background/85" />
-              <div />
-              <div />
-              <div />
-            </div>
-            <div
-              className="absolute left-6 top-6"
-              style={{ width: page.width * scale - 24, height: page.height * scale - 24 }}
+              className="absolute inset-0"
+              style={{ width: page.width * scale, height: page.height * scale }}
             >
               <div className="pointer-events-none absolute inset-0">
                 <DesignRenderer

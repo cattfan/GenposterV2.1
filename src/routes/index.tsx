@@ -12,7 +12,6 @@ import {
   FileText,
   Download,
   Upload,
-  Palette,
   ArrowRight,
   Image as ImageIcon,
 } from "lucide-react";
@@ -32,15 +31,14 @@ type StatColor = "violet" | "blue" | "teal" | "amber" | "rose" | "slate";
 function Dashboard() {
   const project = useLiveQuery(() => db.projects.toCollection().first(), []);
   const counts = useLiveQuery(async () => {
-    const [design, tpl, pack, ent, asset, job] = await Promise.all([
-      db.designDocuments.count(),
+    const [tpl, pack, ent, asset, job] = await Promise.all([
       db.pageTemplates.count(),
       db.packTemplates.count(),
       db.entities.count(),
       db.assets.count(),
       db.jobs.count(),
     ]);
-    return { design, tpl, pack, ent, asset, job };
+    return { tpl, pack, ent, asset, job };
   }, []);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -87,8 +85,8 @@ function Dashboard() {
                 variant="outline"
                 className="border-white/40 bg-white/10 text-[color:var(--color-brand-ink)] hover:bg-white/20"
               >
-                <Link to="/designs">
-                  <Palette className="mr-2 size-4" /> Mở design editor
+                <Link to="/templates">
+                  <Layers className="mr-2 size-4" /> Mở templates
                 </Link>
               </Button>
             </div>
@@ -138,14 +136,7 @@ function Dashboard() {
         </div>
       </section>
 
-      <div className="mb-8 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <StatCard
-          label="Designs"
-          value={counts?.design ?? 0}
-          icon={Palette}
-          color="violet"
-          to="/designs"
-        />
+      <div className="mb-8 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
         <StatCard
           label="Page Templates"
           value={counts?.tpl ?? 0}
@@ -204,10 +195,10 @@ function Dashboard() {
                 </Link>
               </Button>
               <Button variant="outline" asChild>
-                <Link to="/designs">Mở design editor</Link>
+                <Link to="/templates">Mở templates</Link>
               </Button>
               <Button variant="outline" asChild>
-                <Link to="/templates">Xem templates</Link>
+                <Link to="/packs">Xem packs</Link>
               </Button>
               <Button variant="outline" asChild>
                 <Link to="/data">Quản lý dữ liệu</Link>

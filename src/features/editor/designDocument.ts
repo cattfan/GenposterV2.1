@@ -19,9 +19,9 @@ import type {
 const DEFAULT_DOCUMENT_SETTINGS: DesignDocument["documentSettings"] = {
   gridSize: 8,
   snapToGrid: false,
-  showGrid: true,
-  showSafeZone: true,
-  showGuides: true,
+  showGrid: false,
+  showSafeZone: false,
+  showGuides: false,
 };
 
 function clone<T>(value: T): T {
