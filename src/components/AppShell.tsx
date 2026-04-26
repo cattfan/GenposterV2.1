@@ -2,7 +2,6 @@ import { Link, useLocation } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import {
   Home,
-  Layers,
   Package,
   Database,
   Sparkles,
@@ -43,8 +42,7 @@ const NAV_SECTIONS: NavSection[] = [
     label: "Tạo nội dung",
     items: [
       { to: "/", label: "Trang chủ", icon: Home },
-      { to: "/templates", label: "Page Templates", icon: Layers },
-      { to: "/packs", label: "Pack Templates", icon: Package },
+      { to: "/templates", label: "Pack Templates", icon: Package },
       { to: "/generate", label: "Tạo nội dung", icon: Sparkles },
     ],
   },

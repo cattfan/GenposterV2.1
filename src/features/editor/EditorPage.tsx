@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Link, useNavigate, useParams } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 import { toast } from "sonner";
 import { ArrowLeft } from "lucide-react";
@@ -10,7 +10,11 @@ import { db } from "@/storage/db";
 
 export function EditorPage() {
   const { id } = useParams({ from: "/templates/$id/edit" });
+  const location = useLocation();
   const navigate = useNavigate();
+  const routeSearch = location.search as { packId?: unknown };
+  const packId = typeof routeSearch.packId === "string" ? routeSearch.packId : undefined;
+  const backToTemplates = () => navigate({ to: "/templates", search: { open: packId } });
   const payload = useLiveQuery(async () => {
     const [template, directDocument, linkedDocument] = await Promise.all([
       db.pageTemplates.get(id),
@@ -37,21 +41,25 @@ export function EditorPage() {
       <div className="p-8 space-y-4">
         <div className="text-lg font-semibold">Không tìm thấy template</div>
         <Button asChild variant="outline">
-          <Link to="/templates">Quay lại templates</Link>
+          <Link to="/templates" search={{ open: packId }}>
+            Quay lại templates
+          </Link>
         </Button>
       </div>
     );
   }
 
+  const template = payload.template;
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-3 border-b px-4 py-3">
-        <Button variant="outline" onClick={() => navigate({ to: "/templates" })}>
+        <Button variant="outline" onClick={backToTemplates}>
           <ArrowLeft className="mr-2 size-4" />
           Quay lại
         </Button>
         <div>
-          <div className="font-semibold">{payload.template.name}</div>
+          <div className="font-semibold">{template.name}</div>
           <div className="text-xs text-muted-foreground">
             Template mode đang chạy qua DesignDocument adapter
           </div>
@@ -63,15 +71,15 @@ export function EditorPage() {
           initialDocument={initialDocument}
           mode="template"
           allowMultiplePages={false}
-          onClose={() => navigate({ to: "/templates" })}
+          onClose={backToTemplates}
           onSave={async (nextDocument) => {
-            const nextTemplate = designDocumentToPageTemplate(nextDocument, payload.template);
+            const nextTemplate = designDocumentToPageTemplate(nextDocument, template);
             await db.transaction("rw", [db.pageTemplates, db.designDocuments], async () => {
               await db.pageTemplates.put(nextTemplate);
               await db.designDocuments.put({
                 ...nextDocument,
                 designDocumentId: nextDocument.designDocumentId || id,
-                sourcePageTemplateId: payload.template.pageTemplateId,
+                sourcePageTemplateId: template.pageTemplateId,
                 mode: "template",
                 updatedAt: Date.now(),
               });

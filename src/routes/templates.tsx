@@ -22,76 +22,38 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import {
-  Plus,
-  Pencil,
-  Copy,
-  Trash2,
-  Sparkles,
-  Loader2,
-  CalendarPlus,
-  Layers,
-  X,
-} from "lucide-react";
+import { Plus, Trash2, Sparkles, Loader2, Layers, Package, X } from "lucide-react";
 import { nanoid } from "nanoid";
 import { toast } from "sonner";
 import { useEffect, useRef, useState } from "react";
-import type { PageTemplate } from "@/models";
-import { PageRenderer } from "@/features/render/PageRenderer";
+import type { PackTemplate, PageTemplate } from "@/models";
 import {
   aiGenerateTemplateFromImage,
   aiGenerateComboFromImages,
   type LayoutFidelity,
 } from "@/features/ai/aiFeatures";
-import { aiLayoutToTemplate } from "@/features/ai/templateFromImage";
+import { aiLayoutToTemplateWithQuality } from "@/features/ai/templateFromImage";
 import { buildComboFromAiResult, persistCombo } from "@/features/ai/comboFromImages";
-import { cloneDayPage } from "@/storage/seedFlex";
-import type { Asset, Entity, RenderedItem } from "@/models";
 import { PageContainer, PageHeader } from "@/components/PageHeader";
+import { PackBuilder } from "@/features/packs/PackBuilder";
+import {
+  appendPageToPack,
+  createBlankPageTemplate,
+  createPackTemplate,
+  duplicatePageTemplate,
+  ensureOrphanTemplatesInDefaultPack,
+} from "@/features/packs/packTemplateUtils";
 
 export const Route = createFileRoute("/templates")({
   component: TemplatesPage,
 });
 
-function duplicatePageTemplate(template: PageTemplate): PageTemplate {
-  const copy = JSON.parse(JSON.stringify(template)) as PageTemplate;
-  const pageTemplateId = nanoid();
-  const slotIdMap = new Map(copy.slots.map((slot) => [slot.slotId, nanoid()]));
-  const sectionIdMap = new Map(copy.sections.map((section) => [section.sectionId, nanoid()]));
-
-  return {
-    ...copy,
-    pageTemplateId,
-    name: `${copy.name} (copy)`,
-    slots: copy.slots.map((slot) => ({
-      ...slot,
-      slotId: slotIdMap.get(slot.slotId) ?? nanoid(),
-      pageId: slot.pageId ? pageTemplateId : undefined,
-      sectionId: slot.sectionId ? (sectionIdMap.get(slot.sectionId) ?? slot.sectionId) : undefined,
-      sectionRefId: slot.sectionRefId
-        ? (sectionIdMap.get(slot.sectionRefId) ?? slot.sectionRefId)
-        : undefined,
-      groupId: slot.groupId ? (slotIdMap.get(slot.groupId) ?? slot.groupId) : undefined,
-    })),
-    sections: copy.sections.map((section) => ({
-      ...section,
-      sectionId: sectionIdMap.get(section.sectionId) ?? nanoid(),
-      imageSlotId: section.imageSlotId
-        ? (slotIdMap.get(section.imageSlotId) ?? section.imageSlotId)
-        : undefined,
-    })),
-    cardGroups: copy.cardGroups?.map((group) => ({
-      ...group,
-      groupId: slotIdMap.get(group.groupId) ?? group.groupId,
-    })),
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
-}
-
 function TemplatesPage() {
   const location = useLocation();
   const navigate = useNavigate();
+  const routeSearch = location.search as { open?: unknown };
+  const openPackId = typeof routeSearch.open === "string" ? routeSearch.open : undefined;
+  const packs = useLiveQuery(() => db.packTemplates.orderBy("updatedAt").reverse().toArray(), []);
   const tpls = useLiveQuery(() => db.pageTemplates.orderBy("updatedAt").reverse().toArray(), []);
   const fileRef = useRef<HTMLInputElement>(null);
   const comboFileRef = useRef<HTMLInputElement>(null);
@@ -115,30 +77,145 @@ function TemplatesPage() {
   const [comboBusy, setComboBusy] = useState(false);
   const [comboStep, setComboStep] = useState("");
   const [comboProgress, setComboProgress] = useState(0);
+  const [editing, setEditing] = useState<PackTemplate | null>(null);
+
+  useEffect(() => {
+    void ensureOrphanTemplatesInDefaultPack()
+      .then((result) => {
+        if (result.added > 0) {
+          toast.info(`Đã gom ${result.added} template lẻ vào pack mặc định`);
+        }
+      })
+      .catch((error) => {
+        toast.error(
+          "Không thể migrate template lẻ: " +
+            (error instanceof Error ? error.message : String(error)),
+        );
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!packs) return;
+    if (packs.length === 0) {
+      setEditing(null);
+      return;
+    }
+    const bySearch = openPackId
+      ? packs.find((pack) => pack.packTemplateId === openPackId)
+      : undefined;
+    const current = editing
+      ? packs.find((pack) => pack.packTemplateId === editing.packTemplateId)
+      : undefined;
+    const next = bySearch ?? current ?? packs[0];
+    if (!next) return;
+    if (
+      !editing ||
+      editing.packTemplateId !== next.packTemplateId ||
+      editing.updatedAt !== next.updatedAt
+    ) {
+      setEditing({ ...next });
+    }
+  }, [packs, openPackId, editing]);
 
   if (location.pathname !== "/templates") {
     return <Outlet />;
   }
 
-  const createNew = async () => {
-    const id = nanoid();
-    const tpl: PageTemplate = {
-      pageTemplateId: id,
-      name: "Page Template mới",
-      type: "cover",
-      canvas: { width: 1080, height: 1350, background: "#ffffff" },
-      slots: [],
-      sections: [],
+  const createNewPack = async () => {
+    const pack = createPackTemplate();
+    await db.packTemplates.put(pack);
+    setEditing(pack);
+    toast.success("Đã tạo pack mới");
+    navigate({ to: "/templates", search: { open: pack.packTemplateId } });
+  };
+
+  const openEdit = (id: string, packId = editing?.packTemplateId) => {
+    navigate({ to: "/templates/$id/edit", params: { id }, search: { packId } });
+  };
+
+  const ensureActivePack = async (name?: string) => {
+    if (editing) return editing;
+    const pack = createPackTemplate({ name });
+    await db.packTemplates.put(pack);
+    setEditing(pack);
+    navigate({ to: "/templates", search: { open: pack.packTemplateId } });
+    return pack;
+  };
+
+  const savePack = async () => {
+    if (!editing) return;
+    const nextPack = { ...editing, updatedAt: Date.now() };
+    await db.packTemplates.put(nextPack);
+    setEditing(nextPack);
+    toast.success("Đã lưu pack");
+  };
+
+  const duplicatePack = async () => {
+    if (!editing) return;
+    const dup: PackTemplate = {
+      ...editing,
+      packTemplateId: nanoid(),
+      name: editing.name + " (copy)",
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    await db.pageTemplates.put(tpl);
-    toast.success("Đã tạo template mới — mở editor...");
-    navigate({ to: "/templates/$id/edit", params: { id } });
+    await db.packTemplates.put(dup);
+    setEditing(dup);
+    toast.success("Đã duplicate pack");
+    navigate({ to: "/templates", search: { open: dup.packTemplateId } });
   };
 
-  const openEdit = (id: string) => {
-    navigate({ to: "/templates/$id/edit", params: { id } });
+  const createPageInPack = async () => {
+    const pack = await ensureActivePack();
+    const page = createBlankPageTemplate();
+    const nextPack = appendPageToPack(pack, page.pageTemplateId);
+    await db.transaction("rw", [db.pageTemplates, db.packTemplates], async () => {
+      await db.pageTemplates.put(page);
+      await db.packTemplates.put(nextPack);
+    });
+    setEditing(nextPack);
+    toast.success("Đã tạo page trong pack");
+    openEdit(page.pageTemplateId, nextPack.packTemplateId);
+  };
+
+  const duplicatePageInPack = async (template: PageTemplate) => {
+    if (!editing) return;
+    const dup = duplicatePageTemplate(template);
+    const nextPack = appendPageToPack(editing, dup.pageTemplateId);
+    await db.transaction("rw", [db.pageTemplates, db.packTemplates], async () => {
+      await db.pageTemplates.put(dup);
+      await db.packTemplates.put(nextPack);
+    });
+    setEditing(nextPack);
+    toast.success("Đã duplicate page vào pack");
+  };
+
+  const deletePageFromPack = async (template: PageTemplate) => {
+    if (!confirm(`Xóa page "${template.name}" khỏi toàn bộ project?`)) return;
+    const allPacks = await db.packTemplates.toArray();
+    await db.transaction("rw", [db.pageTemplates, db.packTemplates], async () => {
+      await db.pageTemplates.delete(template.pageTemplateId);
+      for (const pack of allPacks) {
+        if (!pack.orderedPages.includes(template.pageTemplateId)) continue;
+        await db.packTemplates.put({
+          ...pack,
+          orderedPages: pack.orderedPages.filter((id) => id !== template.pageTemplateId),
+          requiredPages: pack.requiredPages.filter((id) => id !== template.pageTemplateId),
+          optionalPages: pack.optionalPages.filter((id) => id !== template.pageTemplateId),
+          updatedAt: Date.now(),
+        });
+      }
+    });
+    if (editing) {
+      setEditing({
+        ...editing,
+        orderedPages: editing.orderedPages.filter((id) => id !== template.pageTemplateId),
+        requiredPages: editing.requiredPages.filter((id) => id !== template.pageTemplateId),
+        optionalPages: editing.optionalPages.filter((id) => id !== template.pageTemplateId),
+        updatedAt: Date.now(),
+      });
+    }
+    toast.success("Đã xóa page");
   };
 
   // === AI gen template từ ảnh ===
@@ -183,37 +260,32 @@ function TemplatesPage() {
         return;
       }
       const layout = JSON.parse(out.layoutJson);
-      const tpl = aiLayoutToTemplate(
+      const { template: tpl, quality } = aiLayoutToTemplateWithQuality(
         layout,
         singleTemplateName.trim() || "AI: " + singleFileName.replace(/\.[^.]+$/, ""),
       );
-      await db.pageTemplates.put(tpl);
-      toast.success("AI dựng xong — mở editor để chỉnh");
+      if (quality.warnings.length > 0) {
+        toast.warning(`${quality.warnings.length} cảnh báo blueprint — kiểm tra validationRules.`);
+      }
+      const pack = await ensureActivePack(singleTemplateName.trim() || "Pack mới");
+      const nextPack = appendPageToPack(pack, tpl.pageTemplateId);
+      await db.transaction("rw", [db.pageTemplates, db.packTemplates], async () => {
+        await db.pageTemplates.put(tpl);
+        await db.packTemplates.put(nextPack);
+      });
+      setEditing(nextPack);
+      toast.success("AI dựng xong — đã thêm page vào pack");
       setSingleOpen(false);
       setSinglePreview("");
       setSingleFileName("");
       setSingleTemplateName("");
       setSingleInstructions("");
       setSinglePreferVisibleLines(true);
-      navigate({ to: "/templates/$id/edit", params: { id: tpl.pageTemplateId } });
+      openEdit(tpl.pageTemplateId, nextPack.packTemplateId);
     } catch (err) {
       toast.error("AI lỗi: " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setAiBusy(false);
-    }
-  };
-
-  const onCloneDay = async (pageId: string) => {
-    const dayStr = prompt("Nhân bản thành Ngày số mấy?", "2");
-    if (!dayStr) return;
-    const n = parseInt(dayStr, 10);
-    if (!Number.isFinite(n) || n < 1) return toast.error("Số ngày không hợp lệ");
-    try {
-      const newId = await cloneDayPage(pageId, n);
-      toast.success(`Đã tạo "Ngày ${n}"`);
-      navigate({ to: "/templates/$id/edit", params: { id: newId } });
-    } catch (e) {
-      toast.error("Lỗi: " + (e instanceof Error ? e.message : String(e)));
     }
   };
 
@@ -299,7 +371,7 @@ function TemplatesPage() {
       setComboPreviews([]);
       setComboInstructions("");
       setComboPreferVisibleLines(true);
-      navigate({ to: "/packs", search: { open: packId } });
+      navigate({ to: "/templates", search: { open: packId } });
     } catch (err) {
       toast.error("Lỗi: " + (err instanceof Error ? err.message : String(err)));
     } finally {
@@ -321,9 +393,9 @@ function TemplatesPage() {
         onChange={onComboFilesChange}
       />
       <PageHeader
-        icon={<Layers className="size-5" />}
-        title="Page Templates"
-        description="Mỗi page template là 1 layout có thể ghép vào pack."
+        icon={<Package className="size-5" />}
+        title="Pack Templates"
+        description="Tạo pack trước, sau đó thêm nhiều page template và chỉnh từng page trong editor."
         actions={
           <>
             <Button variant="outline" onClick={onPickAiImage} disabled={aiBusy}>
@@ -332,13 +404,13 @@ function TemplatesPage() {
               ) : (
                 <Sparkles className="size-4 mr-2" />
               )}
-              AI dựng từ ảnh
+              AI thêm page từ ảnh
             </Button>
             <Button variant="outline" onClick={onPickComboImages} disabled={aiBusy}>
               <Layers className="size-4 mr-2" /> AI dựng combo
             </Button>
-            <Button onClick={createNew}>
-              <Plus className="size-4 mr-2" /> Tạo mới
+            <Button onClick={createNewPack}>
+              <Plus className="size-4 mr-2" /> Tạo pack mới
             </Button>
           </>
         }
@@ -352,7 +424,6 @@ function TemplatesPage() {
           <div className="space-y-4">
             {singlePreview && (
               <div className="overflow-hidden rounded-lg border bg-muted">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={singlePreview}
                   alt={singleFileName}
@@ -493,7 +564,6 @@ function TemplatesPage() {
                     key={idx}
                     className="relative group aspect-[4/5] rounded overflow-hidden border bg-muted"
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={src} alt={`page-${idx + 1}`} className="w-full h-full object-cover" />
                     <div className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1">
                       #{idx + 1}
@@ -533,232 +603,88 @@ function TemplatesPage() {
         </DialogContent>
       </Dialog>
 
-      {tpls && tpls.length === 0 && (
-        <Card>
-          <CardContent className="p-10 text-center text-muted-foreground">
-            Chưa có template nào. Bấm "Tạo mới" hoặc dùng AI để dựng từ ảnh.
-          </CardContent>
-        </Card>
-      )}
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {tpls?.map((t) => (
-          <Card key={t.pageTemplateId} className="overflow-hidden">
-            <button
-              onClick={() => openEdit(t.pageTemplateId)}
-              className="block w-full text-left relative hover:opacity-90 transition bg-muted/40"
-              style={{ aspectRatio: `${t.canvas.width} / ${t.canvas.height}` }}
-            >
-              <TemplatePreview tpl={t} />
-              <div className="absolute top-2 left-2 text-[10px] px-2 py-0.5 bg-black/60 text-white rounded z-10">
-                {t.canvas.width}×{t.canvas.height} · {t.slots.length} slot
-              </div>
-            </button>
-            <CardContent className="p-4">
-              <div className="font-semibold mb-2 truncate">{t.name}</div>
-              <div className="flex gap-1">
-                <Button size="sm" variant="default" onClick={() => openEdit(t.pageTemplateId)}>
-                  <Pencil className="size-3 mr-1" /> Sửa
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={async () => {
-                    const dup = duplicatePageTemplate(t);
-                    await db.pageTemplates.put(dup);
-                    toast.success("Đã duplicate");
-                  }}
-                >
-                  <Copy className="size-3" />
-                </Button>
-                {/Ng[àa]y/i.test(t.name) && (
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <div>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Danh sách pack
+          </h2>
+          <div className="space-y-2">
+            {packs?.length === 0 && (
+              <Card className="border-dashed">
+                <CardContent className="p-4 text-sm text-muted-foreground">
+                  Chưa có pack. Bấm "Tạo pack mới" để bắt đầu.
+                </CardContent>
+              </Card>
+            )}
+            {packs?.map((pack) => (
+              <Card
+                key={pack.packTemplateId}
+                className={`cursor-pointer border-border/70 transition-all hover:-translate-y-0.5 hover:border-primary/60 hover:shadow-sm ${
+                  editing?.packTemplateId === pack.packTemplateId
+                    ? "border-primary bg-accent/40"
+                    : ""
+                }`}
+                onClick={() => {
+                  setEditing({ ...pack });
+                  navigate({ to: "/templates", search: { open: pack.packTemplateId } });
+                }}
+              >
+                <CardContent className="flex items-center justify-between gap-3 p-4">
+                  <div className="min-w-0">
+                    <div className="truncate font-semibold">{pack.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {pack.orderedPages.length} page
+                    </div>
+                  </div>
                   <Button
-                    size="sm"
-                    variant="outline"
-                    title="Nhân bản thành ngày khác"
-                    onClick={() => onCloneDay(t.pageTemplateId)}
+                    variant="ghost"
+                    size="icon"
+                    onClick={async (event) => {
+                      event.stopPropagation();
+                      if (
+                        !confirm(`Xóa pack "${pack.name}"? Page sẽ được gom lại vào pack mặc định.`)
+                      )
+                        return;
+                      await db.packTemplates.delete(pack.packTemplateId);
+                      if (editing?.packTemplateId === pack.packTemplateId) setEditing(null);
+                      await ensureOrphanTemplatesInDefaultPack();
+                      toast.success("Đã xóa pack");
+                    }}
                   >
-                    <CalendarPlus className="size-3" />
+                    <Trash2 className="size-4" />
                   </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={async () => {
-                    if (!confirm(`Xóa template "${t.name}"?`)) return;
-                    await db.pageTemplates.delete(t.pageTemplateId);
-                    toast.success("Đã xóa");
-                  }}
-                >
-                  <Trash2 className="size-3" />
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          {!editing && (
+            <Card className="border-dashed">
+              <CardContent className="flex flex-col items-center gap-3 p-10 text-center text-sm text-muted-foreground">
+                <span className="grid size-12 place-items-center rounded-full bg-accent text-primary">
+                  <Package className="size-5" />
+                </span>
+                Chọn một pack để sửa hoặc tạo pack mới.
+              </CardContent>
+            </Card>
+          )}
+          {editing && (
+            <PackBuilder
+              pack={editing}
+              allTemplates={tpls ?? []}
+              onChange={setEditing}
+              onSave={savePack}
+              onDuplicate={duplicatePack}
+              onCreatePage={createPageInPack}
+              onCreateAiPage={onPickAiImage}
+              onDuplicatePage={duplicatePageInPack}
+              onDeletePage={deletePageFromPack}
+            />
+          )}
+        </div>
       </div>
     </PageContainer>
   );
-}
-
-function TemplatePreview({ tpl }: { tpl: PageTemplate }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(0.2);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const compute = () => {
-      const w = el.clientWidth;
-      const h = el.clientHeight;
-      if (!w || !h) return;
-      setScale(Math.min(w / tpl.canvas.width, h / tpl.canvas.height));
-    };
-    compute();
-    const ro = new ResizeObserver(compute);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [tpl.canvas.width, tpl.canvas.height]);
-
-  const isEmpty = tpl.slots.length === 0;
-  const previewData = useState(() => buildTemplatePreviewData(tpl))[0];
-
-  return (
-    <div
-      ref={ref}
-      className="absolute inset-0 overflow-hidden"
-      style={{ background: tpl.canvas.background ?? "#fff" }}
-    >
-      {isEmpty ? (
-        <div className="w-full h-full flex items-center justify-center text-muted-foreground text-xs uppercase tracking-wider">
-          {tpl.type} · trống
-        </div>
-      ) : (
-        <div
-          style={{
-            position: "absolute",
-            left: "50%",
-            top: "50%",
-            transform: "translate(-50%, -50%)",
-            pointerEvents: "none",
-          }}
-        >
-          <PageRenderer
-            template={tpl}
-            entities={previewData.entities}
-            assets={previewData.assets}
-            entity={previewData.entities[0]}
-            entityPool={previewData.entities}
-            slotItems={previewData.slotItems}
-            scale={scale}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function buildTemplatePreviewData(tpl: PageTemplate): {
-  entities: Entity[];
-  assets: Asset[];
-  slotItems: RenderedItem[];
-} {
-  const sectionSlots = tpl.slots.filter((slot) => slot.kind === "section" && slot.sectionRefId);
-  const repeatedCount = Math.max(
-    6,
-    tpl.sections.reduce((max, section) => Math.max(max, section.maxItems || 0), 0),
-    Math.min(12, tpl.slots.filter((slot) => slot.bindingPath?.startsWith("entity.")).length || 0),
-  );
-
-  const entities: Entity[] = Array.from({ length: repeatedCount }, (_, index) => ({
-    entityId: `preview-entity-${index + 1}`,
-    name: `Địa điểm ${index + 1}`,
-    address: `${12 + index} Hai Bà Trưng, Đà Lạt`,
-    phone: `09${(10000000 + index).toString().slice(0, 8)}`,
-    openingHours: "07:00 - 22:00",
-    priceRange: `${40 + index * 5}k - ${90 + index * 5}k`,
-    categoryMain: index % 2 === 0 ? "Cafe" : "Quán ăn",
-    categorySub: index % 3 === 0 ? "Check-in" : "Chill",
-    partnerFlag: false,
-    partnerPriority: 0,
-    partnerType: "none",
-    campaignTags: [],
-    seoKeywords: [],
-    status: "active",
-    sheetName: "preview",
-    metadata: {
-      signatureDish: index % 2 === 0 ? "Món nổi bật" : "Không gian đẹp",
-    },
-  }));
-
-  const assets: Asset[] = entities.flatMap((entity, index) => {
-    const src = buildPreviewPhotoDataUrl(index);
-    return [
-      {
-        assetId: `preview-asset-cover-${index + 1}`,
-        entityId: entity.entityId,
-        sourceType: "url",
-        sourceValue: src,
-        role: "cover",
-        isCover: true,
-        qualityScore: 90,
-        status: "ok",
-      },
-      {
-        assetId: `preview-asset-section-${index + 1}`,
-        entityId: entity.entityId,
-        sourceType: "url",
-        sourceValue: src,
-        role: "section_image",
-        isCover: false,
-        qualityScore: 84,
-        status: "ok",
-      },
-    ];
-  });
-
-  const slotItems: RenderedItem[] = [];
-  sectionSlots.forEach((slot, sectionIndex) => {
-    const section = tpl.sections.find((item) => item.sectionId === slot.sectionRefId);
-    const itemCount = Math.max(3, Math.min(6, section?.maxItems ?? 4));
-    Array.from({ length: itemCount }).forEach((_, itemIndex) => {
-      const entity = entities[(sectionIndex * 3 + itemIndex) % entities.length];
-      slotItems.push({
-        sectionId: slot.sectionRefId,
-        entityId: entity.entityId,
-        assetId: assets.find((asset) => asset.entityId === entity.entityId)?.assetId,
-      });
-    });
-  });
-
-  return { entities, assets, slotItems };
-}
-
-function buildPreviewPhotoDataUrl(seed: number): string {
-  const palettes = [
-    ["#0f172a", "#1d4ed8", "#f59e0b"],
-    ["#111827", "#14532d", "#fbbf24"],
-    ["#1f2937", "#7c2d12", "#f97316"],
-    ["#0b1120", "#6d28d9", "#facc15"],
-  ];
-  const [a, b, c] = palettes[seed % palettes.length];
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="720" height="900" viewBox="0 0 720 900">
-      <defs>
-        <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="${a}"/>
-          <stop offset="60%" stop-color="${b}"/>
-          <stop offset="100%" stop-color="${c}"/>
-        </linearGradient>
-        <filter id="blur">
-          <feGaussianBlur stdDeviation="36"/>
-        </filter>
-      </defs>
-      <rect width="720" height="900" fill="url(#g)"/>
-      <circle cx="560" cy="180" r="150" fill="rgba(255,255,255,0.16)" filter="url(#blur)"/>
-      <circle cx="180" cy="620" r="210" fill="rgba(255,255,255,0.10)" filter="url(#blur)"/>
-      <rect x="80" y="680" width="560" height="120" rx="36" fill="rgba(255,255,255,0.06)"/>
-    </svg>
-  `.trim();
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }

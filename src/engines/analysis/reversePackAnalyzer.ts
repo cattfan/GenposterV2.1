@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { aiGenerateComboFromImages } from "@/features/ai/aiFeatures";
 import { callAi } from "@/features/ai/aiClient";
-import { aiLayoutToTemplate } from "@/features/ai/templateFromImage";
+import { aiLayoutToTemplateWithQuality } from "@/features/ai/templateFromImage";
 import { parseLayoutBlueprintJson } from "@/features/ai/blueprint";
 import type {
   AnalysisMode,
@@ -686,8 +686,8 @@ function normalizeRequirement(
   ]);
   const acceptsManualInput =
     raw.acceptsManualInput ??
-    kind === "manual_literal" ??
-    normalizeToken(raw.notes).includes("co the nhap tay");
+    (kind === "manual_literal" ||
+    normalizeToken(raw.notes).includes("co the nhap tay"));
   const normalizedKind = acceptsManualInput ? "manual_literal" : kind;
   const minRecords =
     raw.minRecords ??
@@ -2164,9 +2164,12 @@ function buildLayoutDrivenDraft(page: AnalyzedPage): {
 
   try {
     const parsedBlueprint = parseLayoutBlueprintJson(page.layoutJson);
-    const template = aiLayoutToTemplate(parsedBlueprint ?? JSON.parse(page.layoutJson), page.suggestedName);
+    const { template, quality } = aiLayoutToTemplateWithQuality(parsedBlueprint ?? JSON.parse(page.layoutJson), page.suggestedName);
     template.type = currentTemplateTypeFromAnalysis(page.pageType);
-    template.validationRules = page.compatibility.groups.missing_required.map((gap) => gap.message);
+    template.validationRules = uniqueStrings([
+      ...page.compatibility.groups.missing_required.map((gap) => gap.message),
+      ...quality.warnings.filter((w) => w.includes("không hỗ trợ") || w.includes("đã bỏ") || w.includes("quá nhỏ")),
+    ]);
     const suggestedBindings = inferAutoBindingsForLayoutTemplate(page, template);
     const visualConfidence = page.visualConfidence ?? parsedBlueprint?.visualBlueprint.confidence ?? 0;
     const draftWarnings = [
@@ -2553,9 +2556,12 @@ function buildFallbackDraft(page: AnalyzedPage): {
   if (page.layoutJson) {
     try {
       const parsedBlueprint = parseLayoutBlueprintJson(page.layoutJson);
-      const template = aiLayoutToTemplate(parsedBlueprint ?? JSON.parse(page.layoutJson), page.suggestedName);
+      const { template, quality } = aiLayoutToTemplateWithQuality(parsedBlueprint ?? JSON.parse(page.layoutJson), page.suggestedName);
       template.type = currentTemplateTypeFromAnalysis(page.pageType);
-      template.validationRules = page.compatibility.groups.missing_required.map((gap) => gap.message);
+      template.validationRules = uniqueStrings([
+        ...page.compatibility.groups.missing_required.map((gap) => gap.message),
+        ...quality.warnings.filter((w) => w.includes("không hỗ trợ") || w.includes("đã bỏ") || w.includes("quá nhỏ")),
+      ]);
       return {
         template,
         warnings: uniqueStrings([

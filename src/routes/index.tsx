@@ -5,7 +5,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
-  Layers,
   Package,
   Database,
   Sparkles,
@@ -31,14 +30,13 @@ type StatColor = "violet" | "blue" | "teal" | "amber" | "rose" | "slate";
 function Dashboard() {
   const project = useLiveQuery(() => db.projects.toCollection().first(), []);
   const counts = useLiveQuery(async () => {
-    const [tpl, pack, ent, asset, job] = await Promise.all([
-      db.pageTemplates.count(),
+    const [pack, ent, asset, job] = await Promise.all([
       db.packTemplates.count(),
       db.entities.count(),
       db.assets.count(),
       db.jobs.count(),
     ]);
-    return { tpl, pack, ent, asset, job };
+    return { pack, ent, asset, job };
   }, []);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -86,7 +84,7 @@ function Dashboard() {
                 className="border-white/40 bg-white/10 text-[color:var(--color-brand-ink)] hover:bg-white/20"
               >
                 <Link to="/templates">
-                  <Layers className="mr-2 size-4" /> Mở templates
+                  <Package className="mr-2 size-4" /> Mở packs
                 </Link>
               </Button>
             </div>
@@ -138,18 +136,11 @@ function Dashboard() {
 
       <div className="mb-8 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
         <StatCard
-          label="Page Templates"
-          value={counts?.tpl ?? 0}
-          icon={Layers}
-          color="blue"
-          to="/templates"
-        />
-        <StatCard
           label="Pack Templates"
           value={counts?.pack ?? 0}
           icon={Package}
           color="teal"
-          to="/packs"
+          to="/templates"
         />
         <StatCard
           label="Entities"
@@ -195,10 +186,7 @@ function Dashboard() {
                 </Link>
               </Button>
               <Button variant="outline" asChild>
-                <Link to="/templates">Mở templates</Link>
-              </Button>
-              <Button variant="outline" asChild>
-                <Link to="/packs">Xem packs</Link>
+                <Link to="/templates">Mở packs</Link>
               </Button>
               <Button variant="outline" asChild>
                 <Link to="/data">Quản lý dữ liệu</Link>
@@ -212,8 +200,8 @@ function Dashboard() {
             <CardTitle>Quy trình</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
-            <Step n={1} text="Tạo / sửa Page Template (kéo thả)" />
-            <Step n={2} text="Ghép thành Pack Template" />
+            <Step n={1} text="Tạo Pack Template" />
+            <Step n={2} text="Thêm / sửa nhiều Page Template trong pack" />
             <Step n={3} text="Import dữ liệu CSV/JSON/Sheet" />
             <Step n={4} text="Generate, tick chọn page" />
             <Step n={5} text="Export PNG/ZIP + caption + report" />

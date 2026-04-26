@@ -8,7 +8,7 @@ interface TextRewritePanelProps {
   selectedSlotId: string;
   currentText: string;
   busy: boolean;
-  onRewrite: (sourceText: string) => void | Promise<void>;
+  onRewrite: (sourceText: string) => void | Promise<unknown>;
 }
 
 export function TextRewritePanel({

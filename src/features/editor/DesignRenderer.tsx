@@ -343,7 +343,7 @@ function DesignElementNode({ element, scale }: { element: DesignElement; scale: 
     );
   }
 
-  const svg = element.svgContent;
+  const svg = element.svgContent ?? "";
   return (
     <div
       style={{

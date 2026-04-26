@@ -12,6 +12,11 @@ import type {
 } from "@/models";
 import { SAFE_MARGIN_X, SAFE_MARGIN_Y, clampWithinSafeZone } from "@/lib/safeZone";
 import { asCombinedLayoutBlueprint } from "./blueprint";
+import {
+  repairCombinedLayoutBlueprint,
+  repairSingleBindingPath,
+  type BlueprintQualitySummary,
+} from "./blueprintRepair";
 
 function templateTypeFromPageType(pageType: AnalyzedPageType | undefined): PageTemplate["type"] {
   switch (pageType) {
@@ -185,7 +190,17 @@ function bindingHintForBlock(
   dataBlueprint: DataBlueprint | undefined,
   block: BlueprintBlock,
 ): DataBlueprintBindingHint | undefined {
-  return dataBlueprint?.bindings?.find((item) => item.blockName === block.name);
+  if (!dataBlueprint?.bindings) return undefined;
+  // Ưu tiên hint có blockName khớp chính xác
+  const exact = dataBlueprint.bindings.find((item) => item.blockName === block.name);
+  if (exact) return exact;
+  // Fallback: hint có clusterId + lineIndex khớp (cho list_line blocks)
+  if (block.clusterId && block.lineIndex != null) {
+    return dataBlueprint.bindings.find(
+      (item) => item.clusterId === block.clusterId && item.lineIndex === block.lineIndex,
+    );
+  }
+  return undefined;
 }
 
 function hasLineBlocksInCluster(visualBlueprint: VisualBlueprint, clusterId: string) {
@@ -199,31 +214,28 @@ function buildSections(
   dataBlueprint: DataBlueprint | undefined,
 ): Map<string, Section> {
   const sections = new Map<string, Section>();
-  const hintedClusters = new Set<string>();
 
+  // 1) Dùng dataBlueprint.sections làm nguồn chính
   for (const hint of dataBlueprint?.sections ?? []) {
-    hintedClusters.add(hint.clusterId);
-    const repeatedCount = Math.max(
-      1,
-      hint.repeatedItemCount ??
-        visualBlueprint.blocks.filter(
-          (block) => block.clusterId === hint.clusterId && block.role === "list_line",
-        ).length ??
-        4,
-    );
+    const visualLineCount = visualBlueprint.blocks.filter(
+      (block) => block.clusterId === hint.clusterId && block.role === "list_line",
+    ).length;
+    const repeatedCount = Math.max(1, hint.repeatedItemCount ?? (visualLineCount || 4));
+    const hasLines = hasLineBlocksInCluster(visualBlueprint, hint.clusterId);
     sections.set(hint.clusterId, {
       sectionId: nanoid(),
       title: hint.title?.trim() || `Nhóm ${sections.size + 1}`,
       maxItems: Math.max(1, repeatedCount),
       minItems: Math.max(1, Math.min(3, repeatedCount)),
-      imageMode: "anchor_entity",
+      imageMode: hint.imageRepresentsCluster ? "anchor_entity" : "section_mood",
       listStyle: "dot",
       sortRule: "diversity",
       partnerMode: "balanced_partner",
-      layoutMode: "poster_list",
+      layoutMode: hasLines ? "poster_list" : "stack",
     });
   }
 
+  // 2) Phát hiện cluster từ visual chưa có section → tạo bổ sung
   const discoveredClusters = new Set(
     visualBlueprint.blocks
       .filter(
@@ -231,6 +243,7 @@ function buildSections(
           !!block.clusterId &&
           (block.role === "section_title" ||
             block.role === "list_group" ||
+            block.role === "list_line" ||
             block.role === "image_holder"),
       )
       .map((block) => block.clusterId!) as string[],
@@ -302,7 +315,14 @@ function createSlotFromBlock(
 ): Slot | null {
   const bindingHint = bindingHintForBlock(dataBlueprint, block);
   const clusterSection = block.clusterId ? sections.get(block.clusterId) : undefined;
-  const explicitBinding = bindingHint?.bindingPath ?? guessBindingPath(block.placeholder ?? block.name);
+  // Ưu tiên bindingPath từ dataBlueprint hint, repair nếu cần; fallback guess từ placeholder
+  let explicitBinding: string | undefined;
+  if (bindingHint?.bindingPath) {
+    explicitBinding = repairSingleBindingPath(bindingHint.bindingPath, block.kind);
+  }
+  if (!explicitBinding) {
+    explicitBinding = guessBindingPath(block.placeholder ?? block.name);
+  }
   const x = Math.max(0, Math.min(1, block.x)) * canvasWidth;
   const y = Math.max(0, Math.min(1, block.y)) * canvasHeight;
   const width = Math.max(0.01, Math.min(1, block.w)) * canvasWidth;
@@ -343,10 +363,15 @@ function createSlotFromBlock(
       ...base,
       kind: "section",
       sectionRefId: clusterSection.sectionId,
-      staticText:
-        block.role === "section_title"
-          ? placeholderForBlock(block)
-          : "",
+      staticText: "",
+    };
+  }
+  if (block.role === "section_title" && clusterSection) {
+    return {
+      ...base,
+      kind: "section",
+      sectionRefId: clusterSection.sectionId,
+      staticText: placeholderForBlock(block),
     };
   }
 
@@ -380,11 +405,26 @@ function createSlotFromBlock(
     };
   }
 
+export interface AiLayoutToTemplateResult {
+  template: PageTemplate;
+  quality: BlueprintQualitySummary;
+}
+
 export function aiLayoutToTemplate(layout: unknown, name = "AI Template"): PageTemplate {
-  const blueprint = asCombinedLayoutBlueprint(layout);
-  if (!blueprint) {
+  return aiLayoutToTemplateWithQuality(layout, name).template;
+}
+
+export function aiLayoutToTemplateWithQuality(
+  layout: unknown,
+  name = "AI Template",
+): AiLayoutToTemplateResult {
+  const rawBlueprint = asCombinedLayoutBlueprint(layout);
+  if (!rawBlueprint) {
     throw new Error("Invalid layout blueprint");
   }
+
+  // Repair blueprint trước khi xử lý
+  const { blueprint, quality } = repairCombinedLayoutBlueprint(rawBlueprint);
 
   const canvasWidth = 1080;
   const canvasHeight = 1350;
@@ -407,7 +447,17 @@ export function aiLayoutToTemplate(layout: unknown, name = "AI Template"): PageT
     )
     .filter((slot): slot is Slot => !!slot);
 
-  return {
+  // Gộp warnings từ repair + AI warnings vào validationRules
+  const allWarnings = [
+    ...(blueprint.dataBlueprint?.warnings ?? []),
+    ...(visualBlueprint.warnings ?? []),
+    ...quality.warnings.filter((w) => w.includes("không hỗ trợ") || w.includes("đã bỏ") || w.includes("quá nhỏ")),
+  ];
+  if (quality.bindingCoverage < 0.3) {
+    allWarnings.push("Binding coverage thấp (<30%), template cần gán binding thủ công.");
+  }
+
+  const template: PageTemplate = {
     pageTemplateId: nanoid(),
     name,
     type: templateTypeFromPageType(blueprint.dataBlueprint?.pageType),
@@ -418,10 +468,12 @@ export function aiLayoutToTemplate(layout: unknown, name = "AI Template"): PageT
     },
     slots,
     sections: Array.from(sections.values()),
-    validationRules: blueprint.dataBlueprint?.warnings ?? visualBlueprint.warnings,
+    validationRules: allWarnings.length > 0 ? allWarnings : undefined,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
+
+  return { template, quality };
 }
 
 export type { CombinedLayoutBlueprint };

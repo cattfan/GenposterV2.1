@@ -43,6 +43,7 @@ interface Props {
   entityPool?: Entity[];
   slotItems?: RenderedItem[];
   seedKey?: string;
+  showSlotBounds?: boolean;
 }
 
 export function PageRenderer({
@@ -57,6 +58,7 @@ export function PageRenderer({
   entityPool,
   slotItems,
   seedKey,
+  showSlotBounds = false,
 }: Props) {
   const entityMap = useMemo(
     () => new Map(entities.map((item) => [item.entityId, item])),
@@ -163,6 +165,7 @@ export function PageRenderer({
             }
             planned={imagePlan.get(slot.slotId)}
             debug={debug}
+            showSlotBounds={showSlotBounds}
           />
         ))}
     </div>
@@ -182,6 +185,7 @@ function SlotRenderer({
   slotOverride,
   planned,
   debug,
+  showSlotBounds,
 }: {
   slot: Slot;
   scale: number;
@@ -195,6 +199,7 @@ function SlotRenderer({
   slotOverride?: { entityId?: string; assetId?: string };
   planned?: PlannedImage;
   debug?: boolean;
+  showSlotBounds?: boolean;
 }) {
   const flip = buildFlipTransform(slot.style);
   const rot = slot.rotation ? `rotate(${slot.rotation}deg)` : "";
@@ -312,6 +317,7 @@ function SlotRenderer({
             {shapeText}
           </div>
         )}
+        <SlotPreviewBounds kind="shape" show={showSlotBounds} />
         <DebugBadge debug={debug} text={`shape${planned?.fallback ? "*" : ""}`} />
       </div>
     );
@@ -423,6 +429,7 @@ function SlotRenderer({
             }}
           />
         )}
+        <SlotPreviewBounds kind="image" show={showSlotBounds} />
         <DebugBadge
           debug={debug}
           text={`img${planned?.fallback ? "*" : ""} ${entityIdLog?.slice(0, 4) ?? ""} ${assetIdLog?.slice(0, 4) ?? ""}`}
@@ -444,6 +451,7 @@ function SlotRenderer({
         }}
       >
         {text}
+        <SlotPreviewBounds kind="text" show={showSlotBounds} />
         <DebugBadge debug={debug} text="text" />
       </div>
     );
@@ -467,6 +475,7 @@ function SlotRenderer({
           height={slot.height}
           debug={debug}
         />
+        <SlotPreviewBounds kind="section" show={showSlotBounds} />
       </div>
     );
   }
@@ -714,6 +723,46 @@ function SectionView({
             );
           })
         )}
+      </div>
+    </div>
+  );
+}
+
+function SlotPreviewBounds({ kind, show }: { kind: Slot["kind"]; show?: boolean }) {
+  if (!show) return null;
+  const label =
+    kind === "image" ? "Image" : kind === "text" ? "Text" : kind === "shape" ? "Shape" : "Section";
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        pointerEvents: "none",
+        zIndex: 9998,
+        border: "1px dashed rgba(100,116,139,0.55)",
+        boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.75)",
+        background:
+          kind === "image"
+            ? "repeating-linear-gradient(135deg, rgba(59,130,246,0.08) 0, rgba(59,130,246,0.08) 8px, transparent 8px, transparent 16px)"
+            : "rgba(255,255,255,0.02)",
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          left: 4,
+          top: 4,
+          borderRadius: 4,
+          background: "rgba(15,23,42,0.68)",
+          color: "#fff",
+          fontSize: 10,
+          fontWeight: 700,
+          lineHeight: 1,
+          padding: "4px 6px",
+          letterSpacing: 0.1,
+        }}
+      >
+        {label}
       </div>
     </div>
   );

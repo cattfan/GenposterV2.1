@@ -123,18 +123,18 @@ export function normalizeDesignDocument(
 
 export function materializeDesignDocument(state: DesignEditorState): DesignDocument {
   const pages = state.pageOrder.map((pageId) => state.pagesById[pageId]).filter(Boolean);
-  const elements = pages.flatMap((page) => {
+  const elements: DesignElement[] = pages.flatMap((page) => {
     const order = state.elementOrderByPage[page.pageId] ?? [];
-    return order
-      .map((elementId, index) => {
-        const element = state.elementsById[elementId];
-        if (!element) return null;
-        return {
-          ...element,
-          zIndex: index,
-        };
-      })
-      .filter((element): element is DesignElement => !!element);
+    const pageElements: DesignElement[] = [];
+    order.forEach((elementId, index) => {
+      const element = state.elementsById[elementId];
+      if (!element) return;
+      pageElements.push({
+        ...element,
+        zIndex: index,
+      });
+    });
+    return pageElements;
   });
 
   return {

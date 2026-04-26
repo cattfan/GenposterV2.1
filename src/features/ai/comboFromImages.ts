@@ -3,7 +3,7 @@
 import { nanoid } from "nanoid";
 import { db } from "@/storage/db";
 import type { PackTemplate, PageTemplate, Section } from "@/models";
-import { aiLayoutToTemplate } from "./templateFromImage";
+import { aiLayoutToTemplateWithQuality } from "./templateFromImage";
 
 interface ComboServerPage {
   index: number;
@@ -55,10 +55,14 @@ export function buildComboFromAiResult(
     } catch {
       layout = { slots: [] };
     }
-    const tpl = aiLayoutToTemplate(
-      layout as Parameters<typeof aiLayoutToTemplate>[0],
+    const { template: tpl, quality } = aiLayoutToTemplateWithQuality(
+      layout,
       p.suggestedName,
     );
+    // Gộp quality warnings vào validationRules nếu có
+    if (quality.warnings.length > 0) {
+      tpl.validationRules = [...(tpl.validationRules ?? []), ...quality.warnings.filter((w) => w.includes("không hỗ trợ") || w.includes("đã bỏ") || w.includes("quá nhỏ") || w.includes("quá dài"))];
+    }
     // Set type theo role
     if (p.role === "cover") tpl.type = "cover";
     else if (p.role === "day") tpl.type = "itinerary";

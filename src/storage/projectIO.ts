@@ -25,7 +25,7 @@ export interface ProjectExportV1 {
   overrides: ManualOverride[];
 }
 
-export interface ProjectExportV2 extends ProjectExportV1 {
+export interface ProjectExportV2 extends Omit<ProjectExportV1, "version"> {
   version: 2;
   designDocuments: DesignDocument[];
   assetLibrary: AssetItem[];

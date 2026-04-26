@@ -5,6 +5,8 @@ import {
   AlignEndHorizontal,
   AlignHorizontalJustifyCenter,
   AlignStartHorizontal,
+  FlipHorizontal,
+  FlipVertical,
   AlignVerticalJustifyCenter,
   ChevronDown,
   ClipboardPaste,
@@ -38,6 +40,8 @@ import {
   Type,
   Ungroup,
   Upload,
+  Undo2,
+  Redo2,
   X,
   ZoomIn,
   ZoomOut,
@@ -90,13 +94,21 @@ import type {
   DesignDocument,
   DesignElement,
   DesignPage,
+  DesignTextElement,
   EditorMode,
+  ElementStyle,
   FontAsset,
+  ImageCrop,
 } from "@/models";
 import { DesignRenderer } from "./DesignRenderer";
 import { FONTS } from "./fonts";
 import { getBuiltInAssetLibrary, isHeroiconAsset, type HeroiconAsset } from "./designAssets";
 import { useDesignEditor } from "./designStore";
+import { TextToolbar } from "./TextToolbar";
+import { CropOverlay } from "./CropOverlay";
+import { CanvasRuler } from "./CanvasRuler";
+import { SmartSpacing, computeSpacingLines } from "./SmartSpacing";
+import { ColorPicker } from "./ColorPicker";
 
 type WorkspaceMode = EditorMode;
 type AssetPanelItem = AssetItem | HeroiconAsset;
@@ -298,6 +310,24 @@ function zoomByStep(editor: ReturnType<typeof useDesignEditor>, zoom: number, di
   editor.setZoom(getNextZoom(zoom, direction));
 }
 
+function zoomToFit(
+  editor: ReturnType<typeof useDesignEditor>,
+  container: HTMLElement | null,
+) {
+  const page = editor.activePage;
+  if (!page || !container) return;
+  const rect = container.getBoundingClientRect();
+  const padding = 48;
+  const availW = rect.width - padding * 2;
+  const availH = rect.height - padding * 2;
+  if (availW <= 0 || availH <= 0) return;
+  const scale = Math.min(availW / page.width, availH / page.height, 3);
+  const panX = (rect.width - page.width * scale) / 2;
+  const panY = (rect.height - page.height * scale) / 2;
+  editor.setZoom(scale);
+  editor.setPan(panX, panY);
+}
+
 const RESIZE_HANDLES = [
   { key: "nw", cursor: "nwse-resize", style: { left: -8, top: -8 } },
   { key: "n", cursor: "ns-resize", style: { left: "50%", top: -8, marginLeft: -8 } },
@@ -407,12 +437,12 @@ function snapMove(
     { position: nextY + element.height / 2, lineValue: nextY + element.height / 2 },
     { position: nextY + element.height, lineValue: nextY + element.height },
   ];
-  const xTargets = [
+  const xTargets: Array<{ position: number; lineValue: number; elementId?: string }> = [
     { position: 0, lineValue: 0 },
     { position: page.width / 2, lineValue: page.width / 2 },
     { position: page.width, lineValue: page.width },
   ];
-  const yTargets = [
+  const yTargets: Array<{ position: number; lineValue: number; elementId?: string }> = [
     { position: 0, lineValue: 0 },
     { position: page.height / 2, lineValue: page.height / 2 },
     { position: page.height, lineValue: page.height },
@@ -477,12 +507,12 @@ function snapResize(
   const snapTargetIds = new Set<string>();
   const next = { ...rect };
 
-  const xTargets = [
+  const xTargets: Array<{ position: number; lineValue: number; elementId?: string }> = [
     { position: 0, lineValue: 0 },
     { position: page.width / 2, lineValue: page.width / 2 },
     { position: page.width, lineValue: page.width },
   ];
-  const yTargets = [
+  const yTargets: Array<{ position: number; lineValue: number; elementId?: string }> = [
     { position: 0, lineValue: 0 },
     { position: page.height / 2, lineValue: page.height / 2 },
     { position: page.height, lineValue: page.height },
@@ -672,6 +702,8 @@ export function DesignWorkspace({
   const [isPanning, setIsPanning] = useState(false);
   const [panCursor, setPanCursor] = useState<"grab" | "grabbing">("grab");
   const [viewportDrag, setViewportDrag] = useState<{ startX: number; startY: number } | null>(null);
+  const [cropTargetId, setCropTargetId] = useState<string | null>(null);
+  const [spacingLines, setSpacingLines] = useState<Array<{ axis: "x" | "y"; from: number; to: number; pos: number; gap: number }>>([]);
   const assetLibraryQuery = useLiveQuery(
     () => db.assetLibrary.orderBy("updatedAt").reverse().toArray(),
     [],
@@ -1252,7 +1284,7 @@ export function DesignWorkspace({
     zoomByStep(editor, zoom, direction);
   };
 
-  const handleCanvasWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+  const handleCanvasWheel = (event: WheelEvent) => {
     if (!event.ctrlKey && !event.metaKey) return;
     event.preventDefault();
     const currentZoom = zoom;
@@ -1271,6 +1303,16 @@ export function DesignWorkspace({
     editor.setPan(nextPan.panX, nextPan.panY);
     editor.setZoom(nextZoom);
   };
+
+  useEffect(() => {
+    const onWheel = (event: WheelEvent) => {
+      const wrap = stageWrapRef.current;
+      if (!wrap || !(event.target instanceof Node) || !wrap.contains(event.target)) return;
+      handleCanvasWheel(event);
+    };
+    window.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => window.removeEventListener("wheel", onWheel, true);
+  }, [handleCanvasWheel]);
 
   const beginPan = (clientX: number, clientY: number) => {
     setIsPanning(true);
@@ -1312,28 +1354,27 @@ export function DesignWorkspace({
       return;
     }
 
-    if (event.target !== event.currentTarget) return;
-    onSelect(null, false);
+    editor.setSelection([]);
     const additive = event.shiftKey;
     const toggle = event.ctrlKey || event.metaKey;
     const start = getCanvasPoint(
       canvas,
-      scale,
+      zoom,
       event.clientX,
       event.clientY,
-      editor.state.viewport.panX,
-      editor.state.viewport.panY,
+      0,
+      0,
     );
     setMarqueeRect({ x: start.x, y: start.y, width: 0, height: 0 });
 
     const onMouseMove = (moveEvent: MouseEvent) => {
       const point = getCanvasPoint(
         canvas,
-        scale,
+        zoom,
         moveEvent.clientX,
         moveEvent.clientY,
-        editor.state.viewport.panX,
-        editor.state.viewport.panY,
+        0,
+        0,
       );
       const rect = normalizeMarqueeRect(start, point);
       setMarqueeRect(rect);
@@ -1354,6 +1395,15 @@ export function DesignWorkspace({
 
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
+  };
+
+  const handleStageWrapMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("[data-design-canvas]")) return;
+    if (isPanToolActive(tool, spacePressed)) return;
+    editor.setSelection([]);
+    setMarqueeRect(null);
   };
 
   const selectedBounds = getSelectionBounds(selected);
@@ -1467,6 +1517,37 @@ export function DesignWorkspace({
           {element.hidden ? "Hiện thành phần" : "Ẩn thành phần"}
         </ContextMenuItem>
         <ContextMenuSeparator />
+        <ContextMenuItem
+          onSelect={() =>
+            editor.updateElements(
+              [element.elementId],
+              { style: { ...(element.style ?? {}), flipH: !element.style?.flipH } } as Partial<DesignElement>,
+              { history: false },
+            )
+          }
+        >
+          <FlipHorizontal className="mr-2 size-4" />
+          Lật ngang
+        </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={() =>
+            editor.updateElements(
+              [element.elementId],
+              { style: { ...(element.style ?? {}), flipV: !element.style?.flipV } } as Partial<DesignElement>,
+              { history: false },
+            )
+          }
+        >
+          <FlipVertical className="mr-2 size-4" />
+          Lật dọc
+        </ContextMenuItem>
+        {element.kind === "image" ? (
+          <ContextMenuItem onSelect={() => setCropTargetId(element.elementId)}>
+            <ImageIcon className="mr-2 size-4" />
+            Cắt ảnh
+          </ContextMenuItem>
+        ) : null}
+        <ContextMenuSeparator />
         <ContextMenuItem onSelect={openPropertiesPanel}>
           <PanelRight className="mr-2 size-4" />
           Mở thuộc tính
@@ -1537,6 +1618,40 @@ export function DesignWorkspace({
 
           <ToolbarDivider />
 
+          {/* Undo / Redo */}
+          <div className="flex items-center rounded-md border bg-background p-0.5">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-8"
+                  disabled={!editor.canUndo}
+                  onClick={() => editor.undo()}
+                >
+                  <Undo2 className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Undo · Ctrl+Z</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-8"
+                  disabled={!editor.canRedo}
+                  onClick={() => editor.redo()}
+                >
+                  <Redo2 className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Redo · Ctrl+Shift+Z</TooltipContent>
+            </Tooltip>
+          </div>
+
+          <ToolbarDivider />
+
           <div className="flex items-center rounded-md border bg-background p-0.5">
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1566,6 +1681,19 @@ export function DesignWorkspace({
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Zoom in · Ctrl/Cmd + +</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-8"
+                  onClick={() => zoomToFit(editor, stageWrapRef.current)}
+                >
+                  <Frame className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Fit to screen</TooltipContent>
             </Tooltip>
           </div>
 
@@ -1710,12 +1838,38 @@ export function DesignWorkspace({
                   size="icon"
                   variant="ghost"
                   className="size-8"
+                  onClick={() => alignSelectionFromToolbar("top")}
+                >
+                  <MoveUp className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Align top</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-8"
                   onClick={() => alignSelectionFromToolbar("middle")}
                 >
                   <AlignVerticalJustifyCenter className="size-4" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Align vertical middle</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-8"
+                  onClick={() => alignSelectionFromToolbar("bottom")}
+                >
+                  <MoveDown className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Align bottom</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1730,6 +1884,19 @@ export function DesignWorkspace({
               </TooltipTrigger>
               <TooltipContent>Distribute horizontally</TooltipContent>
             </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-8"
+                  onClick={() => editor.distributeSelection("vertical")}
+                >
+                  <AlignVerticalJustifyCenter className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Distribute vertically</TooltipContent>
+            </Tooltip>
           </div>
 
           <ToolbarDivider />
@@ -1741,14 +1908,13 @@ export function DesignWorkspace({
                   size="icon"
                   variant="ghost"
                   className="size-8"
-                  onClick={editor.undo}
-                  disabled={!editor.canUndo}
-                  aria-label="Undo"
+                  onClick={() => editor.groupSelection()}
+                  disabled={selected.length < 2}
                 >
-                  <MoveUp className="size-4" />
+                  <Group className="size-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Undo · Ctrl/Cmd + Z</TooltipContent>
+              <TooltipContent>Group · Ctrl+G</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1756,14 +1922,13 @@ export function DesignWorkspace({
                   size="icon"
                   variant="ghost"
                   className="size-8"
-                  onClick={editor.redo}
-                  disabled={!editor.canRedo}
-                  aria-label="Redo"
+                  onClick={() => editor.ungroupSelection()}
+                  disabled={!selected.some((e) => e.kind === "group")}
                 >
-                  <MoveDown className="size-4" />
+                  <Ungroup className="size-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Redo · Ctrl/Cmd + Shift + Z</TooltipContent>
+              <TooltipContent>Ungroup · Ctrl+Shift+G</TooltipContent>
             </Tooltip>
           </div>
 
@@ -2107,7 +2272,7 @@ export function DesignWorkspace({
           <div
             ref={stageWrapRef}
             className="min-h-0 min-w-0 overflow-auto bg-muted/30 p-6"
-            onWheel={handleCanvasWheel}
+            onMouseDown={handleStageWrapMouseDown}
           >
             <div
               className="flex min-h-full items-start justify-center"
@@ -2117,6 +2282,23 @@ export function DesignWorkspace({
                 cursor: stageCursor,
               }}
             >
+              <div className="relative">
+                {editor.state.documentSettings.showGuides ? (
+                  <CanvasRuler
+                    pageWidth={activePage.width}
+                    pageHeight={activePage.height}
+                    scale={zoom}
+                    guides={activePage.guides ?? []}
+                    onAddGuide={(axis, value) => {
+                      const guides = [...(activePage.guides ?? []), { guideId: nanoid(), axis, value }];
+                      editor.updatePage(activePage.pageId, { guides });
+                    }}
+                    onRemoveGuide={(guideId) => {
+                      const guides = (activePage.guides ?? []).filter((g) => g.guideId !== guideId);
+                      editor.updatePage(activePage.pageId, { guides });
+                    }}
+                  />
+                ) : null}
               <DesignStage
                 page={activePage}
                 elements={editor.activeElements}
@@ -2179,6 +2361,10 @@ export function DesignWorkspace({
                   const appliedDy = snapped.y - primaryOrigin.y;
                   editor.setSnapLines(snapped.snapLines);
                   setSnapTargetIds(snapped.snapTargetIds);
+                  // Smart spacing
+                  const movedEl = { ...primaryTarget, x: snapped.x, y: snapped.y };
+                  const others = editor.activeElements.filter((e) => !moveIds.includes(e.elementId) && !e.hidden);
+                  setSpacingLines(computeSpacingLines(movedEl, others));
                   editor.updateElements(
                     moveIds,
                     (element) => ({
@@ -2199,6 +2385,7 @@ export function DesignWorkspace({
                 onMoveCommit={() => {
                   editor.setSnapLines([]);
                   setSnapTargetIds([]);
+                  setSpacingLines([]);
                 }}
                 onResize={({ elementId, patch, snapLines, snapTargetIds }) => {
                   editor.updateElements([elementId], patch, { history: false });
@@ -2209,7 +2396,24 @@ export function DesignWorkspace({
                   editor.setSnapLines([]);
                   setSnapTargetIds([]);
                 }}
+                availableFontFamilies={availableFontFamilies}
+                onUpdateElementStyle={(elementId, patch) =>
+                  editor.updateElements(
+                    [elementId],
+                    { style: { ...(editor.activeElements.find((e) => e.elementId === elementId)?.style ?? {}), ...patch } } as Partial<DesignElement>,
+                    { history: false },
+                  )
+                }
+                cropTargetId={cropTargetId}
+                onStartImageCrop={(elementId) => setCropTargetId(elementId)}
+                onCommitCrop={(elementId, crop) => {
+                  editor.updateElements([elementId], { crop }, { history: false });
+                  setCropTargetId(null);
+                }}
+                onCancelCrop={() => setCropTargetId(null)}
+                spacingLines={spacingLines}
               />
+              </div>
             </div>
           </div>
 
@@ -2246,13 +2450,11 @@ export function DesignWorkspace({
                       </div>
                       <div className="mt-3 space-y-2">
                         <Label className="text-xs">Background</Label>
-                        <Input
-                          type="color"
+                        <ColorPicker
                           value={activePage.background ?? "#ffffff"}
-                          onChange={(event) =>
-                            editor.updatePage(activePage.pageId, { background: event.target.value })
+                          onChange={(color) =>
+                            editor.updatePage(activePage.pageId, { background: color })
                           }
-                          className="h-10 p-1"
                         />
                       </div>
                       <div className="mt-3 flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
@@ -2356,7 +2558,7 @@ export function DesignWorkspace({
                           <Button size="sm" variant="outline" onClick={editor.copySelection}>
                             <Copy className="mr-2 size-4" /> Copy
                           </Button>
-                          <Button size="sm" variant="outline" onClick={editor.duplicateSelection}>
+                          <Button size="sm" variant="outline" onClick={() => editor.duplicateSelection()}>
                             <Layers className="mr-2 size-4" /> Duplicate
                           </Button>
                         </div>
@@ -2469,22 +2671,20 @@ export function DesignWorkspace({
                             </div>
                             <div className="space-y-2">
                               <Label className="text-xs">Text color</Label>
-                              <Input
-                                type="color"
+                              <ColorPicker
                                 value={primary.style?.color ?? "#0f172a"}
-                                onChange={(event) =>
+                                onChange={(color) =>
                                   editor.updateElements(
                                     [primary.elementId],
                                     {
                                       style: {
                                         ...(primary.style ?? {}),
-                                        color: event.target.value,
+                                        color,
                                       },
                                     } as Partial<DesignElement>,
                                     { history: false },
                                   )
                                 }
-                                className="h-10 p-1"
                               />
                             </div>
                             <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
@@ -2583,22 +2783,20 @@ export function DesignWorkspace({
                             {primary.kind === "shape" ? (
                               <div className="space-y-2">
                                 <Label className="text-xs">Fill</Label>
-                                <Input
-                                  type="color"
+                                <ColorPicker
                                   value={primary.style?.fill ?? "#f97316"}
-                                  onChange={(event) =>
+                                  onChange={(color) =>
                                     editor.updateElements(
                                       [primary.elementId],
                                       {
                                         style: {
                                           ...(primary.style ?? {}),
-                                          fill: event.target.value,
+                                          fill: color,
                                         },
                                       } as Partial<DesignElement>,
                                       { history: false },
                                     )
                                   }
-                                  className="h-10 p-1"
                                 />
                               </div>
                             ) : null}
@@ -2631,8 +2829,302 @@ export function DesignWorkspace({
                                 </Select>
                               </div>
                             ) : null}
+                            {primary.kind === "image" ? (
+                              <div className="space-y-3 border-t pt-3">
+                                <Label className="text-xs uppercase text-muted-foreground">
+                                  Filters
+                                </Label>
+                                <div className="space-y-2">
+                                  <div className="flex items-center justify-between">
+                                    <Label className="text-xs">Brightness</Label>
+                                    <span className="text-[10px] tabular-nums text-muted-foreground">
+                                      {Math.round((primary.style?.brightness ?? 1) * 100)}%
+                                    </span>
+                                  </div>
+                                  <Slider
+                                    value={[(primary.style?.brightness ?? 1) * 100]}
+                                    min={0}
+                                    max={200}
+                                    step={5}
+                                    onValueChange={([v]) =>
+                                      editor.updateElements(
+                                        [primary.elementId],
+                                        { style: { ...(primary.style ?? {}), brightness: v / 100 } } as Partial<DesignElement>,
+                                        { history: false },
+                                      )
+                                    }
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <div className="flex items-center justify-between">
+                                    <Label className="text-xs">Contrast</Label>
+                                    <span className="text-[10px] tabular-nums text-muted-foreground">
+                                      {Math.round((primary.style?.contrast ?? 1) * 100)}%
+                                    </span>
+                                  </div>
+                                  <Slider
+                                    value={[(primary.style?.contrast ?? 1) * 100]}
+                                    min={0}
+                                    max={200}
+                                    step={5}
+                                    onValueChange={([v]) =>
+                                      editor.updateElements(
+                                        [primary.elementId],
+                                        { style: { ...(primary.style ?? {}), contrast: v / 100 } } as Partial<DesignElement>,
+                                        { history: false },
+                                      )
+                                    }
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <div className="flex items-center justify-between">
+                                    <Label className="text-xs">Saturate</Label>
+                                    <span className="text-[10px] tabular-nums text-muted-foreground">
+                                      {Math.round((primary.style?.saturate ?? 1) * 100)}%
+                                    </span>
+                                  </div>
+                                  <Slider
+                                    value={[(primary.style?.saturate ?? 1) * 100]}
+                                    min={0}
+                                    max={200}
+                                    step={5}
+                                    onValueChange={([v]) =>
+                                      editor.updateElements(
+                                        [primary.elementId],
+                                        { style: { ...(primary.style ?? {}), saturate: v / 100 } } as Partial<DesignElement>,
+                                        { history: false },
+                                      )
+                                    }
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <div className="flex items-center justify-between">
+                                    <Label className="text-xs">Blur</Label>
+                                    <span className="text-[10px] tabular-nums text-muted-foreground">
+                                      {primary.style?.blur ?? 0}px
+                                    </span>
+                                  </div>
+                                  <Slider
+                                    value={[primary.style?.blur ?? 0]}
+                                    min={0}
+                                    max={20}
+                                    step={0.5}
+                                    onValueChange={([v]) =>
+                                      editor.updateElements(
+                                        [primary.elementId],
+                                        { style: { ...(primary.style ?? {}), blur: v } } as Partial<DesignElement>,
+                                        { history: false },
+                                      )
+                                    }
+                                  />
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="w-full"
+                                  onClick={() =>
+                                    editor.updateElements(
+                                      [primary.elementId],
+                                      { style: { ...(primary.style ?? {}), brightness: 1, contrast: 1, saturate: 1, blur: 0 } } as Partial<DesignElement>,
+                                      { history: false },
+                                    )
+                                  }
+                                >
+                                  Reset filters
+                                </Button>
+                              </div>
+                            ) : null}
                           </div>
                         ) : null}
+
+                        {/* Gradient fill — available for shape + text */}
+                        {primary.kind === "shape" || primary.kind === "text" ? (
+                          <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <Label className="text-xs">Gradient</Label>
+                              <Button
+                                size="sm"
+                                variant={primary.style?.gradientEnabled ? "default" : "outline"}
+                                onClick={() =>
+                                  editor.updateElements(
+                                    [primary.elementId],
+                                    {
+                                      style: {
+                                        ...(primary.style ?? {}),
+                                        gradientEnabled: !primary.style?.gradientEnabled,
+                                      },
+                                    } as Partial<DesignElement>,
+                                    { history: false },
+                                  )
+                                }
+                              >
+                                {primary.style?.gradientEnabled ? "On" : "Off"}
+                              </Button>
+                            </div>
+                            {primary.style?.gradientEnabled ? (
+                              <>
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div className="space-y-1">
+                                    <Label className="text-xs text-muted-foreground">From</Label>
+                                    <Input
+                                      type="color"
+                                      value={primary.style?.gradientFrom ?? "#f97316"}
+                                      onChange={(event) =>
+                                        editor.updateElements(
+                                          [primary.elementId],
+                                          {
+                                            style: {
+                                              ...(primary.style ?? {}),
+                                              gradientFrom: event.target.value,
+                                            },
+                                          } as Partial<DesignElement>,
+                                          { history: false },
+                                        )
+                                      }
+                                      className="h-8 p-1"
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <Label className="text-xs text-muted-foreground">To</Label>
+                                    <Input
+                                      type="color"
+                                      value={primary.style?.gradientTo ?? "#ec4899"}
+                                      onChange={(event) =>
+                                        editor.updateElements(
+                                          [primary.elementId],
+                                          {
+                                            style: {
+                                              ...(primary.style ?? {}),
+                                              gradientTo: event.target.value,
+                                            },
+                                          } as Partial<DesignElement>,
+                                          { history: false },
+                                        )
+                                      }
+                                      className="h-8 p-1"
+                                    />
+                                  </div>
+                                </div>
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between">
+                                    <Label className="text-xs text-muted-foreground">Angle</Label>
+                                    <span className="text-[10px] tabular-nums text-muted-foreground">
+                                      {primary.style?.gradientAngle ?? 90}°
+                                    </span>
+                                  </div>
+                                  <Slider
+                                    value={[primary.style?.gradientAngle ?? 90]}
+                                    min={0}
+                                    max={360}
+                                    step={15}
+                                    onValueChange={([v]) =>
+                                      editor.updateElements(
+                                        [primary.elementId],
+                                        {
+                                          style: {
+                                            ...(primary.style ?? {}),
+                                            gradientAngle: v,
+                                          },
+                                        } as Partial<DesignElement>,
+                                        { history: false },
+                                      )
+                                    }
+                                  />
+                                </div>
+                              </>
+                            ) : null}
+                          </div>
+                        ) : null}
+
+                        {/* Shadow controls — available for all elements */}
+                        <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <Label className="text-xs">Shadow</Label>
+                            <Button
+                              size="sm"
+                              variant={primary.style?.shadowColor ? "default" : "outline"}
+                              onClick={() =>
+                                editor.updateElements(
+                                  [primary.elementId],
+                                  {
+                                    style: {
+                                      ...(primary.style ?? {}),
+                                      shadowColor: primary.style?.shadowColor ? undefined : "rgba(0,0,0,0.25)",
+                                      shadowBlur: primary.style?.shadowBlur ?? 8,
+                                      shadowX: primary.style?.shadowX ?? 0,
+                                      shadowY: primary.style?.shadowY ?? 4,
+                                    },
+                                  } as Partial<DesignElement>,
+                                  { history: false },
+                                )
+                              }
+                            >
+                              {primary.style?.shadowColor ? "On" : "Off"}
+                            </Button>
+                          </div>
+                          {primary.style?.shadowColor ? (
+                            <>
+                              <div className="space-y-1">
+                                <Label className="text-xs text-muted-foreground">Color</Label>
+                                <Input
+                                  type="color"
+                                  value={primary.style.shadowColor ?? "rgba(0,0,0,0.25)"}
+                                  onChange={(event) =>
+                                    editor.updateElements(
+                                      [primary.elementId],
+                                      { style: { ...(primary.style ?? {}), shadowColor: event.target.value } } as Partial<DesignElement>,
+                                      { history: false },
+                                    )
+                                  }
+                                  className="h-8 p-1"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <Label className="text-xs text-muted-foreground">Blur</Label>
+                                  <span className="text-[10px] tabular-nums text-muted-foreground">{primary.style.shadowBlur ?? 8}px</span>
+                                </div>
+                                <Slider
+                                  value={[primary.style.shadowBlur ?? 8]}
+                                  min={0}
+                                  max={40}
+                                  step={1}
+                                  onValueChange={([v]) =>
+                                    editor.updateElements(
+                                      [primary.elementId],
+                                      { style: { ...(primary.style ?? {}), shadowBlur: v } } as Partial<DesignElement>,
+                                      { history: false },
+                                    )
+                                  }
+                                />
+                              </div>
+                              <div className="grid grid-cols-2 gap-2">
+                                <NumberField
+                                  label="X"
+                                  value={primary.style.shadowX ?? 0}
+                                  onChange={(v) =>
+                                    editor.updateElements(
+                                      [primary.elementId],
+                                      { style: { ...(primary.style ?? {}), shadowX: v } } as Partial<DesignElement>,
+                                      { history: false },
+                                    )
+                                  }
+                                />
+                                <NumberField
+                                  label="Y"
+                                  value={primary.style.shadowY ?? 4}
+                                  onChange={(v) =>
+                                    editor.updateElements(
+                                      [primary.elementId],
+                                      { style: { ...(primary.style ?? {}), shadowY: v } } as Partial<DesignElement>,
+                                      { history: false },
+                                    )
+                                  }
+                                />
+                              </div>
+                            </>
+                          ) : null}
+                        </div>
                       </div>
                     ) : (
                       <div className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">
@@ -2859,6 +3351,13 @@ function DesignStage({
   onMoveCommit,
   onResize,
   onResizeCommit,
+  availableFontFamilies,
+  onUpdateElementStyle,
+  cropTargetId,
+  onStartImageCrop,
+  onCommitCrop,
+  onCancelCrop,
+  spacingLines,
 }: {
   page: DesignPage;
   elements: DesignElement[];
@@ -2898,6 +3397,13 @@ function DesignStage({
     snapTargetIds?: string[];
   }) => void;
   onResizeCommit: () => void;
+  availableFontFamilies: string[];
+  onUpdateElementStyle: (elementId: string, patch: Partial<ElementStyle>) => void;
+  cropTargetId: string | null;
+  onStartImageCrop: (elementId: string) => void;
+  onCommitCrop: (elementId: string, crop: ImageCrop) => void;
+  onCancelCrop: () => void;
+  spacingLines: Array<{ axis: "x" | "y"; from: number; to: number; pos: number; gap: number }>;
 }) {
   const toolIsPan = isPanToolActive(tool, spacePressed);
   const guideColor = "rgba(56,189,248,0.9)";
@@ -3005,6 +3511,8 @@ function DesignStage({
                 </div>
               ))}
 
+              <SmartSpacing lines={spacingLines} scale={scale} />
+
               {elements
                 .filter((element) => !element.hidden)
                 .slice()
@@ -3015,18 +3523,35 @@ function DesignStage({
                   const isSnapTarget = snapTargetIds.includes(element.elementId);
                   const isEditingText =
                     editingTextId === element.elementId && element.kind === "text";
+                  const isCropTarget =
+                    cropTargetId === element.elementId && element.kind === "image";
                   const textEditorStyle =
                     element.kind === "text" ? buildTextStyle(element.style, scale) : undefined;
+                  const visibleBounds =
+                    element.kind === "text" || element.kind === "image" || element.kind === "shape";
+                  const elementLabel =
+                    element.kind === "text"
+                      ? "Text"
+                      : element.kind === "image"
+                        ? "Image"
+                        : element.kind === "shape"
+                          ? "Shape"
+                          : "Group";
 
                   const overlay = (
                     <div
+                      data-design-element
                       onContextMenu={() => {
                         if (!selected) onSelect(element.elementId, false);
                       }}
                       onDoubleClick={(event) => {
-                        if (element.kind !== "text") return;
-                        event.stopPropagation();
-                        onStartTextEdit(element.elementId);
+                        if (element.kind === "text") {
+                          event.stopPropagation();
+                          onStartTextEdit(element.elementId);
+                        } else if (element.kind === "image") {
+                          event.stopPropagation();
+                          onStartImageCrop(element.elementId);
+                        }
                       }}
                       onMouseDown={(event) => {
                         if (isEditingText || toolIsPan) return;
@@ -3107,10 +3632,12 @@ function DesignStage({
                         border: isSnapTarget
                           ? "2px solid rgba(236,72,153,0.9)"
                           : selected
-                            ? "1px dashed rgba(15,23,42,0.55)"
-                            : "1px solid transparent",
-                        outline: primary ? "2px solid hsl(var(--primary))" : undefined,
-                        outlineOffset: primary ? 2 : undefined,
+                            ? "1px solid rgba(37,99,235,0.95)"
+                            : visibleBounds
+                              ? "1px dashed rgba(15,23,42,0.28)"
+                              : "1px solid transparent",
+                        outline: primary ? "2px solid rgba(37,99,235,0.95)" : undefined,
+                        outlineOffset: primary ? 3 : undefined,
                         background: isSnapTarget
                           ? "rgba(236,72,153,0.08)"
                           : selected
@@ -3118,33 +3645,98 @@ function DesignStage({
                             : "transparent",
                         cursor: element.locked ? "default" : "move",
                         boxSizing: "border-box",
+                        boxShadow: selected
+                          ? "0 0 0 1px rgba(255,255,255,0.95), 0 8px 22px rgba(15,23,42,0.12)"
+                          : visibleBounds
+                            ? "inset 0 0 0 1px rgba(255,255,255,0.7)"
+                            : undefined,
                       }}
                     >
-                      {isEditingText && textEditorStyle ? (
-                        <textarea
-                          autoFocus
-                          value={editingTextValue}
-                          onChange={(event) => onEditingTextValueChange(event.target.value)}
-                          onBlur={onCommitTextEdit}
+                      {visibleBounds && !isEditingText && !isCropTarget ? (
+                        <>
+                          <div
+                            className="pointer-events-none absolute left-1 top-1 z-20 rounded bg-slate-950/70 px-1.5 py-0.5 text-[10px] font-medium text-white opacity-80"
+                            style={{ transform: `scale(${1 / Math.max(scale, 0.6)})`, transformOrigin: "top left" }}
+                          >
+                            {elementLabel}
+                          </div>
+                          {element.kind === "image" ? (
+                            <div className="pointer-events-none absolute inset-0 z-10 bg-[linear-gradient(135deg,rgba(37,99,235,0.08)_25%,transparent_25%,transparent_50%,rgba(37,99,235,0.08)_50%,rgba(37,99,235,0.08)_75%,transparent_75%,transparent)] bg-[length:20px_20px] opacity-50" />
+                          ) : null}
+                        </>
+                      ) : null}
+                      {isCropTarget && element.kind === "image" ? (
+                        <CropOverlay
+                          src={element.src ?? ""}
+                          initial={element.crop}
+                          zoom={scale}
+                          width={element.width}
+                          height={element.height}
+                          onCommit={(crop) => onCommitCrop(element.elementId, crop)}
+                          onCancel={onCancelCrop}
+                        />
+                      ) : isEditingText && textEditorStyle ? (
+                        <div
+                          ref={(el) => {
+                            if (!el || el.dataset.init === "true") return;
+                            el.dataset.init = "true";
+                            el.focus();
+                            // Place cursor at end
+                            const range = document.createRange();
+                            const sel = window.getSelection();
+                            if (el.childNodes.length > 0) {
+                              range.selectNodeContents(el);
+                              range.collapse(false);
+                            } else {
+                              range.selectNodeContents(el);
+                            }
+                            sel?.removeAllRanges();
+                            sel?.addRange(range);
+                          }}
+                          contentEditable
+                          suppressContentEditableWarning
+                          onBlur={(e) => {
+                            const text = (e.currentTarget as HTMLElement).innerText ?? "";
+                            onEditingTextValueChange(text);
+                            onCommitTextEdit();
+                          }}
+                          onInput={(e) => {
+                            const text = (e.currentTarget as HTMLElement).innerText ?? "";
+                            onEditingTextValueChange(text);
+                          }}
                           onKeyDown={(event) => {
                             if (event.key === "Escape") {
                               event.preventDefault();
                               onCancelTextEdit();
                             }
-                            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                            // Rich text shortcuts
+                            const mod = event.ctrlKey || event.metaKey;
+                            if (mod && event.key === "b") {
                               event.preventDefault();
-                              onCommitTextEdit();
+                              document.execCommand("bold", false);
+                            }
+                            if (mod && event.key === "i") {
+                              event.preventDefault();
+                              document.execCommand("italic", false);
+                            }
+                            if (mod && event.key === "u") {
+                              event.preventDefault();
+                              document.execCommand("underline", false);
                             }
                           }}
                           onMouseDown={(event) => event.stopPropagation()}
-                          className="absolute inset-0 resize-none bg-transparent outline-none"
+                          className="absolute inset-0 overflow-hidden bg-transparent outline-none"
                           style={{
                             ...textEditorStyle,
                             width: "100%",
                             height: "100%",
                             border: "none",
+                            wordBreak: "break-word",
+                            whiteSpace: "pre-wrap",
                           }}
-                        />
+                        >
+                          {editingTextValue}
+                        </div>
                       ) : null}
 
                       {primary && !element.locked && element.kind !== "group" && !isEditingText ? (
@@ -3196,11 +3788,14 @@ function DesignStage({
                                   point.x - centerX,
                                 );
                                 const deltaDeg = ((currentAngle - startAngle) * 180) / Math.PI;
-                                onResize(element.elementId, {
-                                  rotation: snapRotation(
-                                    Math.round(originRotation + deltaDeg),
-                                    moveEvent,
-                                  ),
+                                onResize({
+                                  elementId: element.elementId,
+                                  patch: {
+                                    rotation: snapRotation(
+                                      Math.round(originRotation + deltaDeg),
+                                      moveEvent,
+                                    ),
+                                  },
                                 });
                               };
                               const onMouseUp = () => {
@@ -3319,15 +3914,131 @@ function DesignStage({
 
               {bounds ? (
                 <div
-                  className="pointer-events-none absolute rounded-md border-2 border-dashed border-primary/70"
+                  className="absolute rounded-md border-2 border-dashed border-primary/70"
                   style={{
                     left: bounds.x * scale - 6,
                     top: bounds.y * scale - 6,
                     width: bounds.width * scale + 12,
                     height: bounds.height * scale + 12,
+                    pointerEvents: selectedIds.length > 1 ? "auto" : "none",
                   }}
-                />
+                >
+                  {/* Multi-select resize handles */}
+                  {selectedIds.length > 1
+                    ? RESIZE_HANDLES.map((handle) => (
+                        <button
+                          key={handle.key}
+                          onMouseDown={(event) => {
+                            event.stopPropagation();
+                            const startX = event.clientX;
+                            const startY = event.clientY;
+                            const origBounds = { ...bounds };
+                            const origElements = selectedIds
+                              .map((id) => elements.find((e) => e.elementId === id))
+                              .filter((e): e is DesignElement => !!e);
+
+                            const onMouseMove = (moveEvent: MouseEvent) => {
+                              const dx = (moveEvent.clientX - startX) / scale;
+                              const dy = (moveEvent.clientY - startY) / scale;
+                              const draft = applyResizeModifiers(
+                                origBounds,
+                                handle.key,
+                                dx,
+                                dy,
+                                moveEvent.shiftKey,
+                                moveEvent.altKey,
+                              );
+                              // Scale each element proportionally
+                              const sx = draft.width / Math.max(origBounds.width, 1);
+                              const sy = draft.height / Math.max(origBounds.height, 1);
+                              for (const el of origElements) {
+                                const relX = el.x - origBounds.x;
+                                const relY = el.y - origBounds.y;
+                                onResize({
+                                  elementId: el.elementId,
+                                  patch: {
+                                    x: draft.x + relX * sx,
+                                    y: draft.y + relY * sy,
+                                    width: Math.max(20, el.width * sx),
+                                    height: Math.max(20, el.height * sy),
+                                  },
+                                });
+                              }
+                            };
+                            const onMouseUp = () => {
+                              window.removeEventListener("mousemove", onMouseMove);
+                              window.removeEventListener("mouseup", onMouseUp);
+                              onResizeCommit();
+                            };
+                            window.addEventListener("mousemove", onMouseMove);
+                            window.addEventListener("mouseup", onMouseUp);
+                          }}
+                          style={{
+                            position: "absolute",
+                            width: 16,
+                            height: 16,
+                            borderRadius: 4,
+                            background: "#ffffff",
+                            border: "2px solid hsl(var(--primary))",
+                            boxShadow: "0 2px 6px rgba(15,23,42,0.15)",
+                            cursor: handle.cursor,
+                            zIndex: 20,
+                            ...handle.style,
+                          }}
+                        />
+                      ))
+                    : null}
+                </div>
               ) : null}
+
+              {/* Floating text toolbar for selected text element */}
+              {(() => {
+                const textEl = primaryId
+                  ? elements.find((e) => e.elementId === primaryId && e.kind === "text")
+                  : null;
+                if (!textEl || textEl.kind !== "text") return null;
+                return (
+                  <TextToolbar
+                    element={textEl}
+                    scale={scale}
+                    availableFontFamilies={availableFontFamilies}
+                    onUpdateStyle={(patch) => onUpdateElementStyle(textEl.elementId, patch)}
+                    onUpdateText={() => {}}
+                  />
+                );
+              })()}
+
+              {/* Opacity slider on selection */}
+              {(() => {
+                const primaryEl = primaryId
+                  ? elements.find((e) => e.elementId === primaryId)
+                  : null;
+                if (!primaryEl || !bounds) return null;
+                const opacity = primaryEl.style?.opacity ?? 1;
+                return (
+                  <div
+                    className="pointer-events-auto absolute z-30 flex items-center gap-2 rounded-md border bg-card px-2 py-1 shadow"
+                    style={{
+                      left: bounds.x * scale,
+                      top: (bounds.y + bounds.height) * scale + 12,
+                    }}
+                    onMouseDown={(e) => e.stopPropagation()}
+                  >
+                    <span className="text-[10px] font-medium text-muted-foreground">Opacity</span>
+                    <Slider
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={[opacity]}
+                      onValueChange={([v]) => onUpdateElementStyle(primaryEl.elementId, { opacity: v })}
+                      className="w-20"
+                    />
+                    <span className="w-8 text-right text-[10px] tabular-nums text-muted-foreground">
+                      {Math.round(opacity * 100)}%
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </ContextMenuTrigger>

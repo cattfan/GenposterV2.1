@@ -2,7 +2,6 @@
 // Thay thế server functions trong src/server/aiTemplate.ts (server fn không gọi được localhost).
 
 import { callAi } from "./aiClient";
-import { AI_POSTER_FONT_FAMILIES } from "@/features/editor/fonts";
 import { buildCombinedLayoutJson } from "./visionPipeline";
 
 // ============================================================
@@ -10,120 +9,6 @@ import { buildCombinedLayoutJson } from "./visionPipeline";
 // ============================================================
 
 export type LayoutFidelity = "strict" | "balanced" | "creative";
-
-const TEMPLATE_TOOL = {
-  type: "function" as const,
-  function: {
-    name: "build_layout",
-    description:
-      "Tạo khung layout dạng portrait (1080x1350) dựa trên ảnh mẫu. CHỈ tạo placeholder, KHÔNG bịa nội dung text thật.",
-    parameters: {
-      type: "object",
-      properties: {
-        canvas: {
-          type: "object",
-          properties: { bgColor: { type: "string" } },
-        },
-        slots: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              name: { type: "string" },
-              kind: { type: "string", enum: ["text", "image", "shape"] },
-              shapeKind: { type: "string", enum: ["rectangle", "circle", "badge", "line", "divider"] },
-              x: { type: "number" },
-              y: { type: "number" },
-              w: { type: "number" },
-              h: { type: "number" },
-              z: { type: "number" },
-              rotation: { type: "number" },
-              placeholder: { type: "string" },
-              style: {
-                type: "object",
-                properties: {
-                  fontSize: { type: "number" },
-                  fontFamily: { type: "string" },
-                  fontWeight: { type: "number" },
-                  color: { type: "string" },
-                  fill: { type: "string" },
-                  borderRadius: { type: "number" },
-                  textAlign: { type: "string", enum: ["left", "center", "right"] },
-                  textTransform: { type: "string", enum: ["none", "uppercase", "lowercase"] },
-                  lineHeight: { type: "number" },
-                  letterSpacing: { type: "number" },
-                  opacity: { type: "number" },
-                  overlayColor: { type: "string" },
-                  textShadow: { type: "string" },
-                  textStrokeColor: { type: "string" },
-                  textStrokeWidth: { type: "number" },
-                  padding: { type: "number" },
-                  fit: { type: "string", enum: ["cover", "contain", "stretch"] },
-                  shadowColor: { type: "string" },
-                  shadowBlur: { type: "number" },
-                  shadowX: { type: "number" },
-                  shadowY: { type: "number" },
-                },
-              },
-            },
-            required: ["kind", "x", "y", "w", "h"],
-          },
-        },
-      },
-      required: ["canvas", "slots"],
-    },
-  },
-};
-
-function fidelityInstruction(fidelity: LayoutFidelity): string {
-  switch (fidelity) {
-    case "strict":
-      return "Ưu tiên bám sát bố cục, nhịp ảnh, số cụm text, tỷ lệ tiêu đề và vị trí các ảnh phụ giống ảnh mẫu nhất có thể. Chỉ đơn giản hóa khi chi tiết thật sự không đọc được.";
-    case "creative":
-      return "Giữ tinh thần ảnh mẫu nhưng được phép sáng tạo nhẹ để layout sạch hơn, miễn vẫn nhận ra cùng visual language.";
-    case "balanced":
-    default:
-      return "Giữ bố cục và visual language gần ảnh mẫu, nhưng vẫn tối ưu để template dễ chỉnh và dễ bind dữ liệu.";
-  }
-}
-
-function buildLayoutSystem(input?: {
-  fidelity?: LayoutFidelity;
-  customInstructions?: string;
-  roleHint?: string;
-}) {
-  const fidelity = input?.fidelity ?? "strict";
-  const customInstructions = input?.customInstructions?.trim();
-  const roleHint = input?.roleHint?.trim();
-
-  return (
-    "Bạn là designer chuyển ảnh mẫu Instagram/Threads thành khung layout JSON có thể chỉnh sửa. " +
-    "Mục tiêu là bám sát visual của ảnh mẫu, không tự động biến mọi thứ thành layout generic. " +
-    "Quy tắc TUYỆT ĐỐI:\n" +
-    "1. CHỈ tạo khung + placeholder. KHÔNG bịa nội dung text thật.\n" +
-    "2. Mọi text phải là placeholder có nghĩa như {{title}}, {{eyebrow}}, {{subtitle}}, {{section_title_1}}, {{name_1}}, {{address_1}}, {{phone_1}}, {{price_1}}, {{hero_image_1}}, {{cta}}.\n" +
-    "3. Toạ độ x/y/w/h là tỉ lệ 0..1 so với canvas portrait 1080x1350.\n" +
-    "4. Phải tuân thủ nguyên tắc bleed/trim/safe zone: background full-page có thể bleed ra sát mép; nhưng mọi text, shape chứa text, danh sách và image holder quan trọng phải nằm trong safe zone, tránh sát mép canvas.\n" +
-    "5. Safe zone mặc định coi như cách mép khoảng 5% mỗi cạnh. Chỉ background hoặc overlay nền mới được phủ toàn canvas.\n" +
-    "6. Nếu ảnh mẫu là poster có 1 ảnh nền full-page tối, hãy dùng 1 image slot phủ toàn canvas + overlayColor để giữ đúng cảm giác nền tối.\n" +
-    "7. Ảnh phụ/thumbnail nên dùng kind=image với borderRadius bo góc 20-40. Chỉ dùng circle khi ảnh mẫu thực sự tròn.\n" +
-    "8. Được phép dùng 12-48 slot nếu cần để bám mẫu. Đừng ép đơn giản hóa quá mức khi ảnh mẫu có nhiều cụm text/ảnh.\n" +
-    "9. Với poster list như du lịch/ăn uống/dịch vụ, nếu mắt người nhìn thấy nhiều dòng item riêng biệt thì PHẢI tạo từng dòng riêng, không được dồn thành 1 text block chung. Ví dụ 16 dòng quán thì phải có các placeholder riêng như {{name_1}}..{{name_16}} và {{address_1}}..{{address_16}}.\n" +
-    "10. Nếu đã tách thành {{name_n}} / {{address_n}} thì KHÔNG được tạo thêm block tổng kiểu {{items_group_1}} chồng lên trên cùng khu vực.\n" +
-    "11. Bullet không được dùng placeholder kiểu {{bullet}}. Bullet phải là shape tròn nhỏ hoặc ký tự bullet tĩnh.\n" +
-    "12. Các block cùng một cụm phải dùng numbering nhất quán như {{section_title_1}} + {{hero_image_1}} + {{name_1}} + {{address_1}} + {{name_2}} + {{address_2}}...\n" +
-    "13. Nếu ảnh mẫu chỉ có 4 image holder nhưng có 16 dòng quán, vẫn giữ 4 image holder, nhưng text phải tách đủ từng dòng item riêng biệt.\n" +
-    "14. Hãy tận dụng z, opacity, overlayColor, textShadow, textStrokeColor/textStrokeWidth, lineHeight, letterSpacing, padding, shadow và rotation khi ảnh mẫu có các hiệu ứng đó.\n" +
-    "15. Với title nổi bật kiểu chữ vàng/cam trên nền tối, phải encode rõ style tương ứng để template preview nhìn gần mẫu.\n" +
-    "16. Không tự xoá các ảnh nổi bật thả quanh canvas nếu đó là đặc trưng chính của bố cục. Giữ nhịp collage/editorial của ảnh mẫu.\n" +
-    `17. Font family chỉ được chọn trong danh sách sau: ${AI_POSTER_FONT_FAMILIES.join(", ")}.\n` +
-    "18. Nếu ảnh mẫu giống poster bullet list, đừng biến thành layout card/service generic. Hãy giữ title, image holder và các nhóm list như mắt người thường nhìn thấy.\n" +
-    "19. KHÔNG trả lời bằng văn xuôi. Chỉ gọi tool build_layout.\n" +
-    `20. Mức ưu tiên hiện tại: ${fidelityInstruction(fidelity)}\n` +
-    (roleHint ? `21. Hint vai trò page: ${roleHint}\n` : "") +
-    (customInstructions ? `22. Yêu cầu thêm từ người dùng: ${customInstructions}\n` : "")
-  );
-}
 
 export async function aiGenerateTemplateFromImage(input: {
   imageDataUrl: string;

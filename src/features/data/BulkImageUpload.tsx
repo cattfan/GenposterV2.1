@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type InputHTMLAttributes,
-} from "react";
+import { useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from "react";
 import { nanoid } from "nanoid";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, saveBlob } from "@/storage/db";
@@ -55,7 +49,10 @@ async function collectDirectoryFiles(
 ): Promise<Array<{ file: File; relativePath: string }>> {
   const out: Array<{ file: File; relativePath: string }> = [];
 
-  for await (const entry of directoryHandle.values()) {
+  const entries = directoryHandle as FileSystemDirectoryHandle & {
+    values(): AsyncIterable<FileSystemDirectoryHandle | FileSystemFileHandle>;
+  };
+  for await (const entry of entries.values()) {
     if (entry.kind === "file") {
       const file = await entry.getFile();
       if (!isImageFile(file)) continue;
@@ -132,10 +129,7 @@ export function BulkImageUpload() {
     };
   }, []);
 
-  const visiblePending = useMemo(
-    () => pending.slice(0, visibleCount),
-    [pending, visibleCount],
-  );
+  const visiblePending = useMemo(() => pending.slice(0, visibleCount), [pending, visibleCount]);
 
   useEffect(() => {
     const validKeys = new Set(pending.map(pendingKey));
@@ -216,7 +210,9 @@ export function BulkImageUpload() {
       finishImportPrep(next);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
-      toast.error("Không đọc được thư mục ảnh: " + (error instanceof Error ? error.message : String(error)));
+      toast.error(
+        "Không đọc được thư mục ảnh: " + (error instanceof Error ? error.message : String(error)),
+      );
     } finally {
       setMatching(false);
     }
@@ -294,7 +290,9 @@ export function BulkImageUpload() {
         });
       }
       await db.assets.bulkPut(newAssets);
-      toast.success(`Đã import ${newAssets.length} ảnh local vào ${new Set(newAssets.map((a) => a.entityId)).size} quán`);
+      toast.success(
+        `Đã import ${newAssets.length} ảnh local vào ${new Set(newAssets.map((a) => a.entityId)).size} quán`,
+      );
       setPending([]);
     } catch (e) {
       toast.error("Lỗi khi import: " + (e as Error).message);
@@ -319,9 +317,17 @@ export function BulkImageUpload() {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="text-sm text-muted-foreground space-y-1">
-            <p>1. Đặt tên file ảnh theo tên quán (có thể bỏ dấu, dùng <code>-1</code>, <code>-2</code> cho ảnh phụ).</p>
-            <p>2. Có thể chọn nhiều ảnh hoặc chọn cả thư mục ảnh quán. App sẽ tự gán ảnh vào đúng quán nếu confidence đủ mạnh.</p>
-            <p>3. Các match yếu sẽ để trống và gắn nhãn cần review để bạn kiểm tra trước khi Import.</p>
+            <p>
+              1. Đặt tên file ảnh theo tên quán (có thể bỏ dấu, dùng <code>-1</code>,{" "}
+              <code>-2</code> cho ảnh phụ).
+            </p>
+            <p>
+              2. Có thể chọn nhiều ảnh hoặc chọn cả thư mục ảnh quán. App sẽ tự gán ảnh vào đúng
+              quán nếu confidence đủ mạnh.
+            </p>
+            <p>
+              3. Các match yếu sẽ để trống và gắn nhãn cần review để bạn kiểm tra trước khi Import.
+            </p>
             <p>
               Gợi ý chuẩn hoá lâu dài: <code>Tên-sheet/Tên-quán/ảnh-1.jpg</code>,{" "}
               <code>Tên-sheet/Tên-quán/ảnh-2.jpg</code>. App sẽ ưu tiên match theo tên thư mục quán,
@@ -345,18 +351,16 @@ export function BulkImageUpload() {
               accept="image/*"
               multiple
               hidden
-              {...({ webkitdirectory: "true", directory: "true" } as unknown as InputHTMLAttributes<HTMLInputElement>)}
+              {...({
+                webkitdirectory: "true",
+                directory: "true",
+              } as unknown as InputHTMLAttributes<HTMLInputElement>)}
               onChange={(e) => {
                 onFiles(e.target.files);
                 e.currentTarget.value = "";
               }}
             />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onPickDirectory}
-            >
+            <Button type="button" variant="outline" size="sm" onClick={onPickDirectory}>
               Chọn thư mục ảnh
             </Button>
             <div className="flex items-center gap-2 text-xs">
@@ -371,7 +375,12 @@ export function BulkImageUpload() {
                 />
               </div>
               <span className="font-mono">{Math.round(threshold * 100)}%</span>
-              <Button size="sm" variant="outline" onClick={rerunMatch} disabled={pending.length === 0}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={rerunMatch}
+                disabled={pending.length === 0}
+              >
                 Match lại
               </Button>
             </div>
@@ -379,7 +388,8 @@ export function BulkImageUpload() {
 
           {matching && (
             <div className="rounded border bg-muted/30 p-3 text-sm text-muted-foreground">
-              Đang đọc và match thư mục ảnh. Với folder lớn vài trăm ảnh, bước này có thể mất một lúc.
+              Đang đọc và match thư mục ảnh. Với folder lớn vài trăm ảnh, bước này có thể mất một
+              lúc.
             </div>
           )}
 
@@ -399,7 +409,9 @@ export function BulkImageUpload() {
                       size="sm"
                       variant="outline"
                       onClick={() =>
-                        setVisibleCount((count) => Math.min(count + PREVIEW_INCREMENT, pending.length))
+                        setVisibleCount((count) =>
+                          Math.min(count + PREVIEW_INCREMENT, pending.length),
+                        )
                       }
                     >
                       Xem thêm {Math.min(PREVIEW_INCREMENT, pending.length - visibleCount)}
@@ -483,7 +495,10 @@ export function BulkImageUpload() {
                           </Select>
                         </td>
                         <td className="p-2">
-                          <Select value={p.role} onValueChange={(v) => setRole(idx, v as Asset["role"])}>
+                          <Select
+                            value={p.role}
+                            onValueChange={(v) => setRole(idx, v as Asset["role"])}
+                          >
                             <SelectTrigger className="h-7 w-32 text-xs">
                               <SelectValue />
                             </SelectTrigger>

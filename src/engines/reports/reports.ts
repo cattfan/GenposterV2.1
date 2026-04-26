@@ -90,7 +90,7 @@ export function buildPartnersDetailedCsv(
     "rendered_at",
   ];
   const rows: string[][] = [headers];
-  for (const meta of buildBundlePageMeta(job, pack, entities, pageTemplates)) {
+  for (const meta of buildBundlePageMeta(job, pack, pageTemplates, entities)) {
     for (const item of meta.page.items) {
       const entity = item.entityId
         ? entities.find((entry) => entry.entityId === item.entityId)
@@ -129,7 +129,7 @@ export function buildPartnerProofEntries(
   const entityMap = new Map(entities.map((entity) => [entity.entityId, entity]));
   const proofs = new Map<string, PartnerProofEntry>();
 
-  for (const meta of buildBundlePageMeta(filtered, pack, entities, pageTemplates)) {
+  for (const meta of buildBundlePageMeta(filtered, pack, pageTemplates, entities)) {
     for (const entityId of meta.partnerEntityIds) {
       const entity = entityMap.get(entityId);
       if (!entity) continue;

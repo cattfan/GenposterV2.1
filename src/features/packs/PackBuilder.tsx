@@ -22,11 +22,20 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
-  GripVertical, Trash2, ArrowUp, ArrowDown, Save, Search, Plus, Copy, ExternalLink,
+  GripVertical,
+  Trash2,
+  ArrowUp,
+  ArrowDown,
+  Save,
+  Search,
+  Plus,
+  Copy,
+  ExternalLink,
+  Sparkles,
 } from "lucide-react";
 import type { PackTemplate, PageTemplate, PageType } from "@/models";
 import { PackPagePreview } from "./PackPagePreview";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 
 interface Props {
   pack: PackTemplate;
@@ -34,6 +43,10 @@ interface Props {
   onChange: (next: PackTemplate) => void;
   onSave: () => void;
   onDuplicate: () => void;
+  onCreatePage?: () => void;
+  onCreateAiPage?: () => void;
+  onDuplicatePage?: (template: PageTemplate) => void;
+  onDeletePage?: (template: PageTemplate, index: number) => void;
 }
 
 const TYPE_FILTERS: Array<{ label: string; value: "all" | PageType }> = [
@@ -44,7 +57,9 @@ const TYPE_FILTERS: Array<{ label: string; value: "all" | PageType }> = [
   { label: "Mixed", value: "mixed" },
 ];
 
-function detectRole(name: string): { label: string; tone: "default" | "secondary" | "destructive" } | null {
+function detectRole(
+  name: string,
+): { label: string; tone: "default" | "secondary" | "destructive" } | null {
   if (/cover|bìa|bia/i.test(name)) return { label: "Cover", tone: "default" };
   if (/ng[àa]y\s*\d+|day\s*\d+/i.test(name)) return { label: "Day", tone: "secondary" };
   if (/outro|kết|ket|cta/i.test(name)) return { label: "Outro", tone: "destructive" };
@@ -59,6 +74,9 @@ function SortableRow({
   tpl,
   onMove,
   onRemove,
+  onOpen,
+  onDuplicate,
+  onDelete,
 }: {
   id: string;
   index: number;
@@ -66,8 +84,13 @@ function SortableRow({
   tpl?: PageTemplate;
   onMove: (dir: -1 | 1) => void;
   onRemove: () => void;
+  onOpen: () => void;
+  onDuplicate?: () => void;
+  onDelete?: () => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+  });
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -95,8 +118,21 @@ function SortableRow({
       >
         {tpl && <PackPagePreview tpl={tpl} />}
       </div>
-      <span className="flex-1 truncate">{tpl?.name ?? "(template không tồn tại)"}</span>
+      <button
+        type="button"
+        className="flex-1 truncate text-left hover:underline"
+        onClick={onOpen}
+        disabled={!tpl}
+      >
+        {tpl?.name ?? "(template không tồn tại)"}
+      </button>
       {role && <Badge variant={role.tone}>{role.label}</Badge>}
+      <Button variant="ghost" size="icon" onClick={onOpen} disabled={!tpl}>
+        <ExternalLink className="size-4" />
+      </Button>
+      <Button variant="ghost" size="icon" onClick={onDuplicate} disabled={!tpl || !onDuplicate}>
+        <Copy className="size-4" />
+      </Button>
       <Button variant="ghost" size="icon" disabled={index === 0} onClick={() => onMove(-1)}>
         <ArrowUp className="size-4" />
       </Button>
@@ -106,11 +142,25 @@ function SortableRow({
       <Button variant="ghost" size="icon" onClick={onRemove}>
         <Trash2 className="size-4" />
       </Button>
+      <Button variant="ghost" size="icon" onClick={onDelete} disabled={!tpl || !onDelete}>
+        <Trash2 className="size-4 text-destructive" />
+      </Button>
     </div>
   );
 }
 
-export function PackBuilder({ pack, allTemplates, onChange, onSave, onDuplicate }: Props) {
+export function PackBuilder({
+  pack,
+  allTemplates,
+  onChange,
+  onSave,
+  onDuplicate,
+  onCreatePage,
+  onCreateAiPage,
+  onDuplicatePage,
+  onDeletePage,
+}: Props) {
+  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<"all" | PageType>("all");
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
@@ -154,7 +204,16 @@ export function PackBuilder({ pack, allTemplates, onChange, onSave, onDuplicate 
   };
 
   const addPage = (id: string) => {
+    if (pack.orderedPages.includes(id)) return;
     onChange({ ...pack, orderedPages: [...pack.orderedPages, id] });
+  };
+
+  const openPage = (id: string) => {
+    navigate({
+      to: "/templates/$id/edit",
+      params: { id },
+      search: { open: undefined, packId: pack.packTemplateId },
+    });
   };
 
   return (
@@ -165,6 +224,16 @@ export function PackBuilder({ pack, allTemplates, onChange, onSave, onDuplicate 
           <Button variant="outline" size="sm" onClick={onDuplicate}>
             <Copy className="size-4 mr-1" /> Duplicate
           </Button>
+          {onCreateAiPage && (
+            <Button variant="outline" size="sm" onClick={onCreateAiPage}>
+              <Sparkles className="size-4 mr-1" /> AI thêm page
+            </Button>
+          )}
+          {onCreatePage && (
+            <Button variant="outline" size="sm" onClick={onCreatePage}>
+              <Plus className="size-4 mr-1" /> Thêm page mới
+            </Button>
+          )}
           <Button size="sm" onClick={onSave}>
             <Save className="size-4 mr-1" /> Lưu
           </Button>
@@ -174,19 +243,31 @@ export function PackBuilder({ pack, allTemplates, onChange, onSave, onDuplicate 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <Label>Tên pack</Label>
-            <Input value={pack.name} onChange={(e) => onChange({ ...pack, name: e.target.value })} />
+            <Input
+              value={pack.name}
+              onChange={(e) => onChange({ ...pack, name: e.target.value })}
+            />
           </div>
           <div>
             <Label>CTA</Label>
-            <Input value={pack.cta ?? ""} onChange={(e) => onChange({ ...pack, cta: e.target.value })} />
+            <Input
+              value={pack.cta ?? ""}
+              onChange={(e) => onChange({ ...pack, cta: e.target.value })}
+            />
           </div>
           <div>
             <Label>Goal</Label>
-            <Input value={pack.goal ?? ""} onChange={(e) => onChange({ ...pack, goal: e.target.value })} />
+            <Input
+              value={pack.goal ?? ""}
+              onChange={(e) => onChange({ ...pack, goal: e.target.value })}
+            />
           </div>
           <div>
             <Label>Tone</Label>
-            <Input value={pack.tone ?? ""} onChange={(e) => onChange({ ...pack, tone: e.target.value })} />
+            <Input
+              value={pack.tone ?? ""}
+              onChange={(e) => onChange({ ...pack, tone: e.target.value })}
+            />
           </div>
         </div>
         <div>
@@ -202,7 +283,10 @@ export function PackBuilder({ pack, allTemplates, onChange, onSave, onDuplicate 
         <div>
           <Label>Pages trong pack ({pack.orderedPages.length})</Label>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-            <SortableContext items={orderedItems.map((i) => i.key)} strategy={verticalListSortingStrategy}>
+            <SortableContext
+              items={orderedItems.map((i) => i.key)}
+              strategy={verticalListSortingStrategy}
+            >
               <div className="space-y-1 mt-2 border rounded p-2 max-h-[400px] overflow-y-auto">
                 {orderedItems.length === 0 && (
                   <div className="text-xs text-muted-foreground p-2">Chưa có page nào</div>
@@ -216,6 +300,15 @@ export function PackBuilder({ pack, allTemplates, onChange, onSave, onDuplicate 
                     tpl={tplMap.get(it.id)}
                     onMove={(dir) => moveAt(it.idx, dir)}
                     onRemove={() => removeAt(it.idx)}
+                    onOpen={() => openPage(it.id)}
+                    onDuplicate={
+                      tplMap.get(it.id) ? () => onDuplicatePage?.(tplMap.get(it.id)!) : undefined
+                    }
+                    onDelete={
+                      tplMap.get(it.id)
+                        ? () => onDeletePage?.(tplMap.get(it.id)!, it.idx)
+                        : undefined
+                    }
                   />
                 ))}
               </div>
@@ -252,21 +345,34 @@ export function PackBuilder({ pack, allTemplates, onChange, onSave, onDuplicate 
             {filteredPicker.length === 0 && (
               <div className="text-xs text-muted-foreground p-3">Không có template khớp</div>
             )}
-            {filteredPicker.map((t) => (
-              <div key={t.pageTemplateId} className="flex items-center gap-2 p-2 hover:bg-muted/50 text-sm">
+            {filteredPicker.map((t) => {
+              const alreadyInPack = pack.orderedPages.includes(t.pageTemplateId);
+              return (
                 <div
-                  className="relative w-10 shrink-0 rounded overflow-hidden border bg-background"
-                  style={{ aspectRatio: `${t.canvas.width} / ${t.canvas.height}` }}
+                  key={t.pageTemplateId}
+                  className="flex items-center gap-2 p-2 hover:bg-muted/50 text-sm"
                 >
-                  <PackPagePreview tpl={t} />
+                  <div
+                    className="relative w-10 shrink-0 rounded overflow-hidden border bg-background"
+                    style={{ aspectRatio: `${t.canvas.width} / ${t.canvas.height}` }}
+                  >
+                    <PackPagePreview tpl={t} />
+                  </div>
+                  <span className="flex-1 truncate">{t.name}</span>
+                  <Badge variant="outline" className="text-[10px]">
+                    {t.type}
+                  </Badge>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => addPage(t.pageTemplateId)}
+                    disabled={alreadyInPack}
+                  >
+                    {alreadyInPack ? "Đã thêm" : <Plus className="size-4" />}
+                  </Button>
                 </div>
-                <span className="flex-1 truncate">{t.name}</span>
-                <Badge variant="outline" className="text-[10px]">{t.type}</Badge>
-                <Button size="sm" variant="ghost" onClick={() => addPage(t.pageTemplateId)}>
-                  <Plus className="size-4" />
-                </Button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -279,7 +385,10 @@ export function PackBuilder({ pack, allTemplates, onChange, onSave, onDuplicate 
                   const t = tplMap.get(id);
                   if (!t) {
                     return (
-                      <div key={id + idx} className="text-[10px] text-destructive p-2 border rounded">
+                      <div
+                        key={id + idx}
+                        className="text-[10px] text-destructive p-2 border rounded"
+                      >
                         #{idx + 1} (mất)
                       </div>
                     );
@@ -291,6 +400,7 @@ export function PackBuilder({ pack, allTemplates, onChange, onSave, onDuplicate 
                       key={id + idx}
                       to="/templates/$id/edit"
                       params={{ id: t.pageTemplateId }}
+                      search={{ open: undefined, packId: pack.packTemplateId }}
                       target="_blank"
                       className="shrink-0 group"
                     >

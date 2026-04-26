@@ -183,8 +183,9 @@ export async function exportDesignDocumentPdf(params: {
     }
   }
   const pdfBytes = await pdf.save();
+  const pdfBlobPart = new Uint8Array(pdfBytes).buffer as ArrayBuffer;
   saveAs(
-    new Blob([pdfBytes], { type: "application/pdf" }),
+    new Blob([pdfBlobPart], { type: "application/pdf" }),
     `${(params.fileName ?? slugify(params.document.name)) || "design-document"}.pdf`,
   );
 }
