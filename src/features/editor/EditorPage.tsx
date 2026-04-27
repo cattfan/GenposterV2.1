@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 import { Link, useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
-import { toast } from "sonner";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DesignWorkspace } from "./DesignWorkspace";
@@ -71,6 +70,7 @@ export function EditorPage() {
           initialDocument={initialDocument}
           mode="template"
           allowMultiplePages={false}
+          autosave
           onClose={backToTemplates}
           onSave={async (nextDocument) => {
             const nextTemplate = designDocumentToPageTemplate(nextDocument, template);
@@ -84,7 +84,6 @@ export function EditorPage() {
                 updatedAt: Date.now(),
               });
             });
-            toast.success("Đã lưu template bằng editor mới");
           }}
         />
       </div>

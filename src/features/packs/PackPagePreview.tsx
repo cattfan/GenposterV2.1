@@ -5,22 +5,28 @@ import { PageRenderer } from "@/features/render/PageRenderer";
 
 export function PackPagePreview({ tpl }: { tpl: PageTemplate }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(0.15);
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     const compute = () => {
-      const w = el.clientWidth;
-      const h = el.clientHeight;
-      if (!w || !h) return;
-      setScale(Math.min(w / tpl.canvas.width, h / tpl.canvas.height));
+      setViewport({ width: el.clientWidth, height: el.clientHeight });
     };
     compute();
     const ro = new ResizeObserver(compute);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [tpl.canvas.width, tpl.canvas.height]);
+  }, []);
+
+  const scale =
+    viewport.width && viewport.height
+      ? Math.min(viewport.width / tpl.canvas.width, viewport.height / tpl.canvas.height)
+      : 0;
+  const renderedWidth = tpl.canvas.width * scale;
+  const renderedHeight = tpl.canvas.height * scale;
+  const left = (viewport.width - renderedWidth) / 2;
+  const top = (viewport.height - renderedHeight) / 2;
 
   return (
     <div
@@ -28,17 +34,20 @@ export function PackPagePreview({ tpl }: { tpl: PageTemplate }) {
       className="absolute inset-0 overflow-hidden"
       style={{ background: tpl.canvas.background ?? "#fff" }}
     >
-      <div
-        style={{
-          position: "absolute",
-          left: "50%",
-          top: "50%",
-          transform: "translate(-50%, -50%)",
-          pointerEvents: "none",
-        }}
-      >
-        <PageRenderer template={tpl} entities={[]} assets={[]} scale={scale} />
-      </div>
+      {scale > 0 ? (
+        <div
+          style={{
+            position: "absolute",
+            left,
+            top,
+            width: renderedWidth,
+            height: renderedHeight,
+            pointerEvents: "none",
+          }}
+        >
+          <PageRenderer template={tpl} entities={[]} assets={[]} scale={scale} />
+        </div>
+      ) : null}
     </div>
   );
 }

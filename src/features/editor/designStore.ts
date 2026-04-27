@@ -276,12 +276,16 @@ export function useDesignEditor(document: DesignDocument) {
   const [state, setState] = useState<DesignEditorState>(() => normalizeDesignDocument(document));
 
   useEffect(() => {
-    setState((prev) =>
-      normalizeDesignDocument(document, {
+    setState((prev) => {
+      if (prev.designDocumentId === document.designDocumentId && prev.mode === document.mode) {
+        return prev;
+      }
+
+      return normalizeDesignDocument(document, {
         viewport: prev.viewport,
         clipboard: prev.clipboard,
-      }),
-    );
+      });
+    });
   }, [document]);
 
   const commitDocument = useCallback(

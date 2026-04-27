@@ -35,7 +35,10 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "Content Pack Generator" },
-      { name: "description", content: "Tạo content pack hình ảnh cho social media từ template + dữ liệu" },
+      {
+        name: "description",
+        content: "Tạo content pack hình ảnh cho social media từ template + dữ liệu",
+      },
       { property: "og:title", content: "Content Pack Generator" },
       { property: "og:description", content: "Tạo content pack hình ảnh cho social media" },
       { property: "og:type", content: "website" },
@@ -70,7 +73,7 @@ function RootComponent() {
   return (
     <AppShell>
       <Outlet />
-      <Toaster richColors position="top-right" />
+      <Toaster richColors position="bottom-right" />
     </AppShell>
   );
 }

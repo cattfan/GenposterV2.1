@@ -1,5 +1,4 @@
-// Pack builder: drag-drop sắp xếp, picker với search/filter, strip preview ngang.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -11,31 +10,27 @@ import {
 import {
   SortableContext,
   arrayMove,
+  horizontalListSortingStrategy,
   useSortable,
-  verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import {
-  GripVertical,
-  Trash2,
-  ArrowUp,
-  ArrowDown,
-  Save,
-  Search,
-  Plus,
+  ArrowLeft,
   Copy,
   ExternalLink,
+  FilePlus2,
+  GripVertical,
+  Save,
   Sparkles,
+  Trash2,
 } from "lucide-react";
-import type { PackTemplate, PageTemplate, PageType } from "@/models";
+import { useNavigate } from "@tanstack/react-router";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
+import type { PackTemplate, PageTemplate } from "@/models";
 import { PackPagePreview } from "./PackPagePreview";
-import { Link, useNavigate } from "@tanstack/react-router";
 
 interface Props {
   pack: PackTemplate;
@@ -47,104 +42,186 @@ interface Props {
   onCreateAiPage?: () => void;
   onDuplicatePage?: (template: PageTemplate) => void;
   onDeletePage?: (template: PageTemplate, index: number) => void;
+  onRenamePage?: (template: PageTemplate, name: string) => void | Promise<void>;
+  onDeletePack?: () => void;
+  onCollapse?: () => void;
 }
 
-const TYPE_FILTERS: Array<{ label: string; value: "all" | PageType }> = [
-  { label: "Tất cả", value: "all" },
-  { label: "Cover", value: "cover" },
-  { label: "Itinerary", value: "itinerary" },
-  { label: "Board", value: "board" },
-  { label: "Mixed", value: "mixed" },
-];
-
-function detectRole(
-  name: string,
-): { label: string; tone: "default" | "secondary" | "destructive" } | null {
-  if (/cover|bìa|bia/i.test(name)) return { label: "Cover", tone: "default" };
-  if (/ng[àa]y\s*\d+|day\s*\d+/i.test(name)) return { label: "Day", tone: "secondary" };
-  if (/outro|kết|ket|cta/i.test(name)) return { label: "Outro", tone: "destructive" };
-  if (/tiện|tien|utility|utilities/i.test(name)) return { label: "Utilities", tone: "secondary" };
-  return null;
+function PageThumb({ tpl, className }: { tpl?: PageTemplate; className?: string }) {
+  return (
+    <div
+      className={cn("relative shrink-0 overflow-hidden rounded-md border bg-background", className)}
+      style={{ aspectRatio: tpl ? `${tpl.canvas.width} / ${tpl.canvas.height}` : "4 / 5" }}
+    >
+      {tpl ? (
+        <PackPagePreview tpl={tpl} />
+      ) : (
+        <div className="grid size-full place-items-center text-[10px] text-muted-foreground">
+          Mất
+        </div>
+      )}
+    </div>
+  );
 }
 
-function SortableRow({
+function SortablePageCard({
   id,
   index,
-  total,
   tpl,
-  onMove,
-  onRemove,
   onOpen,
   onDuplicate,
   onDelete,
+  onRename,
 }: {
   id: string;
   index: number;
-  total: number;
   tpl?: PageTemplate;
-  onMove: (dir: -1 | 1) => void;
-  onRemove: () => void;
   onOpen: () => void;
   onDuplicate?: () => void;
   onDelete?: () => void;
+  onRename?: (name: string) => void | Promise<void>;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
   });
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [draftName, setDraftName] = useState(tpl?.name ?? "");
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.5 : 1,
+    opacity: isDragging ? 0.55 : 1,
   };
-  const role = tpl ? detectRole(tpl.name) : null;
+
+  useEffect(() => {
+    setDraftName(tpl?.name ?? "");
+  }, [tpl?.name]);
+
+  useEffect(() => {
+    if (!renaming) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [renaming]);
+
+  const commitRename = () => {
+    const nextName = draftName.trim();
+    setRenaming(false);
+    if (!tpl) return;
+    if (!nextName || nextName === tpl.name) {
+      setDraftName(tpl.name);
+      return;
+    }
+    void onRename?.(nextName);
+  };
+
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className="flex items-center gap-2 p-2 bg-muted/40 rounded text-sm border"
+      className="group flex w-[220px] shrink-0 flex-col gap-3 rounded-xl border bg-background p-3 text-sm shadow-sm transition-colors hover:border-primary/50 hover:bg-accent/20 sm:w-[240px] xl:w-[260px]"
     >
-      <button
-        {...attributes}
+      <div className="flex items-start justify-between gap-2 rounded-lg">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <button
+            type="button"
+            {...attributes}
+            {...listeners}
+            className="cursor-grab rounded-md p-1 text-muted-foreground active:cursor-grabbing group-hover:bg-muted group-hover:text-foreground"
+            aria-label="Kéo để sắp xếp"
+          >
+            <GripVertical className="size-4" />
+          </button>
+
+          <div className="grid size-8 shrink-0 place-items-center rounded-md bg-primary text-xs font-semibold text-primary-foreground shadow-sm">
+            {index + 1}
+          </div>
+
+          <div className="min-w-0 flex-1" onPointerDown={(event) => event.stopPropagation()}>
+            {renaming ? (
+              <Input
+                ref={inputRef}
+                value={draftName}
+                className="h-8 bg-background"
+                onChange={(event) => setDraftName(event.target.value)}
+                onBlur={commitRename}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    commitRename();
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setDraftName(tpl?.name ?? "");
+                    setRenaming(false);
+                  }
+                }}
+                aria-label="Đổi tên page"
+              />
+            ) : (
+              <button
+                type="button"
+                className="max-w-full truncate text-left font-medium leading-5"
+                onDoubleClick={() => {
+                  if (tpl) setRenaming(true);
+                }}
+                disabled={!tpl}
+                title="Double-click để đổi tên"
+              >
+                {tpl?.name ?? "Template không tồn tại"}
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center" onPointerDown={(event) => event.stopPropagation()}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8 text-destructive hover:text-destructive"
+            onClick={onDelete}
+            disabled={!tpl || !onDelete}
+            title="Xóa page"
+            aria-label="Xóa page"
+          >
+            <Trash2 />
+          </Button>
+        </div>
+      </div>
+
+      <div
         {...listeners}
-        className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground"
+        className="relative cursor-grab rounded-lg active:cursor-grabbing"
         aria-label="Kéo để sắp xếp"
       >
-        <GripVertical className="size-4" />
-      </button>
-      <span className="w-6 text-center font-bold">{index + 1}</span>
-      <div
-        className="relative w-12 shrink-0 rounded overflow-hidden border bg-background"
-        style={{ aspectRatio: tpl ? `${tpl.canvas.width} / ${tpl.canvas.height}` : "4/5" }}
-      >
-        {tpl && <PackPagePreview tpl={tpl} />}
+        <div
+          className="absolute right-2 top-2 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <Button
+            variant="secondary"
+            size="icon"
+            className="size-8 shadow-sm"
+            onClick={onOpen}
+            disabled={!tpl}
+            title="Mở editor"
+            aria-label="Mở editor"
+          >
+            <ExternalLink />
+          </Button>
+          <Button
+            variant="secondary"
+            size="icon"
+            className="size-8 shadow-sm"
+            onClick={onDuplicate}
+            disabled={!tpl || !onDuplicate}
+            title="Nhân bản page"
+            aria-label="Nhân bản page"
+          >
+            <Copy />
+          </Button>
+        </div>
+        <PageThumb tpl={tpl} className="w-full shadow-sm" />
       </div>
-      <button
-        type="button"
-        className="flex-1 truncate text-left hover:underline"
-        onClick={onOpen}
-        disabled={!tpl}
-      >
-        {tpl?.name ?? "(template không tồn tại)"}
-      </button>
-      {role && <Badge variant={role.tone}>{role.label}</Badge>}
-      <Button variant="ghost" size="icon" onClick={onOpen} disabled={!tpl}>
-        <ExternalLink className="size-4" />
-      </Button>
-      <Button variant="ghost" size="icon" onClick={onDuplicate} disabled={!tpl || !onDuplicate}>
-        <Copy className="size-4" />
-      </Button>
-      <Button variant="ghost" size="icon" disabled={index === 0} onClick={() => onMove(-1)}>
-        <ArrowUp className="size-4" />
-      </Button>
-      <Button variant="ghost" size="icon" disabled={index === total - 1} onClick={() => onMove(1)}>
-        <ArrowDown className="size-4" />
-      </Button>
-      <Button variant="ghost" size="icon" onClick={onRemove}>
-        <Trash2 className="size-4" />
-      </Button>
-      <Button variant="ghost" size="icon" onClick={onDelete} disabled={!tpl || !onDelete}>
-        <Trash2 className="size-4 text-destructive" />
-      </Button>
     </div>
   );
 }
@@ -159,53 +236,29 @@ export function PackBuilder({
   onCreateAiPage,
   onDuplicatePage,
   onDeletePage,
+  onRenamePage,
+  onDeletePack,
+  onCollapse,
 }: Props) {
   const navigate = useNavigate();
-  const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState<"all" | PageType>("all");
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   const tplMap = useMemo(
-    () => new Map(allTemplates.map((t) => [t.pageTemplateId, t])),
+    () => new Map(allTemplates.map((template) => [template.pageTemplateId, template])),
     [allTemplates],
   );
-
   const orderedItems = useMemo(
     () => pack.orderedPages.map((id, idx) => ({ key: `${id}__${idx}`, id, idx })),
     [pack.orderedPages],
   );
 
-  const filteredPicker = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return allTemplates
-      .filter((t) => typeFilter === "all" || t.type === typeFilter)
-      .filter((t) => !q || t.name.toLowerCase().includes(q));
-  }, [allTemplates, search, typeFilter]);
-
   const onDragEnd = (e: DragEndEvent) => {
     const { active, over } = e;
     if (!over || active.id === over.id) return;
-    const from = orderedItems.findIndex((it) => it.key === active.id);
-    const to = orderedItems.findIndex((it) => it.key === over.id);
+    const from = orderedItems.findIndex((item) => item.key === active.id);
+    const to = orderedItems.findIndex((item) => item.key === over.id);
     if (from < 0 || to < 0) return;
     onChange({ ...pack, orderedPages: arrayMove(pack.orderedPages, from, to) });
-  };
-
-  const moveAt = (idx: number, dir: -1 | 1) => {
-    const arr = [...pack.orderedPages];
-    const j = idx + dir;
-    if (j < 0 || j >= arr.length) return;
-    [arr[idx], arr[j]] = [arr[j], arr[idx]];
-    onChange({ ...pack, orderedPages: arr });
-  };
-
-  const removeAt = (idx: number) => {
-    onChange({ ...pack, orderedPages: pack.orderedPages.filter((_, i) => i !== idx) });
-  };
-
-  const addPage = (id: string) => {
-    if (pack.orderedPages.includes(id)) return;
-    onChange({ ...pack, orderedPages: [...pack.orderedPages, id] });
   };
 
   const openPage = (id: string) => {
@@ -217,211 +270,111 @@ export function PackBuilder({
   };
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-2">
-        <CardTitle className="truncate">Builder: {pack.name}</CardTitle>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={onDuplicate}>
-            <Copy className="size-4 mr-1" /> Duplicate
-          </Button>
-          {onCreateAiPage && (
-            <Button variant="outline" size="sm" onClick={onCreateAiPage}>
-              <Sparkles className="size-4 mr-1" /> AI thêm page
-            </Button>
-          )}
-          {onCreatePage && (
-            <Button variant="outline" size="sm" onClick={onCreatePage}>
-              <Plus className="size-4 mr-1" /> Thêm page mới
-            </Button>
-          )}
-          <Button size="sm" onClick={onSave}>
-            <Save className="size-4 mr-1" /> Lưu
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <Label>Tên pack</Label>
-            <Input
-              value={pack.name}
-              onChange={(e) => onChange({ ...pack, name: e.target.value })}
-            />
-          </div>
-          <div>
-            <Label>CTA</Label>
-            <Input
-              value={pack.cta ?? ""}
-              onChange={(e) => onChange({ ...pack, cta: e.target.value })}
-            />
-          </div>
-          <div>
-            <Label>Goal</Label>
-            <Input
-              value={pack.goal ?? ""}
-              onChange={(e) => onChange({ ...pack, goal: e.target.value })}
-            />
-          </div>
-          <div>
-            <Label>Tone</Label>
-            <Input
-              value={pack.tone ?? ""}
-              onChange={(e) => onChange({ ...pack, tone: e.target.value })}
-            />
-          </div>
-        </div>
-        <div>
-          <Label>Mô tả</Label>
-          <Textarea
-            rows={2}
-            value={pack.description ?? ""}
-            onChange={(e) => onChange({ ...pack, description: e.target.value })}
-            placeholder="Ghi chú về pack này…"
-          />
-        </div>
-
-        <div>
-          <Label>Pages trong pack ({pack.orderedPages.length})</Label>
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-            <SortableContext
-              items={orderedItems.map((i) => i.key)}
-              strategy={verticalListSortingStrategy}
-            >
-              <div className="space-y-1 mt-2 border rounded p-2 max-h-[400px] overflow-y-auto">
-                {orderedItems.length === 0 && (
-                  <div className="text-xs text-muted-foreground p-2">Chưa có page nào</div>
-                )}
-                {orderedItems.map((it) => (
-                  <SortableRow
-                    key={it.key}
-                    id={it.key}
-                    index={it.idx}
-                    total={orderedItems.length}
-                    tpl={tplMap.get(it.id)}
-                    onMove={(dir) => moveAt(it.idx, dir)}
-                    onRemove={() => removeAt(it.idx)}
-                    onOpen={() => openPage(it.id)}
-                    onDuplicate={
-                      tplMap.get(it.id) ? () => onDuplicatePage?.(tplMap.get(it.id)!) : undefined
-                    }
-                    onDelete={
-                      tplMap.get(it.id)
-                        ? () => onDeletePage?.(tplMap.get(it.id)!, it.idx)
-                        : undefined
-                    }
-                  />
-                ))}
+    <Card className="overflow-hidden border-primary/50 shadow-sm">
+      <CardContent className="p-0">
+        <div className="border-b bg-muted/20 p-4 md:p-5">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex min-w-0 flex-1 items-center gap-3">
+              <Button
+                variant="secondary"
+                size="icon"
+                className="size-10 shrink-0 shadow-sm"
+                onClick={onCollapse}
+                title="Thu nhỏ pack"
+                aria-label="Thu nhỏ pack"
+              >
+                <ArrowLeft />
+              </Button>
+              <div className="min-w-0 flex-1">
+                <Input
+                  className="h-10 max-w-xl bg-background text-base font-semibold"
+                  value={pack.name}
+                  onChange={(event) => onChange({ ...pack, name: event.target.value })}
+                  aria-label="Tên pack"
+                />
               </div>
-            </SortableContext>
-          </DndContext>
-        </div>
-
-        <div>
-          <Label>Thêm page vào pack</Label>
-          <div className="flex gap-2 mt-2 mb-2 flex-wrap">
-            <div className="relative flex-1 min-w-[180px]">
-              <Search className="size-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Tìm template..."
-                className="pl-8"
-              />
             </div>
-            <div className="flex gap-1 flex-wrap">
-              {TYPE_FILTERS.map((f) => (
-                <Button
-                  key={f.value}
-                  size="sm"
-                  variant={typeFilter === f.value ? "default" : "outline"}
-                  onClick={() => setTypeFilter(f.value)}
-                >
-                  {f.label}
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={onDuplicate}>
+                <Copy data-icon="inline-start" />
+                Duplicate
+              </Button>
+              {onCreateAiPage ? (
+                <Button variant="outline" size="sm" onClick={onCreateAiPage}>
+                  <Sparkles data-icon="inline-start" />
+                  AI từ ảnh
                 </Button>
-              ))}
-            </div>
-          </div>
-          <div className="border rounded max-h-[260px] overflow-y-auto divide-y">
-            {filteredPicker.length === 0 && (
-              <div className="text-xs text-muted-foreground p-3">Không có template khớp</div>
-            )}
-            {filteredPicker.map((t) => {
-              const alreadyInPack = pack.orderedPages.includes(t.pageTemplateId);
-              return (
-                <div
-                  key={t.pageTemplateId}
-                  className="flex items-center gap-2 p-2 hover:bg-muted/50 text-sm"
+              ) : null}
+              {onCreatePage ? (
+                <Button variant="outline" size="sm" onClick={onCreatePage}>
+                  <FilePlus2 data-icon="inline-start" />
+                  Page mới
+                </Button>
+              ) : null}
+              <Button size="sm" onClick={onSave}>
+                <Save data-icon="inline-start" />
+                Lưu thay đổi
+              </Button>
+              {onDeletePack ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={onDeletePack}
+                  title="Xóa pack"
+                  aria-label="Xóa pack"
+                  className="text-destructive hover:text-destructive"
                 >
-                  <div
-                    className="relative w-10 shrink-0 rounded overflow-hidden border bg-background"
-                    style={{ aspectRatio: `${t.canvas.width} / ${t.canvas.height}` }}
-                  >
-                    <PackPagePreview tpl={t} />
-                  </div>
-                  <span className="flex-1 truncate">{t.name}</span>
-                  <Badge variant="outline" className="text-[10px]">
-                    {t.type}
-                  </Badge>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => addPage(t.pageTemplateId)}
-                    disabled={alreadyInPack}
-                  >
-                    {alreadyInPack ? "Đã thêm" : <Plus className="size-4" />}
-                  </Button>
-                </div>
-              );
-            })}
+                  <Trash2 />
+                </Button>
+              ) : null}
+            </div>
           </div>
         </div>
 
-        {pack.orderedPages.length > 0 && (
-          <div>
-            <Label>Preview cả pack</Label>
-            <div className="mt-2 border rounded p-3 bg-muted/30 overflow-x-auto">
-              <div className="flex gap-3 items-start">
-                {pack.orderedPages.map((id, idx) => {
-                  const t = tplMap.get(id);
-                  if (!t) {
-                    return (
-                      <div
-                        key={id + idx}
-                        className="text-[10px] text-destructive p-2 border rounded"
-                      >
-                        #{idx + 1} (mất)
-                      </div>
-                    );
-                  }
-                  const w = 140;
-                  const h = (t.canvas.height / t.canvas.width) * w;
-                  return (
-                    <Link
-                      key={id + idx}
-                      to="/templates/$id/edit"
-                      params={{ id: t.pageTemplateId }}
-                      search={{ open: undefined, packId: pack.packTemplateId }}
-                      target="_blank"
-                      className="shrink-0 group"
-                    >
-                      <div
-                        className="relative rounded overflow-hidden border bg-background group-hover:border-primary"
-                        style={{ width: w, height: h }}
-                      >
-                        <PackPagePreview tpl={t} />
-                      </div>
-                      <div className="text-[10px] mt-1 flex items-center gap-1 max-w-[140px]">
-                        <span className="font-bold">#{idx + 1}</span>
-                        <span className="truncate">{t.name}</span>
-                        <ExternalLink className="size-3 shrink-0 opacity-50 group-hover:opacity-100" />
-                      </div>
-                    </Link>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
+        <div className="flex flex-col gap-4 p-4 md:p-5">
+          <section className="flex flex-col gap-3 rounded-lg border bg-muted/20 p-3">
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+              <SortableContext
+                items={orderedItems.map((item) => item.key)}
+                strategy={horizontalListSortingStrategy}
+              >
+                <div className="-mx-1 overflow-x-auto px-1 pb-1">
+                  {orderedItems.length === 0 ? (
+                    <div className="rounded-lg border border-dashed bg-background p-8 text-center text-sm text-muted-foreground">
+                      Pack chưa có page. Bấm Page mới để bắt đầu.
+                    </div>
+                  ) : null}
+                  <div className="flex min-w-full gap-3">
+                    {orderedItems.map((item) => (
+                      <SortablePageCard
+                        key={item.key}
+                        id={item.key}
+                        index={item.idx}
+                        tpl={tplMap.get(item.id)}
+                        onOpen={() => openPage(item.id)}
+                        onDuplicate={
+                          tplMap.get(item.id)
+                            ? () => onDuplicatePage?.(tplMap.get(item.id)!)
+                            : undefined
+                        }
+                        onDelete={
+                          tplMap.get(item.id)
+                            ? () => onDeletePage?.(tplMap.get(item.id)!, item.idx)
+                            : undefined
+                        }
+                        onRename={
+                          tplMap.get(item.id)
+                            ? (name) => onRenamePage?.(tplMap.get(item.id)!, name)
+                            : undefined
+                        }
+                      />
+                    ))}
+                  </div>
+                </div>
+              </SortableContext>
+            </DndContext>
+          </section>
+        </div>
       </CardContent>
     </Card>
   );

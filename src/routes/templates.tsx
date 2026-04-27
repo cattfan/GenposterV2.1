@@ -2,7 +2,6 @@ import { createFileRoute, Outlet, useLocation, useNavigate } from "@tanstack/rea
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/storage/db";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,7 +24,7 @@ import {
 import { Plus, Trash2, Sparkles, Loader2, Layers, Package, X } from "lucide-react";
 import { nanoid } from "nanoid";
 import { toast } from "sonner";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PackTemplate, PageTemplate } from "@/models";
 import {
   aiGenerateTemplateFromImage,
@@ -34,19 +33,132 @@ import {
 } from "@/features/ai/aiFeatures";
 import { aiLayoutToTemplateWithQuality } from "@/features/ai/templateFromImage";
 import { buildComboFromAiResult, persistCombo } from "@/features/ai/comboFromImages";
-import { PageContainer, PageHeader } from "@/components/PageHeader";
+import { PageContainer } from "@/components/PageHeader";
 import { PackBuilder } from "@/features/packs/PackBuilder";
+import { PackPagePreview } from "@/features/packs/PackPagePreview";
+import { cn } from "@/lib/utils";
 import {
   appendPageToPack,
   createBlankPageTemplate,
   createPackTemplate,
   duplicatePageTemplate,
-  ensureOrphanTemplatesInDefaultPack,
 } from "@/features/packs/packTemplateUtils";
 
 export const Route = createFileRoute("/templates")({
   component: TemplatesPage,
 });
+
+const UNDO_TOAST_DURATION = 10_000;
+
+function clonePackTemplate(pack: PackTemplate): PackTemplate {
+  return structuredClone(pack);
+}
+
+function clonePageTemplate(template: PageTemplate): PageTemplate {
+  return structuredClone(template);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function PackPreviewThumb({
+  template,
+  className,
+}: {
+  template?: PageTemplate;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn("relative shrink-0 overflow-hidden rounded-md border bg-background", className)}
+      style={{
+        aspectRatio: template ? `${template.canvas.width} / ${template.canvas.height}` : "4 / 5",
+      }}
+    >
+      {template ? (
+        <PackPagePreview tpl={template} />
+      ) : (
+        <div className="grid size-full place-items-center text-[10px] text-muted-foreground">
+          Mất
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PackSummaryCard({
+  pack,
+  templateMap,
+  active,
+  onSelect,
+  onDelete,
+}: {
+  pack: PackTemplate;
+  templateMap: Map<string, PageTemplate>;
+  active: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+}) {
+  const pageItems = pack.orderedPages.map((id) => ({ id, template: templateMap.get(id) }));
+
+  return (
+    <div
+      className={cn(
+        "rounded-xl border bg-card text-card-foreground shadow-sm transition-colors",
+        active ? "border-primary/60 bg-accent/20" : "hover:border-primary/40",
+      )}
+    >
+      <div className="flex items-start justify-between gap-3 border-b p-4">
+        <button type="button" className="min-w-0 flex-1 text-left" onClick={onSelect}>
+          <div className="truncate text-lg font-semibold">{pack.name}</div>
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            {pack.orderedPages.length} page trong pack
+          </div>
+        </button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onDelete}
+          title="Xóa pack"
+          aria-label="Xóa pack"
+          className="shrink-0 text-muted-foreground hover:text-destructive"
+        >
+          <Trash2 />
+        </Button>
+      </div>
+
+      <button type="button" className="block w-full p-4 text-left" onClick={onSelect}>
+        {pageItems.length === 0 ? (
+          <div className="rounded-lg border border-dashed bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+            Pack chưa có page.
+          </div>
+        ) : (
+          <div className="-mx-1 overflow-x-auto px-1 pb-1">
+            <div className="flex min-w-full gap-3">
+              {pageItems.map(({ id, template }, index) => (
+                <div
+                  key={`${id}-${index}`}
+                  className="w-[150px] shrink-0 rounded-lg border bg-background p-2 shadow-sm sm:w-[170px]"
+                >
+                  <div className="mb-2 flex items-center gap-2">
+                    <div className="grid size-7 place-items-center rounded-md bg-primary/10 text-xs font-semibold text-primary">
+                      {index + 1}
+                    </div>
+                    <div className="min-w-0 truncate text-sm font-medium">
+                      {template?.name ?? "Template không tồn tại"}
+                    </div>
+                  </div>
+                  <PackPreviewThumb template={template} className="w-full" />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </button>
+    </div>
+  );
+}
 
 function TemplatesPage() {
   const location = useLocation();
@@ -55,6 +167,10 @@ function TemplatesPage() {
   const openPackId = typeof routeSearch.open === "string" ? routeSearch.open : undefined;
   const packs = useLiveQuery(() => db.packTemplates.orderBy("updatedAt").reverse().toArray(), []);
   const tpls = useLiveQuery(() => db.pageTemplates.orderBy("updatedAt").reverse().toArray(), []);
+  const templateMap = useMemo(
+    () => new Map((tpls ?? []).map((template) => [template.pageTemplateId, template])),
+    [tpls],
+  );
   const fileRef = useRef<HTMLInputElement>(null);
   const comboFileRef = useRef<HTMLInputElement>(null);
   const [aiBusy, setAiBusy] = useState(false);
@@ -80,40 +196,28 @@ function TemplatesPage() {
   const [editing, setEditing] = useState<PackTemplate | null>(null);
 
   useEffect(() => {
-    void ensureOrphanTemplatesInDefaultPack()
-      .then((result) => {
-        if (result.added > 0) {
-          toast.info(`Đã gom ${result.added} template lẻ vào pack mặc định`);
-        }
-      })
-      .catch((error) => {
-        toast.error(
-          "Không thể migrate template lẻ: " +
-            (error instanceof Error ? error.message : String(error)),
-        );
-      });
-  }, []);
-
-  useEffect(() => {
     if (!packs) return;
     if (packs.length === 0) {
       setEditing(null);
       return;
     }
-    const bySearch = openPackId
-      ? packs.find((pack) => pack.packTemplateId === openPackId)
-      : undefined;
-    const current = editing
-      ? packs.find((pack) => pack.packTemplateId === editing.packTemplateId)
-      : undefined;
-    const next = bySearch ?? current ?? packs[0];
-    if (!next) return;
+
+    if (!openPackId) {
+      if (editing) setEditing(null);
+      return;
+    }
+
+    const bySearch = packs.find((pack) => pack.packTemplateId === openPackId);
+    if (!bySearch) {
+      setEditing(null);
+      return;
+    }
     if (
       !editing ||
-      editing.packTemplateId !== next.packTemplateId ||
-      editing.updatedAt !== next.updatedAt
+      editing.packTemplateId !== bySearch.packTemplateId ||
+      editing.updatedAt !== bySearch.updatedAt
     ) {
-      setEditing({ ...next });
+      setEditing({ ...bySearch });
     }
   }, [packs, openPackId, editing]);
 
@@ -127,6 +231,47 @@ function TemplatesPage() {
     setEditing(pack);
     toast.success("Đã tạo pack mới");
     navigate({ to: "/templates", search: { open: pack.packTemplateId } });
+  };
+
+  const selectPack = (pack: PackTemplate) => {
+    setEditing({ ...pack });
+    navigate({ to: "/templates", search: { open: pack.packTemplateId } });
+  };
+
+  const collapsePack = () => {
+    setEditing(null);
+    navigate({ to: "/templates", search: { open: undefined } });
+  };
+
+  const deletePack = async (pack: PackTemplate) => {
+    const deletedPack = clonePackTemplate(pack);
+    const wasActive = editing?.packTemplateId === pack.packTemplateId;
+    await db.packTemplates.delete(pack.packTemplateId);
+    if (wasActive) {
+      setEditing(null);
+      navigate({ to: "/templates", search: { open: undefined } });
+    }
+    toast.success("Đã xóa pack", {
+      description: `"${pack.name}" có thể khôi phục trong vài giây.`,
+      duration: UNDO_TOAST_DURATION,
+      action: {
+        label: "Khôi phục",
+        onClick: () => {
+          void db.packTemplates
+            .put(deletedPack)
+            .then(() => {
+              if (wasActive) {
+                setEditing(deletedPack);
+                navigate({ to: "/templates", search: { open: deletedPack.packTemplateId } });
+              }
+              toast.success("Đã khôi phục pack");
+            })
+            .catch((error) => {
+              toast.error("Không thể khôi phục pack: " + errorMessage(error));
+            });
+        },
+      },
+    });
   };
 
   const openEdit = (id: string, packId = editing?.packTemplateId) => {
@@ -167,15 +312,15 @@ function TemplatesPage() {
 
   const createPageInPack = async () => {
     const pack = await ensureActivePack();
-    const page = createBlankPageTemplate();
+    const pageNumber = pack.orderedPages.length + 1;
+    const page = createBlankPageTemplate({ name: `Page mới ${pageNumber}` });
     const nextPack = appendPageToPack(pack, page.pageTemplateId);
     await db.transaction("rw", [db.pageTemplates, db.packTemplates], async () => {
       await db.pageTemplates.put(page);
       await db.packTemplates.put(nextPack);
     });
     setEditing(nextPack);
-    toast.success("Đã tạo page trong pack");
-    openEdit(page.pageTemplateId, nextPack.packTemplateId);
+    toast.success(`Đã tạo ${page.name}`);
   };
 
   const duplicatePageInPack = async (template: PageTemplate) => {
@@ -191,8 +336,24 @@ function TemplatesPage() {
   };
 
   const deletePageFromPack = async (template: PageTemplate) => {
-    if (!confirm(`Xóa page "${template.name}" khỏi toàn bộ project?`)) return;
+    const deletedTemplate = clonePageTemplate(template);
+    const activePackId = editing?.packTemplateId;
     const allPacks = await db.packTemplates.toArray();
+    const affectedPacks = allPacks
+      .filter((pack) => pack.orderedPages.includes(template.pageTemplateId))
+      .map(clonePackTemplate);
+    const updatedAt = Date.now();
+    const nextEditing =
+      editing && editing.orderedPages.includes(template.pageTemplateId)
+        ? {
+            ...editing,
+            orderedPages: editing.orderedPages.filter((id) => id !== template.pageTemplateId),
+            requiredPages: editing.requiredPages.filter((id) => id !== template.pageTemplateId),
+            optionalPages: editing.optionalPages.filter((id) => id !== template.pageTemplateId),
+            updatedAt,
+          }
+        : editing;
+
     await db.transaction("rw", [db.pageTemplates, db.packTemplates], async () => {
       await db.pageTemplates.delete(template.pageTemplateId);
       for (const pack of allPacks) {
@@ -202,20 +363,51 @@ function TemplatesPage() {
           orderedPages: pack.orderedPages.filter((id) => id !== template.pageTemplateId),
           requiredPages: pack.requiredPages.filter((id) => id !== template.pageTemplateId),
           optionalPages: pack.optionalPages.filter((id) => id !== template.pageTemplateId),
-          updatedAt: Date.now(),
+          updatedAt,
         });
       }
     });
-    if (editing) {
-      setEditing({
-        ...editing,
-        orderedPages: editing.orderedPages.filter((id) => id !== template.pageTemplateId),
-        requiredPages: editing.requiredPages.filter((id) => id !== template.pageTemplateId),
-        optionalPages: editing.optionalPages.filter((id) => id !== template.pageTemplateId),
-        updatedAt: Date.now(),
-      });
+    if (nextEditing) {
+      setEditing(nextEditing);
     }
-    toast.success("Đã xóa page");
+    toast.success("Đã xóa page", {
+      description: `"${template.name}" có thể khôi phục trong vài giây.`,
+      duration: UNDO_TOAST_DURATION,
+      action: {
+        label: "Khôi phục",
+        onClick: () => {
+          void db
+            .transaction("rw", [db.pageTemplates, db.packTemplates], async () => {
+              await db.pageTemplates.put(deletedTemplate);
+              for (const pack of affectedPacks) {
+                await db.packTemplates.put(pack);
+              }
+            })
+            .then(() => {
+              const restoredActivePack = activePackId
+                ? affectedPacks.find((pack) => pack.packTemplateId === activePackId)
+                : undefined;
+              if (restoredActivePack) {
+                setEditing(restoredActivePack);
+                navigate({ to: "/templates", search: { open: restoredActivePack.packTemplateId } });
+              }
+              toast.success("Đã khôi phục page");
+            })
+            .catch((error) => {
+              toast.error("Không thể khôi phục page: " + errorMessage(error));
+            });
+        },
+      },
+    });
+  };
+
+  const renamePageTemplate = async (template: PageTemplate, name: string) => {
+    const nextName = name.trim();
+    if (!nextName || nextName === template.name) return;
+    await db.pageTemplates.update(template.pageTemplateId, {
+      name: nextName,
+      updatedAt: Date.now(),
+    });
   };
 
   // === AI gen template từ ảnh ===
@@ -382,7 +574,7 @@ function TemplatesPage() {
   };
 
   return (
-    <PageContainer>
+    <PageContainer className="max-w-[1500px]">
       <input ref={fileRef} type="file" accept="image/*" hidden onChange={onAiImageChange} />
       <input
         ref={comboFileRef}
@@ -392,29 +584,24 @@ function TemplatesPage() {
         hidden
         onChange={onComboFilesChange}
       />
-      <PageHeader
-        icon={<Package className="size-5" />}
-        title="Pack Templates"
-        description="Tạo pack trước, sau đó thêm nhiều page template và chỉnh từng page trong editor."
-        actions={
-          <>
-            <Button variant="outline" onClick={onPickAiImage} disabled={aiBusy}>
-              {aiBusy ? (
-                <Loader2 className="size-4 mr-2 animate-spin" />
-              ) : (
-                <Sparkles className="size-4 mr-2" />
-              )}
-              AI thêm page từ ảnh
-            </Button>
-            <Button variant="outline" onClick={onPickComboImages} disabled={aiBusy}>
-              <Layers className="size-4 mr-2" /> AI dựng combo
-            </Button>
-            <Button onClick={createNewPack}>
-              <Plus className="size-4 mr-2" /> Tạo pack mới
-            </Button>
-          </>
-        }
-      />
+      <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-accent text-accent-foreground">
+            <Package className="size-5" />
+          </div>
+          <div className="min-w-0">
+            <h1 className="text-3xl font-bold tracking-tight">Pack Templates</h1>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 xl:shrink-0">
+          <Button variant="outline" onClick={onPickComboImages} disabled={aiBusy}>
+            <Layers className="size-4 mr-2" /> AI Gen
+          </Button>
+          <Button onClick={createNewPack}>
+            <Plus className="size-4 mr-2" /> Tạo pack mới
+          </Button>
+        </div>
+      </div>
 
       <Dialog open={singleOpen} onOpenChange={(o) => !aiBusy && setSingleOpen(o)}>
         <DialogContent className="max-w-2xl">
@@ -603,87 +790,49 @@ function TemplatesPage() {
         </DialogContent>
       </Dialog>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <div>
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Danh sách pack
-          </h2>
-          <div className="space-y-2">
-            {packs?.length === 0 && (
-              <Card className="border-dashed">
-                <CardContent className="p-4 text-sm text-muted-foreground">
-                  Chưa có pack. Bấm "Tạo pack mới" để bắt đầu.
-                </CardContent>
-              </Card>
-            )}
-            {packs?.map((pack) => (
-              <Card
-                key={pack.packTemplateId}
-                className={`cursor-pointer border-border/70 transition-all hover:-translate-y-0.5 hover:border-primary/60 hover:shadow-sm ${
-                  editing?.packTemplateId === pack.packTemplateId
-                    ? "border-primary bg-accent/40"
-                    : ""
-                }`}
-                onClick={() => {
-                  setEditing({ ...pack });
-                  navigate({ to: "/templates", search: { open: pack.packTemplateId } });
-                }}
-              >
-                <CardContent className="flex items-center justify-between gap-3 p-4">
-                  <div className="min-w-0">
-                    <div className="truncate font-semibold">{pack.name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {pack.orderedPages.length} page
-                    </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={async (event) => {
-                      event.stopPropagation();
-                      if (
-                        !confirm(`Xóa pack "${pack.name}"? Page sẽ được gom lại vào pack mặc định.`)
-                      )
-                        return;
-                      await db.packTemplates.delete(pack.packTemplateId);
-                      if (editing?.packTemplateId === pack.packTemplateId) setEditing(null);
-                      await ensureOrphanTemplatesInDefaultPack();
-                      toast.success("Đã xóa pack");
-                    }}
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
-                </CardContent>
-              </Card>
-            ))}
+      <div className="flex flex-col gap-4">
+        {packs?.length === 0 ? (
+          <div className="rounded-xl border border-dashed bg-background p-10 text-center text-sm text-muted-foreground">
+            <span className="mx-auto mb-3 grid size-12 place-items-center rounded-full bg-accent text-primary">
+              <Package className="size-5" />
+            </span>
+            Chưa có pack. Bấm "Tạo pack mới" để bắt đầu.
           </div>
-        </div>
+        ) : null}
 
-        <div>
-          {!editing && (
-            <Card className="border-dashed">
-              <CardContent className="flex flex-col items-center gap-3 p-10 text-center text-sm text-muted-foreground">
-                <span className="grid size-12 place-items-center rounded-full bg-accent text-primary">
-                  <Package className="size-5" />
-                </span>
-                Chọn một pack để sửa hoặc tạo pack mới.
-              </CardContent>
-            </Card>
-          )}
-          {editing && (
-            <PackBuilder
-              pack={editing}
-              allTemplates={tpls ?? []}
-              onChange={setEditing}
-              onSave={savePack}
-              onDuplicate={duplicatePack}
-              onCreatePage={createPageInPack}
-              onCreateAiPage={onPickAiImage}
-              onDuplicatePage={duplicatePageInPack}
-              onDeletePage={deletePageFromPack}
+        {packs?.map((pack) => {
+          const active = editing?.packTemplateId === pack.packTemplateId;
+          if (active && editing) {
+            return (
+              <PackBuilder
+                key={pack.packTemplateId}
+                pack={editing}
+                allTemplates={tpls ?? []}
+                onChange={setEditing}
+                onSave={savePack}
+                onDuplicate={duplicatePack}
+                onCreatePage={createPageInPack}
+                onCreateAiPage={onPickAiImage}
+                onDuplicatePage={duplicatePageInPack}
+                onDeletePage={deletePageFromPack}
+                onRenamePage={renamePageTemplate}
+                onDeletePack={() => deletePack(pack)}
+                onCollapse={collapsePack}
+              />
+            );
+          }
+
+          return (
+            <PackSummaryCard
+              key={pack.packTemplateId}
+              pack={pack}
+              templateMap={templateMap}
+              active={active}
+              onSelect={() => selectPack(pack)}
+              onDelete={() => deletePack(pack)}
             />
-          )}
-        </div>
+          );
+        })}
       </div>
     </PageContainer>
   );

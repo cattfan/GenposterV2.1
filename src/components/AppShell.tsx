@@ -9,22 +9,13 @@ import {
   History,
   Settings,
   Palette,
-  PanelLeftClose,
-  PanelLeftOpen,
   Search,
   Menu,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { seedDemo, isSeeded } from "@/storage/seed";
+import { cleanupDemoData } from "@/storage/sampleDataCleanup";
 import { toast } from "sonner";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 
 type NavItem = {
   to: string;
@@ -153,7 +144,6 @@ function NavLinks({
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const location = useLocation();
-  const [, setSeeded] = useState(false);
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem(STORAGE_KEY) === "1";
@@ -172,12 +162,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     (async () => {
-      if (!(await isSeeded())) {
-        await seedDemo();
-        toast.success("Đã tạo dữ liệu demo. Mở 'Tạo nội dung' để thử ngay!");
+      const result = await cleanupDemoData();
+      if (result.total > 0) {
+        toast.success("Đã xóa dữ liệu mẫu.");
       }
-      setSeeded(true);
-    })();
+    })().catch((error) => {
+      toast.error(
+        `Không thể xóa dữ liệu mẫu: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
   }, []);
 
   const activeLabel = getActiveLabel(location.pathname);
@@ -190,62 +183,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           collapsed ? "w-16" : "w-64",
         )}
       >
-        <div
+        <button
+          type="button"
+          onClick={() => setCollapsed((value) => !value)}
           className={cn(
-            "py-4 border-b border-sidebar-border flex items-center",
-            collapsed ? "px-2 justify-center" : "px-4 justify-between gap-2",
+            "flex border-b border-sidebar-border py-4 text-left transition-colors hover:bg-sidebar-accent/60",
+            collapsed ? "justify-center px-2" : "items-center gap-2 px-4",
           )}
+          title={collapsed ? "Mở rộng sidebar" : "Thu gọn sidebar"}
+          aria-label={collapsed ? "Mở rộng sidebar" : "Thu gọn sidebar"}
         >
-          {collapsed ? (
-            <button
-              onClick={() => setCollapsed(false)}
-              className="rounded-xl hover:opacity-90"
-              title="Mở rộng"
-            >
-              <BrandMark className="size-9" />
-            </button>
-          ) : (
-            <>
-              <Link to="/" className="flex items-center gap-2 min-w-0">
-                <BrandMark className="size-9 shrink-0" />
-                <div className="min-w-0">
-                  <div className="font-bold text-sm leading-tight truncate">GenPoster</div>
-                  <div className="text-[10px] text-muted-foreground leading-tight truncate">
-                    Content pack studio
-                  </div>
-                </div>
-              </Link>
-              <button
-                onClick={() => setCollapsed(true)}
-                className="p-1.5 rounded-md hover:bg-sidebar-accent/60 shrink-0"
-                title="Thu gọn"
-                aria-label="Thu gọn sidebar"
-              >
-                <PanelLeftClose className="size-4" />
-              </button>
-            </>
-          )}
-        </div>
-
-        <NavLinks collapsed={collapsed} pathname={location.pathname} />
-
-        <div className={cn("border-t border-sidebar-border", collapsed ? "p-2" : "p-3")}>
-          {collapsed ? (
-            <button
-              onClick={() => setCollapsed(false)}
-              className="w-full p-2 rounded-md hover:bg-sidebar-accent/60 grid place-items-center"
-              title="Mở rộng sidebar"
-              aria-label="Mở rộng sidebar"
-            >
-              <PanelLeftOpen className="size-4" />
-            </button>
-          ) : (
-            <div className="rounded-lg border border-sidebar-border/70 bg-sidebar-accent/40 px-3 py-2 text-[11px] leading-snug text-muted-foreground">
-              <div className="font-medium text-sidebar-foreground/90">Local-first</div>
-              Dữ liệu lưu trên trình duyệt, không gửi lên server.
+          <BrandMark className="size-9 shrink-0" />
+          {!collapsed && (
+            <div className="min-w-0">
+              <div className="truncate text-sm font-bold leading-tight">GenPoster</div>
             </div>
           )}
-        </div>
+        </button>
+
+        <NavLinks collapsed={collapsed} pathname={location.pathname} />
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -262,7 +218,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <BrandMark className="size-9" />
                   <div>
                     <SheetTitle className="text-sm">GenPoster</SheetTitle>
-                    <SheetDescription className="text-[11px]">Content pack studio</SheetDescription>
                   </div>
                 </div>
               </SheetHeader>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   AlignCenter,
@@ -116,6 +116,7 @@ type DesignTool = "select" | "pan" | "crop";
 const EMPTY_ASSETS: AssetItem[] = [];
 const EMPTY_BRAND_KITS: BrandKit[] = [];
 const EMPTY_FONT_ASSETS: FontAsset[] = [];
+const AUTOSAVE_DELAY_MS = 500;
 
 function rectsIntersect(
   a: { x: number; y: number; width: number; height: number },
@@ -310,10 +311,7 @@ function zoomByStep(editor: ReturnType<typeof useDesignEditor>, zoom: number, di
   editor.setZoom(getNextZoom(zoom, direction));
 }
 
-function zoomToFit(
-  editor: ReturnType<typeof useDesignEditor>,
-  container: HTMLElement | null,
-) {
+function zoomToFit(editor: ReturnType<typeof useDesignEditor>, container: HTMLElement | null) {
   const page = editor.activePage;
   if (!page || !container) return;
   const rect = container.getBoundingClientRect();
@@ -663,6 +661,7 @@ export function DesignWorkspace({
   onSave,
   onClose,
   allowMultiplePages = true,
+  autosave = false,
 }: {
   initialDocument: DesignDocument;
   mode?: WorkspaceMode;
@@ -670,6 +669,7 @@ export function DesignWorkspace({
   onSave?: (document: DesignDocument) => void | Promise<void>;
   onClose?: () => void;
   allowMultiplePages?: boolean;
+  autosave?: boolean;
 }) {
   const workspaceDocument = useMemo(
     () => ({
@@ -703,7 +703,19 @@ export function DesignWorkspace({
   const [panCursor, setPanCursor] = useState<"grab" | "grabbing">("grab");
   const [viewportDrag, setViewportDrag] = useState<{ startX: number; startY: number } | null>(null);
   const [cropTargetId, setCropTargetId] = useState<string | null>(null);
-  const [spacingLines, setSpacingLines] = useState<Array<{ axis: "x" | "y"; from: number; to: number; pos: number; gap: number }>>([]);
+  const [autosaveStatus, setAutosaveStatus] = useState<
+    "idle" | "pending" | "saving" | "saved" | "error"
+  >("idle");
+  const onSaveRef = useRef(onSave);
+  const autosaveTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const saveInFlightRef = useRef(false);
+  const queuedSaveRef = useRef<{ document: DesignDocument; signature: string } | null>(null);
+  const autosaveErrorToastShownRef = useRef(false);
+  const latestDocumentRef = useRef<DesignDocument | null>(null);
+  const latestSignatureRef = useRef("");
+  const [spacingLines, setSpacingLines] = useState<
+    Array<{ axis: "x" | "y"; from: number; to: number; pos: number; gap: number }>
+  >([]);
   const assetLibraryQuery = useLiveQuery(
     () => db.assetLibrary.orderBy("updatedAt").reverse().toArray(),
     [],
@@ -732,6 +744,10 @@ export function DesignWorkspace({
   }, [iconAssets, iconSearch]);
   const selectedIconAsset =
     iconAssets.find((asset) => asset.assetId === selectedIconId) ?? filteredIconAssets[0] ?? null;
+  const documentSignature = useMemo(() => JSON.stringify(editor.document), [editor.document]);
+  const documentIdentity = `${workspaceDocument.designDocumentId}:${workspaceDocument.mode}`;
+  const lastSavedSignatureRef = useRef(documentSignature);
+  const autosaveDocumentIdentityRef = useRef(documentIdentity);
   const availableFontFamilies = useMemo(() => {
     const fromGoogle = FONTS.map((font) => font.family);
     const fromUpload = fontAssets.map((fontAsset) => fontAsset.family);
@@ -746,11 +762,97 @@ export function DesignWorkspace({
     });
   }, [uploadedAssets, assetSearch]);
 
+  onSaveRef.current = onSave;
+  latestDocumentRef.current = editor.document;
+  latestSignatureRef.current = documentSignature;
+
+  const flushAutosaveQueue = useCallback(async () => {
+    if (saveInFlightRef.current) return;
+    saveInFlightRef.current = true;
+
+    try {
+      while (queuedSaveRef.current && onSaveRef.current) {
+        const nextSave = queuedSaveRef.current;
+        queuedSaveRef.current = null;
+
+        if (nextSave.signature === lastSavedSignatureRef.current) continue;
+
+        setAutosaveStatus("saving");
+
+        try {
+          await onSaveRef.current(nextSave.document);
+          lastSavedSignatureRef.current = nextSave.signature;
+          autosaveErrorToastShownRef.current = false;
+          setAutosaveStatus(queuedSaveRef.current ? "pending" : "saved");
+        } catch (error) {
+          setAutosaveStatus("error");
+          if (!autosaveErrorToastShownRef.current) {
+            autosaveErrorToastShownRef.current = true;
+            toast.error(error instanceof Error ? error.message : "Autosave thất bại");
+          }
+        }
+      }
+    } finally {
+      saveInFlightRef.current = false;
+    }
+  }, []);
+
+  const queueAutosave = useCallback(
+    (documentToSave: DesignDocument, signature: string) => {
+      if (!onSaveRef.current || signature === lastSavedSignatureRef.current) return;
+      queuedSaveRef.current = { document: documentToSave, signature };
+      void flushAutosaveQueue();
+    },
+    [flushAutosaveQueue],
+  );
+
   useEffect(() => {
     fontAssets.forEach((fontAsset) => {
       registerFontAsset(fontAsset).catch(() => undefined);
     });
   }, [fontAssets]);
+
+  useEffect(() => {
+    if (autosaveDocumentIdentityRef.current !== documentIdentity) {
+      autosaveDocumentIdentityRef.current = documentIdentity;
+      lastSavedSignatureRef.current = documentSignature;
+      queuedSaveRef.current = null;
+      setAutosaveStatus(autosave && onSaveRef.current ? "saved" : "idle");
+    }
+  }, [autosave, documentIdentity, documentSignature]);
+
+  useEffect(() => {
+    if (!autosave || !onSaveRef.current) return;
+
+    if (documentSignature === lastSavedSignatureRef.current) {
+      setAutosaveStatus("saved");
+      return;
+    }
+
+    setAutosaveStatus("pending");
+    autosaveTimerRef.current = window.setTimeout(() => {
+      const documentToSave = latestDocumentRef.current;
+      if (!documentToSave) return;
+      queueAutosave(documentToSave, documentSignature);
+    }, AUTOSAVE_DELAY_MS);
+
+    return () => {
+      if (autosaveTimerRef.current) {
+        window.clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+    };
+  }, [autosave, documentSignature, queueAutosave]);
+
+  useEffect(() => {
+    return () => {
+      if (autosaveTimerRef.current) {
+        window.clearTimeout(autosaveTimerRef.current);
+      }
+      if (!autosave || !latestDocumentRef.current) return;
+      queueAutosave(latestDocumentRef.current, latestSignatureRef.current);
+    };
+  }, [autosave, queueAutosave]);
 
   useEffect(() => {
     if (!selectedIconId && iconAssets[0]) {
@@ -1357,25 +1459,11 @@ export function DesignWorkspace({
     editor.setSelection([]);
     const additive = event.shiftKey;
     const toggle = event.ctrlKey || event.metaKey;
-    const start = getCanvasPoint(
-      canvas,
-      zoom,
-      event.clientX,
-      event.clientY,
-      0,
-      0,
-    );
+    const start = getCanvasPoint(canvas, zoom, event.clientX, event.clientY, 0, 0);
     setMarqueeRect({ x: start.x, y: start.y, width: 0, height: 0 });
 
     const onMouseMove = (moveEvent: MouseEvent) => {
-      const point = getCanvasPoint(
-        canvas,
-        zoom,
-        moveEvent.clientX,
-        moveEvent.clientY,
-        0,
-        0,
-      );
+      const point = getCanvasPoint(canvas, zoom, moveEvent.clientX, moveEvent.clientY, 0, 0);
       const rect = normalizeMarqueeRect(start, point);
       setMarqueeRect(rect);
       const nextIds = getSelectionFromMarquee(
@@ -1521,7 +1609,9 @@ export function DesignWorkspace({
           onSelect={() =>
             editor.updateElements(
               [element.elementId],
-              { style: { ...(element.style ?? {}), flipH: !element.style?.flipH } } as Partial<DesignElement>,
+              {
+                style: { ...(element.style ?? {}), flipH: !element.style?.flipH },
+              } as Partial<DesignElement>,
               { history: false },
             )
           }
@@ -1533,7 +1623,9 @@ export function DesignWorkspace({
           onSelect={() =>
             editor.updateElements(
               [element.elementId],
-              { style: { ...(element.style ?? {}), flipV: !element.style?.flipV } } as Partial<DesignElement>,
+              {
+                style: { ...(element.style ?? {}), flipV: !element.style?.flipV },
+              } as Partial<DesignElement>,
               { history: false },
             )
           }
@@ -1986,7 +2078,21 @@ export function DesignWorkspace({
               <TooltipContent>Right panel</TooltipContent>
             </Tooltip>
 
-            {onSave ? (
+            {autosave && onSave ? (
+              <span
+                className="px-1 text-xs text-muted-foreground"
+                aria-live="polite"
+                title="Editor tự động lưu mọi thay đổi"
+              >
+                {autosaveStatus === "pending" || autosaveStatus === "saving"
+                  ? "Đang tự lưu"
+                  : autosaveStatus === "error"
+                    ? "Lỗi autosave"
+                    : "Đã tự lưu"}
+              </span>
+            ) : null}
+
+            {!autosave && onSave ? (
               <Button onClick={handleSave}>
                 <Save className="mr-2 size-4" />
                 Lưu
@@ -2290,7 +2396,10 @@ export function DesignWorkspace({
                     scale={zoom}
                     guides={activePage.guides ?? []}
                     onAddGuide={(axis, value) => {
-                      const guides = [...(activePage.guides ?? []), { guideId: nanoid(), axis, value }];
+                      const guides = [
+                        ...(activePage.guides ?? []),
+                        { guideId: nanoid(), axis, value },
+                      ];
                       editor.updatePage(activePage.pageId, { guides });
                     }}
                     onRemoveGuide={(guideId) => {
@@ -2299,120 +2408,130 @@ export function DesignWorkspace({
                     }}
                   />
                 ) : null}
-              <DesignStage
-                page={activePage}
-                elements={editor.activeElements}
-                scale={zoom}
-                tool={tool}
-                spacePressed={spacePressed}
-                marqueeRect={marqueeRect}
-                selectedIds={editor.state.selection.ids}
-                primaryId={editor.state.selection.primaryId}
-                snapLines={editor.state.viewport.snapLines}
-                snapTargetIds={snapTargetIds}
-                showSafeZone={editor.state.documentSettings.showSafeZone}
-                showGrid={editor.state.documentSettings.showGrid}
-                showGuides={editor.state.documentSettings.showGuides}
-                renderCanvasContextMenu={renderCanvasContextMenu}
-                renderElementContextMenu={renderElementContextMenu}
-                editingTextId={editingTextId}
-                editingTextValue={editingTextValue}
-                onEditingTextValueChange={setEditingTextValue}
-                onStartTextEdit={startInlineTextEdit}
-                onCommitTextEdit={commitInlineTextEdit}
-                onCancelTextEdit={cancelInlineTextEdit}
-                onStageMouseDown={handleStageBackgroundMouseDown}
-                onSelect={(elementId, additive) => {
-                  if (!elementId) {
-                    editor.setSelection([]);
-                    return;
-                  }
-                  const existing = editor.state.selection.ids;
-                  if (additive) {
-                    if (existing.includes(elementId)) {
-                      const nextIds = existing.filter((id) => id !== elementId);
-                      editor.setSelection(nextIds, nextIds.at(-1) ?? null);
-                    } else {
-                      editor.setSelection([...existing, elementId], elementId);
+                <DesignStage
+                  page={activePage}
+                  elements={editor.activeElements}
+                  scale={zoom}
+                  tool={tool}
+                  spacePressed={spacePressed}
+                  marqueeRect={marqueeRect}
+                  selectedIds={editor.state.selection.ids}
+                  primaryId={editor.state.selection.primaryId}
+                  snapLines={editor.state.viewport.snapLines}
+                  snapTargetIds={snapTargetIds}
+                  showSafeZone={editor.state.documentSettings.showSafeZone}
+                  showGrid={editor.state.documentSettings.showGrid}
+                  showGuides={editor.state.documentSettings.showGuides}
+                  renderCanvasContextMenu={renderCanvasContextMenu}
+                  renderElementContextMenu={renderElementContextMenu}
+                  editingTextId={editingTextId}
+                  editingTextValue={editingTextValue}
+                  onEditingTextValueChange={setEditingTextValue}
+                  onStartTextEdit={startInlineTextEdit}
+                  onCommitTextEdit={commitInlineTextEdit}
+                  onCancelTextEdit={cancelInlineTextEdit}
+                  onStageMouseDown={handleStageBackgroundMouseDown}
+                  onSelect={(elementId, additive) => {
+                    if (!elementId) {
+                      editor.setSelection([]);
+                      return;
                     }
-                    return;
-                  }
-                  editor.setSelection([elementId], elementId);
-                }}
-                onMove={({ elementId, moveIds, originById, nextPrimaryX, nextPrimaryY }) => {
-                  const primaryTarget =
-                    editor.activeElements.find((item) => item.elementId === elementId) ?? null;
-                  const primaryOrigin = originById[elementId];
-                  if (!primaryTarget || !primaryOrigin) return;
-                  if (editor.state.documentSettings.snapToGrid) {
-                    const grid = editor.state.documentSettings.gridSize;
-                    nextPrimaryX = Math.round(nextPrimaryX / grid) * grid;
-                    nextPrimaryY = Math.round(nextPrimaryY / grid) * grid;
-                  }
-                  const snapped = snapMove(
-                    activePage,
-                    primaryTarget,
-                    nextPrimaryX,
-                    nextPrimaryY,
-                    editor.activeElements.filter((element) => !moveIds.includes(element.elementId)),
-                    zoom,
-                  );
-                  const appliedDx = snapped.x - primaryOrigin.x;
-                  const appliedDy = snapped.y - primaryOrigin.y;
-                  editor.setSnapLines(snapped.snapLines);
-                  setSnapTargetIds(snapped.snapTargetIds);
-                  // Smart spacing
-                  const movedEl = { ...primaryTarget, x: snapped.x, y: snapped.y };
-                  const others = editor.activeElements.filter((e) => !moveIds.includes(e.elementId) && !e.hidden);
-                  setSpacingLines(computeSpacingLines(movedEl, others));
-                  editor.updateElements(
-                    moveIds,
-                    (element) => ({
-                      x: clamp(
-                        (originById[element.elementId]?.x ?? element.x) + appliedDx,
-                        -activePage.width,
-                        activePage.width * 2,
+                    const existing = editor.state.selection.ids;
+                    if (additive) {
+                      if (existing.includes(elementId)) {
+                        const nextIds = existing.filter((id) => id !== elementId);
+                        editor.setSelection(nextIds, nextIds.at(-1) ?? null);
+                      } else {
+                        editor.setSelection([...existing, elementId], elementId);
+                      }
+                      return;
+                    }
+                    editor.setSelection([elementId], elementId);
+                  }}
+                  onMove={({ elementId, moveIds, originById, nextPrimaryX, nextPrimaryY }) => {
+                    const primaryTarget =
+                      editor.activeElements.find((item) => item.elementId === elementId) ?? null;
+                    const primaryOrigin = originById[elementId];
+                    if (!primaryTarget || !primaryOrigin) return;
+                    if (editor.state.documentSettings.snapToGrid) {
+                      const grid = editor.state.documentSettings.gridSize;
+                      nextPrimaryX = Math.round(nextPrimaryX / grid) * grid;
+                      nextPrimaryY = Math.round(nextPrimaryY / grid) * grid;
+                    }
+                    const snapped = snapMove(
+                      activePage,
+                      primaryTarget,
+                      nextPrimaryX,
+                      nextPrimaryY,
+                      editor.activeElements.filter(
+                        (element) => !moveIds.includes(element.elementId),
                       ),
-                      y: clamp(
-                        (originById[element.elementId]?.y ?? element.y) + appliedDy,
-                        -activePage.height,
-                        activePage.height * 2,
-                      ),
-                    }),
-                    { history: false },
-                  );
-                }}
-                onMoveCommit={() => {
-                  editor.setSnapLines([]);
-                  setSnapTargetIds([]);
-                  setSpacingLines([]);
-                }}
-                onResize={({ elementId, patch, snapLines, snapTargetIds }) => {
-                  editor.updateElements([elementId], patch, { history: false });
-                  editor.setSnapLines(snapLines ?? []);
-                  setSnapTargetIds(snapTargetIds ?? []);
-                }}
-                onResizeCommit={() => {
-                  editor.setSnapLines([]);
-                  setSnapTargetIds([]);
-                }}
-                availableFontFamilies={availableFontFamilies}
-                onUpdateElementStyle={(elementId, patch) =>
-                  editor.updateElements(
-                    [elementId],
-                    { style: { ...(editor.activeElements.find((e) => e.elementId === elementId)?.style ?? {}), ...patch } } as Partial<DesignElement>,
-                    { history: false },
-                  )
-                }
-                cropTargetId={cropTargetId}
-                onStartImageCrop={(elementId) => setCropTargetId(elementId)}
-                onCommitCrop={(elementId, crop) => {
-                  editor.updateElements([elementId], { crop }, { history: false });
-                  setCropTargetId(null);
-                }}
-                onCancelCrop={() => setCropTargetId(null)}
-                spacingLines={spacingLines}
-              />
+                      zoom,
+                    );
+                    const appliedDx = snapped.x - primaryOrigin.x;
+                    const appliedDy = snapped.y - primaryOrigin.y;
+                    editor.setSnapLines(snapped.snapLines);
+                    setSnapTargetIds(snapped.snapTargetIds);
+                    // Smart spacing
+                    const movedEl = { ...primaryTarget, x: snapped.x, y: snapped.y };
+                    const others = editor.activeElements.filter(
+                      (e) => !moveIds.includes(e.elementId) && !e.hidden,
+                    );
+                    setSpacingLines(computeSpacingLines(movedEl, others));
+                    editor.updateElements(
+                      moveIds,
+                      (element) => ({
+                        x: clamp(
+                          (originById[element.elementId]?.x ?? element.x) + appliedDx,
+                          -activePage.width,
+                          activePage.width * 2,
+                        ),
+                        y: clamp(
+                          (originById[element.elementId]?.y ?? element.y) + appliedDy,
+                          -activePage.height,
+                          activePage.height * 2,
+                        ),
+                      }),
+                      { history: false },
+                    );
+                  }}
+                  onMoveCommit={() => {
+                    editor.setSnapLines([]);
+                    setSnapTargetIds([]);
+                    setSpacingLines([]);
+                  }}
+                  onResize={({ elementId, patch, snapLines, snapTargetIds }) => {
+                    editor.updateElements([elementId], patch, { history: false });
+                    editor.setSnapLines(snapLines ?? []);
+                    setSnapTargetIds(snapTargetIds ?? []);
+                  }}
+                  onResizeCommit={() => {
+                    editor.setSnapLines([]);
+                    setSnapTargetIds([]);
+                  }}
+                  availableFontFamilies={availableFontFamilies}
+                  onUpdateElementStyle={(elementId, patch) =>
+                    editor.updateElements(
+                      [elementId],
+                      {
+                        style: {
+                          ...(editor.activeElements.find((e) => e.elementId === elementId)?.style ??
+                            {}),
+                          ...patch,
+                        },
+                      } as Partial<DesignElement>,
+                      { history: false },
+                    )
+                  }
+                  cropTargetId={cropTargetId}
+                  onStartImageCrop={(elementId) => setCropTargetId(elementId)}
+                  onCommitCrop={(elementId, crop) => {
+                    editor.updateElements([elementId], { crop }, { history: false });
+                    setCropTargetId(null);
+                  }}
+                  onCancelCrop={() => setCropTargetId(null)}
+                  spacingLines={spacingLines}
+                />
               </div>
             </div>
           </div>
@@ -2558,7 +2677,11 @@ export function DesignWorkspace({
                           <Button size="sm" variant="outline" onClick={editor.copySelection}>
                             <Copy className="mr-2 size-4" /> Copy
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => editor.duplicateSelection()}>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => editor.duplicateSelection()}
+                          >
                             <Layers className="mr-2 size-4" /> Duplicate
                           </Button>
                         </div>
@@ -2849,7 +2972,9 @@ export function DesignWorkspace({
                                     onValueChange={([v]) =>
                                       editor.updateElements(
                                         [primary.elementId],
-                                        { style: { ...(primary.style ?? {}), brightness: v / 100 } } as Partial<DesignElement>,
+                                        {
+                                          style: { ...(primary.style ?? {}), brightness: v / 100 },
+                                        } as Partial<DesignElement>,
                                         { history: false },
                                       )
                                     }
@@ -2870,7 +2995,9 @@ export function DesignWorkspace({
                                     onValueChange={([v]) =>
                                       editor.updateElements(
                                         [primary.elementId],
-                                        { style: { ...(primary.style ?? {}), contrast: v / 100 } } as Partial<DesignElement>,
+                                        {
+                                          style: { ...(primary.style ?? {}), contrast: v / 100 },
+                                        } as Partial<DesignElement>,
                                         { history: false },
                                       )
                                     }
@@ -2891,7 +3018,9 @@ export function DesignWorkspace({
                                     onValueChange={([v]) =>
                                       editor.updateElements(
                                         [primary.elementId],
-                                        { style: { ...(primary.style ?? {}), saturate: v / 100 } } as Partial<DesignElement>,
+                                        {
+                                          style: { ...(primary.style ?? {}), saturate: v / 100 },
+                                        } as Partial<DesignElement>,
                                         { history: false },
                                       )
                                     }
@@ -2912,7 +3041,9 @@ export function DesignWorkspace({
                                     onValueChange={([v]) =>
                                       editor.updateElements(
                                         [primary.elementId],
-                                        { style: { ...(primary.style ?? {}), blur: v } } as Partial<DesignElement>,
+                                        {
+                                          style: { ...(primary.style ?? {}), blur: v },
+                                        } as Partial<DesignElement>,
                                         { history: false },
                                       )
                                     }
@@ -2925,7 +3056,15 @@ export function DesignWorkspace({
                                   onClick={() =>
                                     editor.updateElements(
                                       [primary.elementId],
-                                      { style: { ...(primary.style ?? {}), brightness: 1, contrast: 1, saturate: 1, blur: 0 } } as Partial<DesignElement>,
+                                      {
+                                        style: {
+                                          ...(primary.style ?? {}),
+                                          brightness: 1,
+                                          contrast: 1,
+                                          saturate: 1,
+                                          blur: 0,
+                                        },
+                                      } as Partial<DesignElement>,
                                       { history: false },
                                     )
                                   }
@@ -3049,7 +3188,9 @@ export function DesignWorkspace({
                                   {
                                     style: {
                                       ...(primary.style ?? {}),
-                                      shadowColor: primary.style?.shadowColor ? undefined : "rgba(0,0,0,0.25)",
+                                      shadowColor: primary.style?.shadowColor
+                                        ? undefined
+                                        : "rgba(0,0,0,0.25)",
                                       shadowBlur: primary.style?.shadowBlur ?? 8,
                                       shadowX: primary.style?.shadowX ?? 0,
                                       shadowY: primary.style?.shadowY ?? 4,
@@ -3072,7 +3213,12 @@ export function DesignWorkspace({
                                   onChange={(event) =>
                                     editor.updateElements(
                                       [primary.elementId],
-                                      { style: { ...(primary.style ?? {}), shadowColor: event.target.value } } as Partial<DesignElement>,
+                                      {
+                                        style: {
+                                          ...(primary.style ?? {}),
+                                          shadowColor: event.target.value,
+                                        },
+                                      } as Partial<DesignElement>,
                                       { history: false },
                                     )
                                   }
@@ -3082,7 +3228,9 @@ export function DesignWorkspace({
                               <div className="space-y-1">
                                 <div className="flex items-center justify-between">
                                   <Label className="text-xs text-muted-foreground">Blur</Label>
-                                  <span className="text-[10px] tabular-nums text-muted-foreground">{primary.style.shadowBlur ?? 8}px</span>
+                                  <span className="text-[10px] tabular-nums text-muted-foreground">
+                                    {primary.style.shadowBlur ?? 8}px
+                                  </span>
                                 </div>
                                 <Slider
                                   value={[primary.style.shadowBlur ?? 8]}
@@ -3092,7 +3240,9 @@ export function DesignWorkspace({
                                   onValueChange={([v]) =>
                                     editor.updateElements(
                                       [primary.elementId],
-                                      { style: { ...(primary.style ?? {}), shadowBlur: v } } as Partial<DesignElement>,
+                                      {
+                                        style: { ...(primary.style ?? {}), shadowBlur: v },
+                                      } as Partial<DesignElement>,
                                       { history: false },
                                     )
                                   }
@@ -3105,7 +3255,9 @@ export function DesignWorkspace({
                                   onChange={(v) =>
                                     editor.updateElements(
                                       [primary.elementId],
-                                      { style: { ...(primary.style ?? {}), shadowX: v } } as Partial<DesignElement>,
+                                      {
+                                        style: { ...(primary.style ?? {}), shadowX: v },
+                                      } as Partial<DesignElement>,
                                       { history: false },
                                     )
                                   }
@@ -3116,7 +3268,9 @@ export function DesignWorkspace({
                                   onChange={(v) =>
                                     editor.updateElements(
                                       [primary.elementId],
-                                      { style: { ...(primary.style ?? {}), shadowY: v } } as Partial<DesignElement>,
+                                      {
+                                        style: { ...(primary.style ?? {}), shadowY: v },
+                                      } as Partial<DesignElement>,
                                       { history: false },
                                     )
                                   }
@@ -3656,7 +3810,10 @@ function DesignStage({
                         <>
                           <div
                             className="pointer-events-none absolute left-1 top-1 z-20 rounded bg-slate-950/70 px-1.5 py-0.5 text-[10px] font-medium text-white opacity-80"
-                            style={{ transform: `scale(${1 / Math.max(scale, 0.6)})`, transformOrigin: "top left" }}
+                            style={{
+                              transform: `scale(${1 / Math.max(scale, 0.6)})`,
+                              transformOrigin: "top left",
+                            }}
                           >
                             {elementLabel}
                           </div>
@@ -4001,6 +4158,7 @@ function DesignStage({
                   <TextToolbar
                     element={textEl}
                     scale={scale}
+                    canvasWidth={page.width * scale}
                     availableFontFamilies={availableFontFamilies}
                     onUpdateStyle={(patch) => onUpdateElementStyle(textEl.elementId, patch)}
                     onUpdateText={() => {}}
@@ -4030,7 +4188,9 @@ function DesignStage({
                       max={1}
                       step={0.05}
                       value={[opacity]}
-                      onValueChange={([v]) => onUpdateElementStyle(primaryEl.elementId, { opacity: v })}
+                      onValueChange={([v]) =>
+                        onUpdateElementStyle(primaryEl.elementId, { opacity: v })
+                      }
                       className="w-20"
                     />
                     <span className="w-8 text-right text-[10px] tabular-nums text-muted-foreground">

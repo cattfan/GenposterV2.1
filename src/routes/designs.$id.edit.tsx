@@ -1,7 +1,6 @@
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 import { ArrowLeft } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DesignWorkspace } from "@/features/editor/DesignWorkspace";
 import { db } from "@/storage/db";
@@ -40,13 +39,13 @@ function DesignEditorRoute() {
         <DesignWorkspace
           initialDocument={document}
           mode="design"
+          autosave
           onClose={() => navigate({ to: "/designs" })}
           onSave={async (nextDocument) => {
             await db.designDocuments.put({
               ...nextDocument,
               updatedAt: Date.now(),
             });
-            toast.success("Đã lưu design");
           }}
         />
       </div>
