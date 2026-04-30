@@ -1,17 +1,6 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import {
-  Home,
-  Package,
-  Database,
-  Sparkles,
-  FileText,
-  History,
-  Settings,
-  Palette,
-  Search,
-  Menu,
-} from "lucide-react";
+import { Home, Package, Database, Sparkles, History, Settings, Palette, Menu } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { cleanupDemoData } from "@/storage/sampleDataCleanup";
 import { toast } from "sonner";
@@ -38,11 +27,9 @@ const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    label: "Dữ liệu & Báo cáo",
+    label: "Dữ liệu",
     items: [
       { to: "/data", label: "Dữ liệu", icon: Database },
-      { to: "/reports", label: "Báo cáo & Caption", icon: FileText },
-      { to: "/analysis", label: "Phân tích bộ ảnh", icon: Search },
       { to: "/history", label: "Lịch sử", icon: History },
     ],
   },

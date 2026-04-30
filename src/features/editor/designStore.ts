@@ -559,9 +559,46 @@ export function useDesignEditor(document: DesignDocument) {
       patch: Partial<DesignElement> | ((element: DesignElement) => Partial<DesignElement>),
       options?: CommitOptions,
     ) => {
+      if (options?.history === false) {
+        const targetIds = new Set(elementIds);
+        setState((prev) => {
+          let changed = false;
+          const nextElementsById = { ...prev.elementsById };
+
+          for (const elementId of targetIds) {
+            const element = prev.elementsById[elementId];
+            if (!element) continue;
+            const nextPatch = typeof patch === "function" ? patch(element) : patch;
+            nextElementsById[elementId] = {
+              ...element,
+              ...nextPatch,
+              style:
+                "style" in nextPatch && nextPatch.style
+                  ? ({
+                      ...(element.style ?? {}),
+                      ...(nextPatch.style as ElementStyle),
+                    } as ElementStyle)
+                  : element.style,
+            } as DesignElement;
+            changed = true;
+          }
+
+          if (!changed) return prev;
+
+          return {
+            ...prev,
+            updatedAt: Date.now(),
+            elementsById: nextElementsById,
+            selection: options.nextSelection ?? prev.selection,
+          };
+        });
+        return;
+      }
+
       commitDocument((next) => {
+        const targetIds = new Set(elementIds);
         next.elements = next.elements.map((element) => {
-          if (!elementIds.includes(element.elementId)) return element;
+          if (!targetIds.has(element.elementId)) return element;
           const nextPatch = typeof patch === "function" ? patch(element) : patch;
           return {
             ...element,

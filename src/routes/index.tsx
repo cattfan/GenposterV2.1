@@ -165,7 +165,7 @@ function Dashboard() {
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4">
         <Card className="border-border/70 transition-shadow hover:shadow-md">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -194,37 +194,7 @@ function Dashboard() {
             </div>
           </CardContent>
         </Card>
-
-        <Card className="border-border/70 transition-shadow hover:shadow-md">
-          <CardHeader>
-            <CardTitle>Quy trình</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <Step n={1} text="Tạo Pack Template" />
-            <Step n={2} text="Thêm / sửa nhiều Page Template trong pack" />
-            <Step n={3} text="Import dữ liệu CSV/JSON/Sheet" />
-            <Step n={4} text="Generate, tick chọn page" />
-            <Step n={5} text="Export PNG/ZIP + caption + report" />
-          </CardContent>
-        </Card>
       </div>
-
-      <Card className="mt-6 border-border/70">
-        <CardHeader>
-          <CardTitle>Local-first</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-2 text-sm text-muted-foreground">
-          <Badge variant="secondary" className="font-normal">
-            <Database className="mr-1 size-3" /> IndexedDB · lưu trên trình duyệt
-          </Badge>
-          <Badge variant="secondary" className="font-normal">
-            <Download className="mr-1 size-3" /> Export/Import JSON
-          </Badge>
-          <Badge variant="secondary" className="font-normal">
-            Không cần đăng nhập
-          </Badge>
-        </CardContent>
-      </Card>
     </PageContainer>
   );
 }
@@ -263,16 +233,5 @@ function StatCard({
         </CardContent>
       </Card>
     </Link>
-  );
-}
-
-function Step({ n, text }: { n: number; text: string }) {
-  return (
-    <div className="flex items-center gap-3">
-      <div className="grid size-6 shrink-0 place-items-center rounded-full bg-brand-gradient text-[11px] font-bold text-[color:var(--color-brand-ink)]">
-        {n}
-      </div>
-      <div>{text}</div>
-    </div>
   );
 }

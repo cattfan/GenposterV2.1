@@ -11,13 +11,11 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as TemplatesRouteImport } from './routes/templates'
 import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as PacksRouteImport } from './routes/packs'
 import { Route as HistoryRouteImport } from './routes/history'
 import { Route as GenerateRouteImport } from './routes/generate'
 import { Route as DesignsRouteImport } from './routes/designs'
 import { Route as DataRouteImport } from './routes/data'
-import { Route as AnalysisRouteImport } from './routes/analysis'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as TemplatesIdEditRouteImport } from './routes/templates.$id.edit'
 import { Route as DesignsIdEditRouteImport } from './routes/designs.$id.edit'
@@ -30,11 +28,6 @@ const TemplatesRoute = TemplatesRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ReportsRoute = ReportsRouteImport.update({
-  id: '/reports',
-  path: '/reports',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PacksRoute = PacksRouteImport.update({
@@ -62,11 +55,6 @@ const DataRoute = DataRouteImport.update({
   path: '/data',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AnalysisRoute = AnalysisRouteImport.update({
-  id: '/analysis',
-  path: '/analysis',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -85,13 +73,11 @@ const DesignsIdEditRoute = DesignsIdEditRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/analysis': typeof AnalysisRoute
   '/data': typeof DataRoute
   '/designs': typeof DesignsRouteWithChildren
   '/generate': typeof GenerateRoute
   '/history': typeof HistoryRoute
   '/packs': typeof PacksRoute
-  '/reports': typeof ReportsRoute
   '/settings': typeof SettingsRoute
   '/templates': typeof TemplatesRouteWithChildren
   '/designs/$id/edit': typeof DesignsIdEditRoute
@@ -99,13 +85,11 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/analysis': typeof AnalysisRoute
   '/data': typeof DataRoute
   '/designs': typeof DesignsRouteWithChildren
   '/generate': typeof GenerateRoute
   '/history': typeof HistoryRoute
   '/packs': typeof PacksRoute
-  '/reports': typeof ReportsRoute
   '/settings': typeof SettingsRoute
   '/templates': typeof TemplatesRouteWithChildren
   '/designs/$id/edit': typeof DesignsIdEditRoute
@@ -114,13 +98,11 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/analysis': typeof AnalysisRoute
   '/data': typeof DataRoute
   '/designs': typeof DesignsRouteWithChildren
   '/generate': typeof GenerateRoute
   '/history': typeof HistoryRoute
   '/packs': typeof PacksRoute
-  '/reports': typeof ReportsRoute
   '/settings': typeof SettingsRoute
   '/templates': typeof TemplatesRouteWithChildren
   '/designs/$id/edit': typeof DesignsIdEditRoute
@@ -130,13 +112,11 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/analysis'
     | '/data'
     | '/designs'
     | '/generate'
     | '/history'
     | '/packs'
-    | '/reports'
     | '/settings'
     | '/templates'
     | '/designs/$id/edit'
@@ -144,13 +124,11 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/analysis'
     | '/data'
     | '/designs'
     | '/generate'
     | '/history'
     | '/packs'
-    | '/reports'
     | '/settings'
     | '/templates'
     | '/designs/$id/edit'
@@ -158,13 +136,11 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
-    | '/analysis'
     | '/data'
     | '/designs'
     | '/generate'
     | '/history'
     | '/packs'
-    | '/reports'
     | '/settings'
     | '/templates'
     | '/designs/$id/edit'
@@ -173,13 +149,11 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AnalysisRoute: typeof AnalysisRoute
   DataRoute: typeof DataRoute
   DesignsRoute: typeof DesignsRouteWithChildren
   GenerateRoute: typeof GenerateRoute
   HistoryRoute: typeof HistoryRoute
   PacksRoute: typeof PacksRoute
-  ReportsRoute: typeof ReportsRoute
   SettingsRoute: typeof SettingsRoute
   TemplatesRoute: typeof TemplatesRouteWithChildren
 }
@@ -198,13 +172,6 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/reports': {
-      id: '/reports'
-      path: '/reports'
-      fullPath: '/reports'
-      preLoaderRoute: typeof ReportsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/packs': {
@@ -240,13 +207,6 @@ declare module '@tanstack/react-router' {
       path: '/data'
       fullPath: '/data'
       preLoaderRoute: typeof DataRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/analysis': {
-      id: '/analysis'
-      path: '/analysis'
-      fullPath: '/analysis'
-      preLoaderRoute: typeof AnalysisRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -298,13 +258,11 @@ const TemplatesRouteWithChildren = TemplatesRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AnalysisRoute: AnalysisRoute,
   DataRoute: DataRoute,
   DesignsRoute: DesignsRouteWithChildren,
   GenerateRoute: GenerateRoute,
   HistoryRoute: HistoryRoute,
   PacksRoute: PacksRoute,
-  ReportsRoute: ReportsRoute,
   SettingsRoute: SettingsRoute,
   TemplatesRoute: TemplatesRouteWithChildren,
 }

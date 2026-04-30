@@ -12,6 +12,7 @@ import type {
   GenerationJob,
   ManualOverride,
   BlobRecord,
+  GenerateBindingPreset,
   AppSettings,
   AnalysisRecord,
 } from "@/models";
@@ -29,6 +30,7 @@ class CPGDatabase extends Dexie {
   jobs!: Table<GenerationJob, string>;
   overrides!: Table<ManualOverride, string>;
   blobs!: Table<BlobRecord, string>;
+  generatePresets!: Table<GenerateBindingPreset, string>;
   settings!: Table<AppSettings & { id: string }, string>;
   analyses!: Table<AnalysisRecord, string>;
 
@@ -56,6 +58,9 @@ class CPGDatabase extends Dexie {
       brandKits: "brandKitId, name, updatedAt",
       designDocuments: "designDocumentId, name, updatedAt, mode, sourcePageTemplateId",
       fontAssets: "fontAssetId, family, updatedAt",
+    });
+    this.version(5).stores({
+      generatePresets: "presetId, name, mode, packTemplateId, updatedAt",
     });
   }
 }
@@ -94,6 +99,7 @@ export async function clearAll(): Promise<void> {
     db.jobs.clear(),
     db.overrides.clear(),
     db.blobs.clear(),
+    db.generatePresets.clear(),
     db.analyses.clear(),
   ]);
 }

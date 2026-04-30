@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -20,7 +20,6 @@ import {
   ExternalLink,
   FilePlus2,
   GripVertical,
-  Save,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -36,7 +35,6 @@ interface Props {
   pack: PackTemplate;
   allTemplates: PageTemplate[];
   onChange: (next: PackTemplate) => void;
-  onSave: () => void;
   onDuplicate: () => void;
   onCreatePage?: () => void;
   onCreateAiPage?: () => void;
@@ -45,6 +43,18 @@ interface Props {
   onRenamePage?: (template: PageTemplate, name: string) => void | Promise<void>;
   onDeletePack?: () => void;
   onCollapse?: () => void;
+}
+
+function handleHorizontalWheel(event: WheelEvent<HTMLDivElement>) {
+  const target = event.currentTarget;
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+  if (target.scrollWidth <= target.clientWidth) return;
+
+  const before = target.scrollLeft;
+  target.scrollLeft += event.deltaY;
+  if (target.scrollLeft !== before) {
+    event.preventDefault();
+  }
 }
 
 function PageThumb({ tpl, className }: { tpl?: PageTemplate; className?: string }) {
@@ -132,8 +142,8 @@ function SortablePageCard({
             <GripVertical className="size-4" />
           </button>
 
-          <div className="grid size-8 shrink-0 place-items-center rounded-md bg-primary text-xs font-semibold text-primary-foreground shadow-sm">
-            {index + 1}
+          <div className="grid h-8 min-w-9 shrink-0 place-items-center rounded-md bg-primary px-2 text-xs font-semibold text-primary-foreground shadow-sm">
+            P{index + 1}
           </div>
 
           <div className="min-w-0 flex-1" onPointerDown={(event) => event.stopPropagation()}>
@@ -230,7 +240,6 @@ export function PackBuilder({
   pack,
   allTemplates,
   onChange,
-  onSave,
   onDuplicate,
   onCreatePage,
   onCreateAiPage,
@@ -311,10 +320,6 @@ export function PackBuilder({
                   Page mới
                 </Button>
               ) : null}
-              <Button size="sm" onClick={onSave}>
-                <Save data-icon="inline-start" />
-                Lưu thay đổi
-              </Button>
               {onDeletePack ? (
                 <Button
                   variant="ghost"
@@ -338,7 +343,10 @@ export function PackBuilder({
                 items={orderedItems.map((item) => item.key)}
                 strategy={horizontalListSortingStrategy}
               >
-                <div className="-mx-1 overflow-x-auto px-1 pb-1">
+                <div
+                  className="pack-horizontal-scroll -mx-1 overflow-x-auto overscroll-contain px-1 pb-3"
+                  onWheel={handleHorizontalWheel}
+                >
                   {orderedItems.length === 0 ? (
                     <div className="rounded-lg border border-dashed bg-background p-8 text-center text-sm text-muted-foreground">
                       Pack chưa có page. Bấm Page mới để bắt đầu.

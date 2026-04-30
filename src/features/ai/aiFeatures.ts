@@ -15,92 +15,13 @@ export async function aiGenerateTemplateFromImage(input: {
   fidelity?: LayoutFidelity;
   customInstructions?: string;
   preferVisibleLines?: boolean;
+  dataColumns?: string[];
 }) {
   return buildCombinedLayoutJson(input);
 }
 
 // ============================================================
-// 2. Suggest bindings
-// ============================================================
-
-const BIND_TOOL = {
-  type: "function" as const,
-  function: {
-    name: "suggest_bindings",
-    description: "Gợi ý bindingPath cho từng slot.",
-    parameters: {
-      type: "object",
-      properties: {
-        suggestions: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              slotId: { type: "string" },
-              suggestedBindingPath: { type: "string" },
-              confidence: { type: "number" },
-              reason: { type: "string" },
-            },
-            required: ["slotId", "suggestedBindingPath", "confidence"],
-          },
-        },
-      },
-      required: ["suggestions"],
-    },
-  },
-};
-
-export async function aiSuggestBindings(input: {
-  slots: Array<{ slotId: string; kind: string; placeholder?: string; staticText?: string }>;
-  columns: string[];
-}) {
-  const result = await callAi({
-    messages: [
-      {
-        role: "system",
-        content:
-          "Bạn map placeholder text → bindingPath chuẩn. Chỉ chọn 1 trong: " +
-          "entity.name, entity.address, entity.phone, entity.priceRange, entity.style, " +
-          "entity.openingHours, entity.categoryMain, entity.categorySub, " +
-          "asset.cover, asset.byRole:facade, asset.byRole:food_closeup, asset.byRole:space. " +
-          "Nếu không chắc, đặt confidence < 0.5.",
-      },
-      {
-        role: "user",
-        content:
-          "Cột data có sẵn: " +
-          JSON.stringify(input.columns) +
-          "\n\nSlot list:\n" +
-          JSON.stringify(input.slots, null, 2),
-      },
-    ],
-    tools: [BIND_TOOL],
-    tool_choice: { type: "function", function: { name: "suggest_bindings" } },
-    temperature: 0.1,
-  });
-  if (!result.ok) return { ok: false as const, error: result.error };
-  if (!result.toolArgs) return { ok: false as const, error: "AI không trả suggestions" };
-  const parsed = result.toolArgs as {
-    suggestions?: Array<{
-      slotId?: string;
-      suggestedBindingPath?: string;
-      confidence?: number;
-      reason?: string;
-    }>;
-  };
-  const suggestions = (parsed.suggestions ?? [])
-    .filter((s) => s && typeof s.slotId === "string" && typeof s.suggestedBindingPath === "string")
-    .map((s) => ({
-      slotId: String(s.slotId),
-      suggestedBindingPath: String(s.suggestedBindingPath),
-      confidence: typeof s.confidence === "number" ? s.confidence : 0.5,
-      reason: typeof s.reason === "string" ? s.reason : "",
-    }));
-  return { ok: true as const, suggestions };
-}
-
-// ============================================================
-// 3. Caption từ entity
+// 2. Caption từ entity
 // ============================================================
 
 export async function aiCaptionFromEntity(input: {
@@ -171,7 +92,7 @@ export async function aiRewriteTextPreserveMeaning(input: {
 }
 
 // ============================================================
-// 4. Combo từ nhiều ảnh: classify + gen từng page
+// 3. Combo từ nhiều ảnh: classify + gen từng page
 // ============================================================
 
 const CLASSIFY_TOOL = {
@@ -217,6 +138,7 @@ export interface ComboResultPage {
   dayNumber?: number;
   suggestedName: string;
   layoutJson: string;
+  sourceImageDataUrl?: string;
 }
 
 export interface ComboResult {
@@ -225,6 +147,8 @@ export interface ComboResult {
   packMeta: { name: string; goal?: string; tone?: string; cta?: string };
   warnings: string[];
 }
+
+const COMBO_PAGE_CONCURRENCY = 5;
 
 async function runWithLimit<T, R>(
   items: T[],
@@ -244,15 +168,14 @@ async function runWithLimit<T, R>(
   return results;
 }
 
-async function genOnePageWithHint(
-  input: {
-    imageDataUrl: string;
-    roleHint: string;
-    fidelity?: LayoutFidelity;
-    customInstructions?: string;
-    preferVisibleLines?: boolean;
-  },
-): Promise<{ ok: true; layoutJson: string } | { ok: false; error: string }> {
+async function genOnePageWithHint(input: {
+  imageDataUrl: string;
+  roleHint: string;
+  fidelity?: LayoutFidelity;
+  customInstructions?: string;
+  preferVisibleLines?: boolean;
+  dataColumns?: string[];
+}): Promise<{ ok: true; layoutJson: string } | { ok: false; error: string }> {
   return buildCombinedLayoutJson(input);
 }
 
@@ -262,6 +185,7 @@ export async function aiGenerateComboFromImages(input: {
   customInstructions?: string;
   layoutFidelity?: LayoutFidelity;
   preferVisibleLines?: boolean;
+  dataColumns?: string[];
   onProgress?: (step: string, progress: number) => void;
 }): Promise<ComboResult | { ok: false; error: string }> {
   if (input.images.length === 0) return { ok: false, error: "Cần ít nhất 1 ảnh" };
@@ -342,8 +266,8 @@ export async function aiGenerateComboFromImages(input: {
   classified.sort((a, b) => a.index - b.index);
 
   let done = 0;
-  const layouts = await runWithLimit(classified, 3, async (c) => {
-      const roleHint =
+  const layouts = await runWithLimit(classified, COMBO_PAGE_CONCURRENCY, async (c) => {
+    const roleHint =
       c.role === "cover"
         ? "Trang bìa / poster hero: 1 ảnh nền lớn full-page, eyebrow nhỏ, title lớn nổi bật, có thể có subtitle ngắn. Giữ đúng cảm giác poster của ảnh mẫu."
         : c.role === "utilities"
@@ -359,6 +283,7 @@ export async function aiGenerateComboFromImages(input: {
       fidelity: input.layoutFidelity,
       customInstructions: input.customInstructions,
       preferVisibleLines: input.preferVisibleLines,
+      dataColumns: input.dataColumns,
     });
     done++;
     input.onProgress?.(
@@ -378,6 +303,7 @@ export async function aiGenerateComboFromImages(input: {
         dayNumber: x.classified.dayNumber,
         suggestedName: x.classified.suggestedName,
         layoutJson: x.gen.layoutJson,
+        sourceImageDataUrl: input.images[x.classified.index].dataUrl,
       });
     } else {
       warnings.push(`Page ${x.classified.index + 1}: ${x.gen.error}`);

@@ -53,7 +53,7 @@ function HistoryPage() {
                 variant="outline"
                 onClick={() => {
                   setJob(j);
-                  toast.success("Đã load job vào màn Tạo nội dung & Báo cáo");
+                  toast.success("Đã load job vào màn Tạo nội dung");
                 }}
               >
                 Mở lại

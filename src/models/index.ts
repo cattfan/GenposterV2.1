@@ -85,6 +85,10 @@ export interface SlotStyle {
   textTransform?: "none" | "uppercase" | "lowercase" | "capitalize";
   maxLines?: number;
   textShadow?: string;
+  textShadowColor?: string;
+  textShadowBlur?: number;
+  textShadowX?: number;
+  textShadowY?: number;
   textStroke?: string;
   textStrokeColor?: string;
   textStrokeWidth?: number;
@@ -160,6 +164,7 @@ export interface Slot {
   shapeKind?: "rectangle" | "circle" | "triangle" | "line" | "divider" | "badge";
   // bind
   bindingPath?: string; // ví dụ "entity.name", "asset.url", "section.items[0].line1"
+  fieldParts?: BlueprintFieldPart[];
   allowedAssetRoles?: AssetRole[];
   style?: SlotStyle;
   visibilityRule?: string;
@@ -487,6 +492,45 @@ export interface PackTemplate {
   createdAt: number;
 }
 
+export type GeneratePresetMode = "pack" | "entity";
+
+export interface GeneratePresetConfig {
+  selectedSheet?: string;
+  filterMoHinh?: string;
+  filterPhongCach?: string;
+  prioritizePartner?: boolean;
+  onlyPartner?: boolean;
+  partnerQuotaPerPage?: number;
+  maxEntities?: number;
+  varyFontsFromSecondBundle?: boolean;
+}
+
+export interface GenerateBindingPreset {
+  presetId: ID;
+  name: string;
+  mode: GeneratePresetMode;
+  packTemplateId?: ID;
+  packTemplateNameSnapshot?: string;
+  pageTemplateIds: ID[];
+  bindOverrides: Record<string, Record<string, string | undefined>>;
+  generateConfig: GeneratePresetConfig;
+  createdAt: number;
+  updatedAt: number;
+  version: 1;
+}
+
+export interface GenPosterPortableBundleV1 {
+  app: "genposter";
+  kind: "pack-template" | "generate-preset" | "workspace-bundle";
+  version: 1;
+  exportedAt: number;
+  packTemplates?: PackTemplate[];
+  pageTemplates?: PageTemplate[];
+  generatePresets?: GenerateBindingPreset[];
+  assets?: Asset[];
+  blobs?: BlobRecord[];
+}
+
 export type PageState = "accepted" | "rejected" | "needs_fix";
 
 export interface RenderedItem {
@@ -514,6 +558,8 @@ export interface RenderedPage {
   entityId?: ID;
   /** Tên entity để hiển thị nhanh trên card kết quả. */
   entityName?: string;
+  /** Pool entity theo thứ tự dùng riêng cho page render, nhất là binding entity.list. */
+  entityPoolIds?: ID[];
   /** Override binding tạm thời designer áp lên page này khi generate. */
   bindOverrides?: Record<string, string | undefined>;
   /** Bản chỉnh cục bộ của page output trong /generate, không đụng template gốc. */
@@ -664,10 +710,24 @@ export type BlueprintBlockRole =
 
 export type BlueprintImportance = "high" | "medium" | "low";
 
+export type BlueprintSourceRole = "background" | "section_image" | "text_field" | "literal";
+
+export interface BlueprintFieldPart {
+  kind: "field" | "literal";
+  text?: string;
+  bindingPath?: string;
+  fieldKey?: string;
+  label?: string;
+  xRatio?: number;
+  widthRatio?: number;
+}
+
 export interface BlueprintBlock {
   name: string;
   role: BlueprintBlockRole;
   kind: "text" | "image" | "shape";
+  sourceRole?: BlueprintSourceRole;
+  fieldParts?: BlueprintFieldPart[];
   importance?: BlueprintImportance;
   clusterId?: string;
   lineIndex?: number;
@@ -694,6 +754,10 @@ export interface BlueprintBlock {
     opacity?: number;
     overlayColor?: string;
     textShadow?: string;
+    textShadowColor?: string;
+    textShadowBlur?: number;
+    textShadowX?: number;
+    textShadowY?: number;
     textStrokeColor?: string;
     textStrokeWidth?: number;
     padding?: number;
@@ -738,6 +802,8 @@ export interface BlueprintUiRegionHint {
 export interface DataBlueprintBindingHint {
   blockName: string;
   bindingPath?: string;
+  sourceRole?: BlueprintSourceRole;
+  fieldParts?: BlueprintFieldPart[];
   manualLiteral?: boolean;
   required?: boolean;
   notes?: string;

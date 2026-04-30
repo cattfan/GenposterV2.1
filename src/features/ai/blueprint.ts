@@ -50,7 +50,7 @@ function makeUniqueBlockName(name: string, index: number, seen: Map<string, numb
 function detectLineIndex(source: string | undefined): number | null {
   const normalized = normalizeToken(source).replace(/\s+/g, "_");
   const match = normalized.match(
-    /(name|address|phone|price|openinghours|hours|category|categorymain|categorysub|subcategory|hero_image|image)_(\d+)/,
+    /(name|ten|ten_quan|title|address|dia_chi|phone|sdt|hotline|price|gia|openinghours|opening_hours|hours|gio_mo_cua|category|categorymain|category_main|mo_hinh|categorysub|category_sub|subcategory|phong_cach|style|signaturedish|signature_dish|mon_an_noi_bat|mon_noi_bat|description|desc|mo_ta|hero_image|image)_(\d+)/,
   );
   return match ? Number(match[2]) : null;
 }
@@ -63,13 +63,19 @@ function detectClusterId(source: string | undefined): string | undefined {
 
 function guessBindingPathFromPlaceholder(source: string | undefined): string | undefined {
   const normalized = normalizeToken(source).replace(/\s+/g, "_");
-  if (/^name_\d+$/.test(normalized)) return "entity.name";
-  if (/^address_\d+$/.test(normalized)) return "entity.address";
-  if (/^phone_\d+$/.test(normalized)) return "entity.phone";
-  if (/^price_\d+$/.test(normalized)) return "entity.priceRange";
-  if (/^(openinghours|hours)_\d+$/.test(normalized)) return "entity.openingHours";
-  if (/^(category|categorymain)_\d+$/.test(normalized)) return "entity.categoryMain";
-  if (/^(categorysub|subcategory)_\d+$/.test(normalized)) return "entity.categorySub";
+  if (/^(name|ten|ten_quan|title)_\d+$/.test(normalized)) return "entity.name";
+  if (/^(address|dia_chi)_\d+$/.test(normalized)) return "entity.address";
+  if (/^(phone|sdt|hotline)_\d+$/.test(normalized)) return "entity.phone";
+  if (/^(price|gia)_\d+$/.test(normalized)) return "entity.priceRange";
+  if (/^(openinghours|opening_hours|hours|gio_mo_cua)_\d+$/.test(normalized))
+    return "entity.openingHours";
+  if (/^(category|categorymain|category_main|mo_hinh)_\d+$/.test(normalized))
+    return "entity.categoryMain";
+  if (/^(categorysub|category_sub|subcategory|phong_cach|style)_\d+$/.test(normalized))
+    return "entity.categorySub";
+  if (/^(signaturedish|signature_dish|mon_an_noi_bat|mon_noi_bat)_\d+$/.test(normalized))
+    return "entity.metadata.signatureDish";
+  if (/^(description|desc|mo_ta)_\d+$/.test(normalized)) return "entity.metadata.description";
   if (/^hero_image_\d+$/.test(normalized) || /^image_\d+$/.test(normalized)) return "asset.random";
   return undefined;
 }
@@ -116,7 +122,11 @@ function convertLegacyLayout(input: LegacyAiLayout): CombinedLayoutBlueprint {
     )
     .map((slot, index) => {
       const source = `${slot.name ?? ""} ${slot.placeholder ?? ""}`;
-      const blockName = makeUniqueBlockName(slot.name || slot.placeholder || `block_${index + 1}`, index, seen);
+      const blockName = makeUniqueBlockName(
+        slot.name || slot.placeholder || `block_${index + 1}`,
+        index,
+        seen,
+      );
       return {
         name: blockName,
         role: guessLegacyRole(slot, index),
@@ -155,16 +165,15 @@ function convertLegacyLayout(input: LegacyAiLayout): CombinedLayoutBlueprint {
       0,
       new Set(blocks.map((block) => block.clusterId).filter(Boolean)).size,
     ),
-    estimatedItemCount: Math.max(
-      0,
-      blocks.filter((block) => block.role === "list_line").length,
-    ),
+    estimatedItemCount: Math.max(0, blocks.filter((block) => block.role === "list_line").length),
     hasMainTitle: blocks.some((block) => block.role === "title"),
     hasSubtitle: blocks.some((block) => block.role === "subtitle"),
     hasBackgroundImage: blocks.some((block) => block.role === "background"),
     hasPanel: blocks.some((block) => block.kind === "shape" && block.role !== "decor"),
     hasSectionImages: blocks.filter((block) => block.role === "image_holder").length >= 2,
-    hasListRepeater: blocks.some((block) => block.role === "list_group" || block.role === "list_line"),
+    hasListRepeater: blocks.some(
+      (block) => block.role === "list_group" || block.role === "list_line",
+    ),
     hasSlotRepeater: blocks.filter((block) => block.role === "list_line").length >= 6,
     hasPriceBadge: blocks.some((block) => block.role === "badge"),
     hasCTA: blocks.some((block) => block.role === "cta"),
@@ -175,7 +184,9 @@ function convertLegacyLayout(input: LegacyAiLayout): CombinedLayoutBlueprint {
       new Set(blocks.map((block) => block.clusterId).filter(Boolean) as string[]),
     ).map((clusterId) => ({
       clusterId,
-      repeatedItemCount: blocks.filter((block) => block.clusterId === clusterId && block.role === "list_line").length,
+      repeatedItemCount: blocks.filter(
+        (block) => block.clusterId === clusterId && block.role === "list_line",
+      ).length,
       confidence: 0.62,
     })),
     structureConfidence: 0.62,
@@ -209,7 +220,11 @@ function sanitizeVisualBlueprint(visualBlueprint: VisualBlueprint): VisualBluepr
     )
     .map((block, index) => ({
       ...block,
-      name: makeUniqueBlockName(block.name || block.placeholder || `block_${index + 1}`, index, seen),
+      name: makeUniqueBlockName(
+        block.name || block.placeholder || `block_${index + 1}`,
+        index,
+        seen,
+      ),
       role: block.role ?? "other",
     }));
 
@@ -222,7 +237,11 @@ function sanitizeVisualBlueprint(visualBlueprint: VisualBlueprint): VisualBluepr
 export function asCombinedLayoutBlueprint(input: unknown): CombinedLayoutBlueprint | null {
   if (!input || typeof input !== "object") return null;
   const candidate = input as Partial<CombinedLayoutBlueprint> & LegacyAiLayout;
-  if (candidate.version === 2 && candidate.visualBlueprint && Array.isArray(candidate.visualBlueprint.blocks)) {
+  if (
+    candidate.version === 2 &&
+    candidate.visualBlueprint &&
+    Array.isArray(candidate.visualBlueprint.blocks)
+  ) {
     return {
       version: 2,
       visualBlueprint: sanitizeVisualBlueprint(candidate.visualBlueprint),
@@ -244,8 +263,6 @@ export function parseLayoutBlueprintJson(layoutJson?: string): CombinedLayoutBlu
   }
 }
 
-export function serializeCombinedLayoutBlueprint(
-  blueprint: CombinedLayoutBlueprint,
-): string {
+export function serializeCombinedLayoutBlueprint(blueprint: CombinedLayoutBlueprint): string {
   return JSON.stringify(blueprint);
 }

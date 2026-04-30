@@ -11,22 +11,71 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useEffect, useState } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
 import { getSettings, saveSettings } from "@/storage/settings";
-import { clearAll } from "@/storage/db";
-import type { AiProviderConfig, AiProviderPreset, AppSettings } from "@/models";
+import { db } from "@/storage/db";
+import type {
+  AiProviderConfig,
+  AiProviderPreset,
+  AppSettings,
+  Asset,
+  BlobRecord,
+  Entity,
+} from "@/models";
 import { toast } from "sonner";
 import { AI_PRESETS, defaultAiConfig, testAiConfig } from "@/features/ai/aiClient";
-import { Loader2, CheckCircle2, XCircle, Settings as SettingsIcon } from "lucide-react";
+import {
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  Settings as SettingsIcon,
+  Image,
+  Database,
+} from "lucide-react";
 import { PageContainer, PageHeader } from "@/components/PageHeader";
 
 export const Route = createFileRoute("/settings")({
   component: SettingsPage,
 });
 
+const UNDO_TOAST_DURATION = 15_000;
+
+function uniqueAssetBlobKeys(assets: Asset[]) {
+  return Array.from(
+    new Set(
+      assets.map((asset) => asset.blobKey).filter((blobKey): blobKey is string => Boolean(blobKey)),
+    ),
+  );
+}
+
+async function readAssetBlobs(assets: Asset[]): Promise<BlobRecord[]> {
+  const blobKeys = uniqueAssetBlobKeys(assets);
+  if (blobKeys.length === 0) return [];
+  return db.blobs.where("blobKey").anyOf(blobKeys).toArray();
+}
+
+async function restoreImportedImages(assets: Asset[], blobs: BlobRecord[]) {
+  await db.transaction("rw", [db.assets, db.blobs], async () => {
+    if (blobs.length) await db.blobs.bulkPut(blobs);
+    if (assets.length) await db.assets.bulkPut(assets);
+  });
+}
+
+async function restoreImportedData(entities: Entity[], assets: Asset[], blobs: BlobRecord[]) {
+  await db.transaction("rw", [db.entities, db.assets, db.blobs], async () => {
+    if (entities.length) await db.entities.bulkPut(entities);
+    if (blobs.length) await db.blobs.bulkPut(blobs);
+    if (assets.length) await db.assets.bulkPut(assets);
+  });
+}
+
 function SettingsPage() {
   const [s, setS] = useState<AppSettings | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<null | { ok: boolean; msg: string }>(null);
+  const entities = useLiveQuery(() => db.entities.toArray(), []) ?? [];
+  const assets = useLiveQuery(() => db.assets.toArray(), []) ?? [];
+  const localImageCount = assets.filter((asset) => asset.blobKey).length;
 
   useEffect(() => {
     getSettings().then((loaded) => {
@@ -68,6 +117,62 @@ function SettingsPage() {
     } finally {
       setTesting(false);
     }
+  };
+
+  const clearImportedImages = async () => {
+    const snapshotAssets = await db.assets.toArray();
+    const snapshotBlobs = await readAssetBlobs(snapshotAssets);
+
+    await db.transaction("rw", [db.assets, db.blobs], async () => {
+      await db.assets.clear();
+      const blobKeys = uniqueAssetBlobKeys(snapshotAssets);
+      if (blobKeys.length) await db.blobs.bulkDelete(blobKeys);
+    });
+
+    toast.success(`Đã xoá ${snapshotAssets.length} ảnh đã import`, {
+      duration: UNDO_TOAST_DURATION,
+      action:
+        snapshotAssets.length || snapshotBlobs.length
+          ? {
+              label: "Khôi phục",
+              onClick: () => {
+                void restoreImportedImages(snapshotAssets, snapshotBlobs).then(() => {
+                  toast.success("Đã khôi phục ảnh");
+                });
+              },
+            }
+          : undefined,
+    });
+  };
+
+  const clearImportedData = async () => {
+    const snapshotEntities = await db.entities.toArray();
+    const snapshotAssets = await db.assets.toArray();
+    const snapshotBlobs = await readAssetBlobs(snapshotAssets);
+
+    await db.transaction("rw", [db.entities, db.assets, db.blobs], async () => {
+      await db.entities.clear();
+      await db.assets.clear();
+      const blobKeys = uniqueAssetBlobKeys(snapshotAssets);
+      if (blobKeys.length) await db.blobs.bulkDelete(blobKeys);
+    });
+
+    toast.success(`Đã xoá ${snapshotEntities.length} dòng dữ liệu đã import`, {
+      duration: UNDO_TOAST_DURATION,
+      action:
+        snapshotEntities.length || snapshotAssets.length || snapshotBlobs.length
+          ? {
+              label: "Khôi phục",
+              onClick: () => {
+                void restoreImportedData(snapshotEntities, snapshotAssets, snapshotBlobs).then(
+                  () => {
+                    toast.success("Đã khôi phục dữ liệu");
+                  },
+                );
+              },
+            }
+          : undefined,
+    });
   };
 
   return (
@@ -217,19 +322,50 @@ function SettingsPage() {
         <CardHeader>
           <CardTitle>Dữ liệu local</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2">
-          <Button
-            variant="destructive"
-            onClick={async () => {
-              if (!confirm("Xóa toàn bộ dữ liệu local?")) return;
-              await clearAll();
-              localStorage.removeItem("cpg_seeded_v1");
-              toast.success("Đã xóa hết");
-              window.location.reload();
-            }}
-          >
-            Xóa toàn bộ dữ liệu
-          </Button>
+        <CardContent className="grid gap-3 md:grid-cols-2">
+          <div className="rounded-lg border p-4">
+            <div className="flex items-start gap-3">
+              <div className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                <Image />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-medium">Ảnh đã import</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {assets.length} asset, {localImageCount} ảnh local.
+                </div>
+              </div>
+            </div>
+            <Button
+              variant="destructive"
+              className="mt-4 w-full"
+              onClick={() => void clearImportedImages()}
+              disabled={assets.length === 0}
+            >
+              Xoá ảnh
+            </Button>
+          </div>
+
+          <div className="rounded-lg border p-4">
+            <div className="flex items-start gap-3">
+              <div className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                <Database />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-medium">Dữ liệu đã import</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {entities.length} quán/entity. Xoá kèm ảnh đang gắn với dữ liệu này.
+                </div>
+              </div>
+            </div>
+            <Button
+              variant="destructive"
+              className="mt-4 w-full"
+              onClick={() => void clearImportedData()}
+              disabled={entities.length === 0 && assets.length === 0}
+            >
+              Xoá dữ liệu import
+            </Button>
+          </div>
         </CardContent>
       </Card>
 

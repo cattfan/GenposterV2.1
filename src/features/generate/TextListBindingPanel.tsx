@@ -126,7 +126,7 @@ export function TextListBindingPanel({
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-xs font-medium">
           <ListChecks className="size-3.5" />
-          List trong textbox
+          Danh sách trong khung chữ
         </div>
         <Badge variant="outline" className="text-[10px]">
           {entityPool.length} dòng
@@ -173,23 +173,23 @@ export function TextListBindingPanel({
           />
         </div>
         <div>
-          <Label className="text-[11px]">Bullet</Label>
+          <Label className="text-[11px]">Dấu đầu dòng</Label>
           <Select value={bullet} onValueChange={(value) => setBullet(value as EntityListBullet)}>
             <SelectTrigger className="h-8 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="dot">• Bullet</SelectItem>
+              <SelectItem value="dot">• Chấm đầu dòng</SelectItem>
               <SelectItem value="dash">- Gạch đầu dòng</SelectItem>
               <SelectItem value="number">1. Số thứ tự</SelectItem>
-              <SelectItem value="none">Không bullet</SelectItem>
+              <SelectItem value="none">Không dùng</SelectItem>
             </SelectContent>
           </Select>
         </div>
       </div>
 
       <div>
-        <Label className="text-[11px]">Nối trường</Label>
+        <Label className="text-[11px]">Ký tự nối trường</Label>
         <Input
           className="h-8 text-xs"
           value={separator}
@@ -200,14 +200,14 @@ export function TextListBindingPanel({
       <div className="space-y-1.5">
         <label className="flex items-center gap-2 text-xs">
           <Checkbox checked={randomize} onCheckedChange={(value) => setRandomize(!!value)} />
-          Random list khi render
+          Xáo trộn danh sách khi tạo ảnh
         </label>
         <label className="flex items-center gap-2 text-xs">
           <Checkbox
             checked={prioritizePartner}
             onCheckedChange={(value) => setPrioritizePartner(!!value)}
           />
-          Ưu tiên đối tác theo priority
+          Ưu tiên dữ liệu đối tác
         </label>
       </div>
 
@@ -217,16 +217,16 @@ export function TextListBindingPanel({
         </pre>
       ) : (
         <div className="rounded border border-dashed p-2 text-[11px] text-muted-foreground">
-          Chưa có dòng preview phù hợp.
+          Chưa có dòng xem trước phù hợp.
         </div>
       )}
 
       <div className="grid grid-cols-2 gap-2">
         <Button size="sm" variant="outline" onClick={() => applyCurrent()}>
-          <ListChecks className="size-3 mr-1" /> Áp list
+          <ListChecks className="size-3 mr-1" /> Áp dụng
         </Button>
         <Button size="sm" variant="outline" onClick={randomAgain} disabled={!randomize}>
-          <Shuffle className="size-3 mr-1" /> Random lại
+          <Shuffle className="size-3 mr-1" /> Xáo trộn lại
         </Button>
       </div>
     </div>

@@ -1,7 +1,7 @@
 // Floating text formatting toolbar — hiện trên text element khi đang edit hoặc select text.
 // Khi contentEditable đang active, dùng execCommand để format selection.
 // Khi không edit, cập nhật element style trực tiếp.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback } from "react";
 import {
   AlignCenter,
   AlignLeft,
@@ -40,15 +40,7 @@ interface TextToolbarProps {
   onUpdateText: (text: string) => void;
 }
 
-export function TextToolbar({
-  element,
-  scale,
-  canvasWidth,
-  availableFontFamilies,
-  onUpdateStyle,
-}: TextToolbarProps) {
-  const toolbarRef = useRef<HTMLDivElement>(null);
-  const [toolbarWidth, setToolbarWidth] = useState(0);
+export function TextToolbar({ element, availableFontFamilies, onUpdateStyle }: TextToolbarProps) {
   const style = element.style ?? {};
   const isBold = Number(style.fontWeight ?? 400) >= 600;
   const isItalic = style.fontStyle === "italic";
@@ -109,29 +101,10 @@ export function TextToolbar({
     [onUpdateStyle],
   );
 
-  useEffect(() => {
-    const el = toolbarRef.current;
-    if (!el) return;
-    const compute = () => setToolbarWidth(el.offsetWidth);
-    compute();
-    const ro = new ResizeObserver(compute);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  const margin = 8;
-  const rawLeft = element.x * scale;
-  const maxLeft = Math.max(margin, canvasWidth - toolbarWidth - margin);
-  const left = Math.min(Math.max(rawLeft, margin), maxLeft);
-  const top = Math.max(margin, element.y * scale - 40);
-
   return (
     <div
-      ref={toolbarRef}
-      className="pointer-events-auto absolute z-50 flex max-w-[calc(100%-16px)] flex-wrap items-center gap-0.5 rounded-lg border bg-card px-1 py-0.5 shadow-lg"
+      className="pointer-events-auto absolute left-0 top-[-44px] z-50 flex w-max max-w-none flex-nowrap items-center gap-0.5 whitespace-nowrap rounded-lg border bg-card px-1 py-0.5 shadow-lg"
       style={{
-        left,
-        top,
         transform: "translateX(0)",
       }}
       onMouseDown={(e) => {

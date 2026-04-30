@@ -5,6 +5,7 @@ import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DesignWorkspace } from "./DesignWorkspace";
 import { designDocumentToPageTemplate, pageTemplateToDesignDocument } from "./designDocument";
+import type { PageTemplate } from "@/models";
 import { db } from "@/storage/db";
 
 export function EditorPage() {
@@ -20,11 +21,19 @@ export function EditorPage() {
       db.designDocuments.get(id),
       db.designDocuments.where("sourcePageTemplateId").equals(id).first(),
     ]);
+    const pack = packId ? await db.packTemplates.get(packId) : undefined;
+    const packPages = pack
+      ? (await db.pageTemplates.bulkGet(pack.orderedPages)).filter((page): page is PageTemplate =>
+          Boolean(page),
+        )
+      : [];
     return {
       template,
       document: directDocument ?? linkedDocument,
+      pack,
+      packPages,
     };
-  }, [id]);
+  }, [id, packId]);
 
   const initialDocument = useMemo(() => {
     if (!payload?.template) return null;
@@ -57,12 +66,6 @@ export function EditorPage() {
           <ArrowLeft className="mr-2 size-4" />
           Quay lại
         </Button>
-        <div>
-          <div className="font-semibold">{template.name}</div>
-          <div className="text-xs text-muted-foreground">
-            Template mode đang chạy qua DesignDocument adapter
-          </div>
-        </div>
       </div>
 
       <div className="min-h-0 flex-1">
@@ -71,6 +74,15 @@ export function EditorPage() {
           mode="template"
           allowMultiplePages={false}
           autosave
+          packPages={payload.packPages}
+          activeTemplateId={template.pageTemplateId}
+          onOpenTemplatePage={(pageTemplateId) => {
+            void navigate({
+              to: "/templates/$id/edit",
+              params: { id: pageTemplateId },
+              search: { packId },
+            });
+          }}
           onClose={backToTemplates}
           onSave={async (nextDocument) => {
             const nextTemplate = designDocumentToPageTemplate(nextDocument, template);

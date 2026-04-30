@@ -43,7 +43,11 @@ export function usePackBindOverrides() {
     setAll((prev) => ({ ...prev, [pageTemplateId]: { ...ov } }));
   }, []);
 
-  return { all, setBinding, clearBinding, resetPage, resetAll, replacePage };
+  const replaceAll = useCallback((next: PackBindOverrides) => {
+    setAll({ ...next });
+  }, []);
+
+  return { all, setBinding, clearBinding, resetPage, resetAll, replacePage, replaceAll };
 }
 
 /** Áp override cho 1 page template cụ thể. */

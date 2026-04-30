@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { Asset, Entity, PageTemplate, RenderedItem } from "@/models";
 import { resolveImageBinding, resolveTextBinding } from "@/engines/binding/dataBinding";
+import { getAssetImageSource } from "@/engines/binding/assetImage";
 import { DesignWorkspace } from "@/features/editor/DesignWorkspace";
 import {
   designDocumentToPageTemplate,
@@ -111,12 +112,13 @@ function materializeTemplateForEditor(
       if (slot.kind === "image" && slot.bindingPath) {
         const resolved = slotEntity
           ? resolveImageBinding(slot.bindingPath, slotEntity, assets, slot.staticImage, {
+              entities,
               seed: `${seedKey ?? template.pageTemplateId}:${slot.slotId}`,
             })
           : { src: undefined };
         return {
           ...slot,
-          staticImage: plannedAsset?.sourceValue ?? resolved.src ?? slot.staticImage,
+          staticImage: getAssetImageSource(plannedAsset) ?? resolved.src ?? slot.staticImage,
         };
       }
 

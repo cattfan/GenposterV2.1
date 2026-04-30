@@ -4,6 +4,45 @@ import { callAi } from "./aiClient";
 import { serializeCombinedLayoutBlueprint } from "./blueprint";
 import type { LayoutFidelity } from "./aiFeatures";
 
+const SOURCE_ROLE_SCHEMA = {
+  type: "string",
+  enum: ["background", "section_image", "text_field", "literal"],
+  description:
+    "background = full-page image layer, section_image = auxiliary image frame, text_field = data-bound field, literal = static text/shape.",
+};
+
+const FIELD_PART_SCHEMA = {
+  type: "array",
+  description:
+    "Optional deterministic row split hint. Use this when one visible line contains multiple data fields or literal separators.",
+  items: {
+    type: "object",
+    properties: {
+      kind: { type: "string", enum: ["field", "literal"] },
+      text: {
+        type: "string",
+        description: "Literal text such as '-', 'SDT:', bullet, or fallback label.",
+      },
+      bindingPath: {
+        type: "string",
+        description:
+          "Data field binding for kind=field, e.g. entity.name, entity.address, entity.phone, entity.metadata.<column>.",
+      },
+      fieldKey: { type: "string" },
+      label: { type: "string" },
+      xRatio: {
+        type: "number",
+        description: "Optional 0..1 start inside the original line block.",
+      },
+      widthRatio: {
+        type: "number",
+        description: "Optional 0..1 width inside the original line block.",
+      },
+    },
+    required: ["kind"],
+  },
+};
+
 const VISUAL_BLUEPRINT_TOOL = {
   type: "function" as const,
   function: {
@@ -18,16 +57,29 @@ const VISUAL_BLUEPRINT_TOOL = {
           properties: {
             canvas: {
               type: "object",
-              properties: { bgColor: { type: "string", description: "Màu nền canvas, vd #1a1a2e, #ffffff" } },
+              properties: {
+                bgColor: { type: "string", description: "Màu nền canvas, vd #1a1a2e, #ffffff" },
+              },
             },
-            confidence: { type: "number", description: "0..1, độ tự tin tổng thể về visual blueprint" },
-            warnings: { type: "array", items: { type: "string" }, description: "Cảnh báo nếu có block không rõ role hoặc vị trí" },
+            confidence: {
+              type: "number",
+              description: "0..1, độ tự tin tổng thể về visual blueprint",
+            },
+            warnings: {
+              type: "array",
+              items: { type: "string" },
+              description: "Cảnh báo nếu có block không rõ role hoặc vị trí",
+            },
             blocks: {
               type: "array",
               items: {
                 type: "object",
                 properties: {
-                  name: { type: "string", description: "Tên duy nhất, dễ tham chiếu ở pass 2. Vd: title_1, name_1, address_1, hero_image_1, bg_1" },
+                  name: {
+                    type: "string",
+                    description:
+                      "Tên duy nhất, dễ tham chiếu ở pass 2. Vd: title_1, name_1, address_1, hero_image_1, bg_1",
+                  },
                   role: {
                     type: "string",
                     enum: [
@@ -46,11 +98,22 @@ const VISUAL_BLUEPRINT_TOOL = {
                       "decor",
                       "other",
                     ],
-                    description: "Vai trò thị giác. list_line = từng dòng item riêng, list_group = khung chứa nhóm dòng, section_title = tiêu đề nhóm, image_holder = ảnh slot, background = ảnh full-page.",
+                    description:
+                      "Vai trò thị giác. list_line = từng dòng item riêng, list_group = khung chứa nhóm dòng, section_title = tiêu đề nhóm, image_holder = ảnh slot, background = ảnh full-page.",
                   },
                   importance: { type: "string", enum: ["high", "medium", "low"] },
-                  clusterId: { type: "string", description: "Nhóm cluster, vd cluster_1, cluster_2. Tất cả block thuộc cùng cụm thị giác (section_title + list_line + image_holder) PHẢI dùng cùng clusterId." },
-                  lineIndex: { type: "number", description: "Số thứ tự dòng item trong cluster (bắt đầu từ 1). Chỉ dùng cho role=list_line." },
+                  sourceRole: SOURCE_ROLE_SCHEMA,
+                  fieldParts: FIELD_PART_SCHEMA,
+                  clusterId: {
+                    type: "string",
+                    description:
+                      "Nhóm cluster, vd cluster_1, cluster_2. Tất cả block thuộc cùng cụm thị giác (section_title + list_line + image_holder) PHẢI dùng cùng clusterId.",
+                  },
+                  lineIndex: {
+                    type: "number",
+                    description:
+                      "Số thứ tự dòng item trong cluster (bắt đầu từ 1). Chỉ dùng cho role=list_line.",
+                  },
                   kind: { type: "string", enum: ["text", "image", "shape"] },
                   shapeKind: {
                     type: "string",
@@ -62,7 +125,11 @@ const VISUAL_BLUEPRINT_TOOL = {
                   h: { type: "number", description: "0..1, tỷ lệ chiều cao" },
                   z: { type: "number", description: "z-index, 0 = dưới cùng" },
                   rotation: { type: "number" },
-                  placeholder: { type: "string", description: "Token ngắn có nghĩa, vd {{title}}, {{name_1}}, {{hero_image_1}}. KHÔNG dùng văn xuôi mô tả." },
+                  placeholder: {
+                    type: "string",
+                    description:
+                      "Text ngắn để hiển thị trong editor. Với chữ tĩnh đọc được, dùng đúng chữ trên ảnh; với slot bind dữ liệu, dùng token ngắn như {{title}}, {{name_1}}, {{hero_image_1}}. Không dùng văn xuôi mô tả.",
+                  },
                   notes: { type: "string" },
                   style: {
                     type: "object",
@@ -132,8 +199,16 @@ const DATA_BLUEPRINT_TOOL = {
             },
             summary: { type: "string" },
             layoutDensity: { type: "string", enum: ["low", "medium", "high"] },
-            numberOfSections: { type: "number", description: "Số section/cluster có list_line hoặc image_holder. PHẢI khớp số clusterId duy nhất trong visual blueprint." },
-            estimatedItemCount: { type: "number", description: "Tổng số list_line item. PHẢI bằng số block role=list_line trong visual blueprint." },
+            numberOfSections: {
+              type: "number",
+              description:
+                "Số section/cluster có list_line hoặc image_holder. PHẢI khớp số clusterId duy nhất trong visual blueprint.",
+            },
+            estimatedItemCount: {
+              type: "number",
+              description:
+                "Tổng số list_line item. PHẢI bằng số block role=list_line trong visual blueprint.",
+            },
             hasMainTitle: { type: "boolean" },
             hasSubtitle: { type: "boolean" },
             hasBackgroundImage: { type: "boolean" },
@@ -183,32 +258,63 @@ const DATA_BLUEPRINT_TOOL = {
             },
             bindings: {
               type: "array",
-              description: "Mỗi binding tham chiếu blockName từ visual blueprint. bindingPath chỉ dùng giá trị hỗ trợ: entity.name, entity.address, entity.phone, entity.priceRange, entity.style, entity.openingHours, entity.categoryMain, entity.categorySub, entity.metadata.signatureDish, entity.metadata.description, asset.random, asset.cover, asset.byRole:cover, asset.byRole:facade, asset.byRole:food_closeup, asset.byRole:space, asset.byRole:portrait, asset.byRole:square_thumb, asset.byRole:section_image.",
+              description:
+                "Mỗi binding tham chiếu blockName từ visual blueprint. bindingPath text dùng field lõi entity.name/entity.address/entity.phone/entity.priceRange/entity.style/entity.openingHours/entity.categoryMain/entity.categorySub hoặc entity.metadata.<ten_cot> cho mọi cột dữ liệu import khác (vd entity.metadata.Loai_dich_vu, entity.metadata.Noi_bat, entity.metadata.Giai_thich, entity.metadata.Link Drive). Image dùng asset.random/asset.cover/asset.byRole:*. Không dùng entity.compose/entity.list cho các row nhìn thấy trong ảnh mẫu.",
               items: {
                 type: "object",
                 properties: {
-                  blockName: { type: "string", description: "PHẢI khớp chính xác name của một block trong visual blueprint" },
-                  bindingPath: { type: "string", description: "Chỉ dùng: entity.name, entity.address, entity.phone, entity.priceRange, entity.style, entity.openingHours, entity.categoryMain, entity.categorySub, entity.metadata.signatureDish, entity.metadata.description, asset.random, asset.cover, asset.byRole:cover/facade/food_closeup/space/portrait/square_thumb/section_image" },
-                  manualLiteral: { type: "boolean", description: "true nếu block là text tĩnh (title, subtitle, CTA, tagline) không bind field" },
+                  blockName: {
+                    type: "string",
+                    description: "PHẢI khớp chính xác name của một block trong visual blueprint",
+                  },
+                  bindingPath: {
+                    type: "string",
+                    description:
+                      "Text: entity.name/entity.address/entity.phone/entity.priceRange/entity.style/entity.openingHours/entity.categoryMain/entity.categorySub hoặc entity.metadata.<ten_cot> cho cột import bất kỳ. Image: asset.random/asset.cover/asset.byRole:cover/facade/food_closeup/space/portrait/square_thumb/section_image. Không dùng entity.compose/entity.list cho row nhìn thấy; mỗi field phải có block riêng.",
+                  },
+                  sourceRole: SOURCE_ROLE_SCHEMA,
+                  fieldParts: FIELD_PART_SCHEMA,
+                  manualLiteral: {
+                    type: "boolean",
+                    description:
+                      "true nếu block là text tĩnh (title, subtitle, CTA, tagline) không bind field",
+                  },
                   required: { type: "boolean" },
                   notes: { type: "string" },
                   confidence: { type: "number" },
-                  clusterId: { type: "string", description: "PHẢI khớp clusterId từ visual blueprint nếu block thuộc cluster" },
-                  lineIndex: { type: "number", description: "PHẢI khớp lineIndex từ visual blueprint nếu block là list_line" },
+                  clusterId: {
+                    type: "string",
+                    description: "PHẢI khớp clusterId từ visual blueprint nếu block thuộc cluster",
+                  },
+                  lineIndex: {
+                    type: "number",
+                    description: "PHẢI khớp lineIndex từ visual blueprint nếu block là list_line",
+                  },
                 },
                 required: ["blockName"],
               },
             },
             sections: {
               type: "array",
-              description: "Mỗi section tham chiếu clusterId từ visual blueprint. PHẢI có 1 section cho mỗi cluster có list_line.",
+              description:
+                "Mỗi section tham chiếu clusterId từ visual blueprint. PHẢI có 1 section cho mỗi cluster có list_line.",
               items: {
                 type: "object",
                 properties: {
-                  clusterId: { type: "string", description: "PHẢI khớp clusterId duy nhất từ visual blueprint" },
+                  clusterId: {
+                    type: "string",
+                    description: "PHẢI khớp clusterId duy nhất từ visual blueprint",
+                  },
                   title: { type: "string" },
-                  repeatedItemCount: { type: "number", description: "Số list_line trong cluster. PHẢI bằng số block list_line có cùng clusterId." },
-                  imageRepresentsCluster: { type: "boolean", description: "true nếu cluster có image_holder đại diện cho item trong cụm" },
+                  repeatedItemCount: {
+                    type: "number",
+                    description:
+                      "Số list_line trong cluster. PHẢI bằng số block list_line có cùng clusterId.",
+                  },
+                  imageRepresentsCluster: {
+                    type: "boolean",
+                    description: "true nếu cluster có image_holder đại diện cho item trong cụm",
+                  },
                   notes: { type: "string" },
                   confidence: { type: "number" },
                 },
@@ -259,8 +365,20 @@ function fidelityInstruction(fidelity: LayoutFidelity): string {
 
 function visibleLinesInstruction(preferVisibleLines?: boolean) {
   return preferVisibleLines === false
-    ? "Nếu có vài dòng thật sự dính sát và khó tách, bạn có thể gom nhẹ, nhưng vẫn ưu tiên line-level khi mắt người nhìn ra từng dòng."
-    : "Nếu mắt người thấy nhiều dòng item riêng biệt, phải trả từng dòng riêng ở visual blueprint và giữ từng dòng đó ở data blueprint.";
+    ? "Nếu có vài dòng thật sự dính sát và khó tách, bạn có thể gom nhẹ để editor dễ chỉnh, nhưng vẫn giữ các dòng nội dung chính."
+    : "Giữ các dòng nội dung chính mà mắt người nhìn ra được, nhưng không tách các mẩu chữ quá nhỏ nếu chúng làm box chồng nhau. Mỗi text block phải có kích thước đủ đọc và đủ dễ kéo trong editor.";
+}
+
+function dataColumnsInstruction(dataColumns?: string[]) {
+  const columns = [...new Set((dataColumns ?? []).map((column) => column.trim()).filter(Boolean))]
+    .slice(0, 80)
+    .join(", ");
+  if (!columns) return "";
+  return (
+    "Current imported columns: " +
+    columns +
+    ". Use these columns when deciding data fields. Core aliases: Ten_quan/name -> entity.name; Dia_chi/address -> entity.address; SDT/phone/hotline -> entity.phone; Gia/price -> entity.priceRange; Gio_mo_cua/hours -> entity.openingHours; Mo_hinh/Loai_dich_vu/category -> entity.categoryMain; Phong_cach/style -> entity.categorySub. Any other column must become entity.metadata.<column>."
+  );
 }
 
 function buildVisualBlueprintSystem(input?: {
@@ -268,9 +386,11 @@ function buildVisualBlueprintSystem(input?: {
   customInstructions?: string;
   roleHint?: string;
   preferVisibleLines?: boolean;
+  dataColumns?: string[];
 }) {
   const roleHint = input?.roleHint?.trim();
   const customInstructions = input?.customInstructions?.trim();
+  const dataColumnHint = dataColumnsInstruction(input?.dataColumns);
 
   return (
     "Bạn là designer phân tích ảnh mẫu thành visual blueprint. " +
@@ -283,18 +403,20 @@ function buildVisualBlueprintSystem(input?: {
     "4. Toạ độ x/y/w/h là tỷ lệ 0..1 trên canvas portrait 1080x1350.\n" +
     "5. Background full-page được bleed; text, list block, shape chứa text và image holder quan trọng phải nằm trong safe zone khoảng 5% mỗi cạnh.\n" +
     "6. Giữ nhịp poster/editorial của mẫu: nền tối, title treatment, image holder bo góc, collage rhythm, asymmetry trái/phải nếu có.\n" +
-    "7. Với mẫu có nhiều dòng item nhìn riêng biệt, phải tạo từng block list_line riêng, có lineIndex rõ ràng bắt đầu từ 1. Không được dồn thành 1 list_group lớn nếu mẫu thể hiện line-by-line.\n" +
+    "7. Với mẫu có nhiều dòng item nhìn riêng biệt, tạo từng block list_line cho các dòng nội dung chính và có lineIndex rõ ràng. Nếu một dòng item có nhiều field như 'Tên quán - Địa chỉ', 'Món - Giá', 'Dịch vụ - Tên quán - Địa chỉ - SĐT', PHẢI tách thành nhiều text block riêng trong cùng clusterId và cùng lineIndex: name_i, address_i, phone_i, category_i, price_i, feature_i... Mọi cột dữ liệu thật trong workbook đều là field riêng nếu xuất hiện trên ảnh. Dấu bullet, dấu gạch ngang, nhãn 'SĐT:' là text/shape tĩnh riêng, không gộp vào field data. Không tách các mẩu chữ trang trí quá nhỏ nếu chúng không phải field dữ liệu.\n" +
+    "7b. Nếu không chắc vị trí từng field trong một dòng, vẫn có thể trả một list_line block nhưng PHẢI điền fieldParts để app tách thành các slot riêng sau AI. Không bao giờ gộp nhiều field thật vào một fieldParts kind=field duy nhất.\n" +
     "8. Bullet không dùng placeholder {{bullet}}. Nếu cần bullet, coi nó là shape nhỏ hoặc text tĩnh.\n" +
-    "9. Placeholder, nếu có, phải là token ngắn có nghĩa như {{title}}, {{subtitle}}, {{eyebrow}}, {{section_title_1}}, {{name_1}}, {{address_1}}, {{hero_image_1}}. KHÔNG được dùng placeholder mô tả bằng văn xuôi như 'large bold uppercase heading' hay 'short yellow script text'.\n" +
-    "10. Nếu block chỉ là trang trí hoặc chưa rõ placeholder, để trống placeholder thay vì bịa chữ mô tả.\n" +
+    "9. Với chữ tĩnh/tiêu đề/CTA đọc được trong ảnh, placeholder phải là đúng chữ ngắn đọc được. Chỉ dùng token {{...}} cho slot cần bind dữ liệu sau này, ví dụ {{title}}, {{name_1}}, {{address_1}}, {{hero_image_1}}. KHÔNG dùng placeholder mô tả như 'large bold uppercase heading'.\n" +
+    "10. Nếu block chỉ là trang trí hoặc chưa rõ placeholder, để trống placeholder thay vì bịa chữ mô tả. Mọi text block phải đủ cao cho ít nhất 1 dòng chữ, lineHeight không thấp hơn 1.05, tránh cắt chân chữ hoặc overlap trừ khi đó là hiệu ứng typography cố ý.\n" +
     "11. Nếu các block thuộc cùng một cụm thị giác (vd: section_title + các list_line + image_holder cùng nhóm), PHẢI gán cùng clusterId (vd cluster_1, cluster_2). clusterId phải nhất quán: mọi block trong cụm dùng cùng giá trị.\n" +
     "12. lineIndex chỉ dùng cho role=list_line, bắt đầu từ 1, tăng dần trong mỗi cluster. Vd: cluster_1 có 4 list_line → lineIndex 1,2,3,4; cluster_2 có 3 list_line → lineIndex 1,2,3.\n" +
     "13. Encode style giàu chi tiết: lineHeight, letterSpacing, opacity, overlayColor, textShadow, textStrokeColor, textStrokeWidth, padding, fit, borderRadius, shadow, rotation.\n" +
     `14. Font family chỉ được chọn trong danh sách sau: ${AI_POSTER_FONT_FAMILIES.join(", ")}.\n` +
     `15. Ưu tiên hiện tại: ${fidelityInstruction(input?.fidelity ?? "strict")}\n` +
     `16. ${visibleLinesInstruction(input?.preferVisibleLines)}\n` +
-    (roleHint ? `17. Hint vai trò page: ${roleHint}\n` : "") +
-    (customInstructions ? `18. Ghi chú thêm từ người dùng: ${customInstructions}\n` : "")
+    (dataColumnHint ? `17. ${dataColumnHint}\n` : "") +
+    (roleHint ? `18. Hint vai trò page: ${roleHint}\n` : "") +
+    (customInstructions ? `19. Ghi chú thêm từ người dùng: ${customInstructions}\n` : "")
   );
 }
 
@@ -302,9 +424,11 @@ function buildDataBlueprintSystem(input?: {
   roleHint?: string;
   customInstructions?: string;
   preferVisibleLines?: boolean;
+  dataColumns?: string[];
 }) {
   const roleHint = input?.roleHint?.trim();
   const customInstructions = input?.customInstructions?.trim();
+  const dataColumnHint = dataColumnsInstruction(input?.dataColumns);
 
   return (
     "Bạn đang ở PASS 2 của pipeline vision-to-template. " +
@@ -314,7 +438,7 @@ function buildDataBlueprintSystem(input?: {
     "1. Chỉ gọi tool build_data_blueprint.\n" +
     "2. Manual text như ngày, tagline, CTA, subtitle, title wording -> manual_literal=true, không tính là thiếu bắt buộc.\n" +
     "3. Structural requirement như repeater, số line, số section -> kind=structural, không biến thành field raw.\n" +
-    "4. bindingPath CHỈ được dùng các giá trị sau: entity.name, entity.address, entity.phone, entity.priceRange, entity.style, entity.openingHours, entity.categoryMain, entity.categorySub, entity.metadata.signatureDish, entity.metadata.description, asset.random, asset.cover, asset.byRole:cover, asset.byRole:facade, asset.byRole:food_closeup, asset.byRole:space, asset.byRole:portrait, asset.byRole:square_thumb, asset.byRole:section_image. KHÔNG tự bịa binding path khác.\n" +
+    "4. bindingPath text CHỈ dùng field lõi entity.name, entity.address, entity.phone, entity.priceRange, entity.style, entity.openingHours, entity.categoryMain, entity.categorySub hoặc entity.metadata.<ten_cot> cho bất kỳ cột import khác trong dữ liệu thật. Ví dụ: entity.metadata.Loai_dich_vu, entity.metadata.Noi_bat, entity.metadata.Giai_thich, entity.metadata.Link Drive. bindingPath image dùng asset.random, asset.cover hoặc asset.byRole:cover/facade/food_closeup/space/portrait/square_thumb/section_image. KHÔNG dùng entity.compose hoặc entity.list cho row nhìn thấy trong ảnh mẫu.\n" +
     "5. Nếu mẫu có 16 dòng tên/địa chỉ, estimatedItemCount phải phản ánh số line item thật, không được báo như chỉ có 4 item group.\n" +
     "6. bindings.blockName PHẢI khớp chính xác name của block trong visual blueprint. Mỗi block chỉ được 1 binding.\n" +
     "7. bindings.clusterId và bindings.lineIndex PHẢI khớp clusterId và lineIndex từ visual blueprint nếu block thuộc cluster.\n" +
@@ -324,8 +448,11 @@ function buildDataBlueprintSystem(input?: {
     "11. numberOfSections PHẢI bằng số clusterId duy nhất có list_line hoặc image_holder trong visual blueprint.\n" +
     "12. image_holder block: dùng bindingPath asset.* (vd asset.random, asset.cover, asset.byRole:facade). text block: dùng entity.*. KHÔNG dùng entity.* cho image, KHÔNG dùng asset.* cho text.\n" +
     `13. ${visibleLinesInstruction(input?.preferVisibleLines)}\n` +
-    (roleHint ? `14. Hint vai trò page hiện tại: ${roleHint}\n` : "") +
-    (customInstructions ? `15. Ghi chú thêm từ người dùng: ${customInstructions}\n` : "")
+    "14. Nếu một dòng list nhìn thấy có nhiều field dữ liệu trong cùng một record, PHẢI map từng field vào từng block riêng và giữ cùng clusterId + lineIndex. Ví dụ 'The Aratana Villa - P. Xuân Hương' => bullet tĩnh + name_1 binding entity.name + dấu '-' tĩnh + address_1 binding entity.address. Ví dụ 'Spa - Gội Đầu - Mer Spa - 1 Mai Hoa Thôn - SĐT: 0945...' => category/name/address/phone là các block riêng; dấu '-' và 'SĐT:' là manual literal. Nếu field không thuộc lõi, dùng entity.metadata.<ten_cot> theo cột import thật, không gộp vào textbox chung. Không dùng entity.compose hoặc entity.list để gộp nhiều field vào một textbox.\n" +
+    "14b. Nếu visual pass chỉ có một block đại diện cho cả dòng, dùng bindings[].fieldParts để mô tả đủ part tĩnh và part data. App sẽ tách fieldParts thành nhiều textbox độc lập.\n" +
+    (dataColumnHint ? `15. ${dataColumnHint}\n` : "") +
+    (roleHint ? `16. Hint vai trò page hiện tại: ${roleHint}\n` : "") +
+    (customInstructions ? `17. Ghi chú thêm từ người dùng: ${customInstructions}\n` : "")
   );
 }
 
@@ -335,6 +462,7 @@ async function runVisualBlueprintPass(input: {
   customInstructions?: string;
   roleHint?: string;
   preferVisibleLines?: boolean;
+  dataColumns?: string[];
 }): Promise<{ ok: true; visualBlueprint: VisualBlueprint } | { ok: false; error: string }> {
   const result = await callAi({
     useVisionModel: true,
@@ -348,8 +476,7 @@ async function runVisualBlueprintPass(input: {
         content: [
           {
             type: "text",
-            text:
-              "Quan sát ảnh này như designer. Trả visual blueprint bám sát nhịp bố cục, số line, vị trí image holder, title treatment, shape nền chữ và khoảng thở thị giác.",
+            text: "Quan sát ảnh này như designer. Trả visual blueprint bám sát nhịp bố cục, số line, vị trí image holder, title treatment, shape nền chữ và khoảng thở thị giác.",
           },
           { type: "image_url", image_url: { url: input.imageDataUrl } },
         ],
@@ -368,14 +495,13 @@ async function runVisualBlueprintPass(input: {
 }
 
 async function runDataBlueprintPass(input: {
-  imageDataUrl: string;
   visualBlueprint: VisualBlueprint;
   customInstructions?: string;
   roleHint?: string;
   preferVisibleLines?: boolean;
+  dataColumns?: string[];
 }): Promise<{ ok: true; dataBlueprint: DataBlueprint } | { ok: false; error: string }> {
   const result = await callAi({
-    useVisionModel: true,
     messages: [
       {
         role: "system",
@@ -383,15 +509,9 @@ async function runDataBlueprintPass(input: {
       },
       {
         role: "user",
-        content: [
-          {
-            type: "text",
-            text:
-              "Đây là visual blueprint đã dựng ở pass 1. Hãy map nó sang data blueprint mà không làm mất nhịp poster.\n\n" +
-              JSON.stringify(input.visualBlueprint),
-          },
-          { type: "image_url", image_url: { url: input.imageDataUrl } },
-        ],
+        content:
+          "Đây là visual blueprint đã dựng ở pass 1. Hãy map nó sang data blueprint mà không làm mất nhịp poster.\n\n" +
+          JSON.stringify(input.visualBlueprint),
       },
     ],
     tools: [DATA_BLUEPRINT_TOOL],
@@ -412,16 +532,17 @@ export async function runVisionTemplatePipeline(input: {
   customInstructions?: string;
   roleHint?: string;
   preferVisibleLines?: boolean;
+  dataColumns?: string[];
 }): Promise<{ ok: true; blueprint: CombinedLayoutBlueprint } | { ok: false; error: string }> {
   const visualPass = await runVisualBlueprintPass(input);
   if (!visualPass.ok) return visualPass;
 
   const dataPass = await runDataBlueprintPass({
-    imageDataUrl: input.imageDataUrl,
     visualBlueprint: visualPass.visualBlueprint,
     customInstructions: input.customInstructions,
     roleHint: input.roleHint,
     preferVisibleLines: input.preferVisibleLines,
+    dataColumns: input.dataColumns,
   });
 
   if (!dataPass.ok) {
@@ -456,6 +577,7 @@ export async function buildCombinedLayoutJson(input: {
   customInstructions?: string;
   roleHint?: string;
   preferVisibleLines?: boolean;
+  dataColumns?: string[];
 }): Promise<{ ok: true; layoutJson: string } | { ok: false; error: string }> {
   const result = await runVisionTemplatePipeline(input);
   if (!result.ok) return result;

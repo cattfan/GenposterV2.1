@@ -20,6 +20,7 @@ import {
   buildEntityAllocationOrder,
 } from "./entityBindAllocator";
 import { buildEntityBindingTargets } from "../binding/cardRepeater";
+import { parseEntityListBindingPath } from "../binding/dataBinding";
 
 export type PackBindMode = "section" | "one-entity-per-pack" | "one-entity-per-page";
 
@@ -216,25 +217,44 @@ function generateEntityBindJob(
   };
 
   const randomizedEntityOrder = buildEntityAllocationOrder(entityPool, prioritizePartner);
-  const batchState = { usedEntityIds: new Set<string>() };
+  const templateDemands = new Map(
+    orderedTpls.map((tpl) => [
+      tpl.pageTemplateId,
+      Math.max(
+        1,
+        computeTemplateEntityDemand(
+          applyPageBindOverrides(tpl, bindOverrides[tpl.pageTemplateId]),
+          entityPool,
+        ),
+      ),
+    ]),
+  );
+  const packDemand = Math.max(
+    1,
+    orderedTpls.reduce((sum, tpl) => sum + (templateDemands.get(tpl.pageTemplateId) ?? 1), 0),
+  );
   let pageIndex = 0;
-  const pushPage = (tpl: PageTemplate, ent: Entity, perPackIdx: number) => {
+  const pushPage = (
+    tpl: PageTemplate,
+    pageEntityPool: Entity[],
+    perPackIdx: number,
+    batchState: { usedEntityIds: Set<string> },
+  ) => {
+    const owner = pageEntityPool[0] ?? entityPool[0];
+    if (!owner) return;
     const ov = bindOverrides[tpl.pageTemplateId];
     const effectiveTemplate = applyPageBindOverrides(tpl, ov);
-    const targetCount = buildEntityBindingTargets(effectiveTemplate, entityPool).length;
+    const targetCount = buildEntityBindingTargets(effectiveTemplate, pageEntityPool).length;
     const shouldPinOwner = mode === "one-entity-per-page" || targetCount <= 1;
     const allocation = allocateEntityBindingsForTemplate({
       template: effectiveTemplate,
-      orderedEntities: [
-        ent,
-        ...randomizedEntityOrder.filter((entity) => entity.entityId !== ent.entityId),
-      ],
-      pageOwner: shouldPinOwner ? ent : undefined,
+      orderedEntities: pageEntityPool,
+      pageOwner: shouldPinOwner ? owner : undefined,
       partnerQuota: partnerQuotaPerPage,
       prioritizePartner,
       batchState,
     });
-    const slugEnt = slugify(ent.name);
+    const slugEnt = slugify(owner.name);
     const healthScore = allocation.warnings.length > 0 ? 80 : 100;
     renderedPages.push({
       pageIndex,
@@ -246,21 +266,44 @@ function generateEntityBindJob(
       warnings: allocation.warnings,
       items: allocation.items,
       renderedAt: Date.now(),
-      entityId: ent.entityId,
-      entityName: ent.name,
+      entityId: owner.entityId,
+      entityName: owner.name,
+      entityPoolIds: pageEntityPool.map((entity) => entity.entityId),
       bindOverrides: ov,
     });
     pageIndex += 1;
   };
 
   if (mode === "one-entity-per-pack") {
-    for (const ent of entityPool) {
-      orderedTpls.forEach((tpl, i) => pushPage(tpl, ent, i));
+    const packCount = Math.max(1, Math.ceil(randomizedEntityOrder.length / packDemand));
+    for (let packIdx = 0; packIdx < packCount; packIdx += 1) {
+      const batchState = { usedEntityIds: new Set<string>() };
+      let packOffset = packIdx * packDemand;
+      orderedTpls.forEach((tpl, i) => {
+        const demand = templateDemands.get(tpl.pageTemplateId) ?? 1;
+        const pageEntityPool = selectPageEntityPool(
+          randomizedEntityOrder,
+          packOffset,
+          demand,
+          partnerQuotaPerPage,
+        );
+        pushPage(tpl, pageEntityPool, i, batchState);
+        packOffset += demand;
+      });
     }
   } else {
+    const batchState = { usedEntityIds: new Set<string>() };
+    let pageOffset = 0;
     orderedTpls.forEach((tpl, i) => {
-      const ent = entityPool[i % entityPool.length];
-      pushPage(tpl, ent, i);
+      const demand = templateDemands.get(tpl.pageTemplateId) ?? 1;
+      const pageEntityPool = selectPageEntityPool(
+        randomizedEntityOrder,
+        pageOffset,
+        demand,
+        partnerQuotaPerPage,
+      );
+      pushPage(tpl, pageEntityPool, i, batchState);
+      pageOffset += demand;
     });
   }
 
@@ -272,6 +315,57 @@ function generateEntityBindJob(
     pages: renderedPages,
     status: "generated",
   };
+}
+
+function computeTemplateEntityDemand(template: PageTemplate, entityPool: Entity[]): number {
+  const directTargets = buildEntityBindingTargets(template, entityPool).length;
+  const listTargets = template.slots.reduce((sum, slot) => {
+    const config = parseEntityListBindingPath(slot.bindingPath);
+    return sum + (config?.count ?? 0);
+  }, 0);
+  return directTargets + listTargets;
+}
+
+function rotateEntities(entities: Entity[], startIndex: number): Entity[] {
+  if (entities.length === 0) return [];
+  const offset = ((startIndex % entities.length) + entities.length) % entities.length;
+  return [...entities.slice(offset), ...entities.slice(0, offset)];
+}
+
+function selectPageEntityPool(
+  orderedEntities: Entity[],
+  startIndex: number,
+  demand: number,
+  partnerQuotaPerPage: number,
+): Entity[] {
+  if (orderedEntities.length === 0) return [];
+  const required = Math.max(1, Math.min(orderedEntities.length, Math.floor(demand) || 1));
+  const partnerQuota = Math.max(
+    0,
+    Math.min(
+      required,
+      Number.isFinite(partnerQuotaPerPage) ? Math.floor(partnerQuotaPerPage) : required,
+    ),
+  );
+  const partnerEntities = orderedEntities.filter((entity) => entity.partnerFlag);
+  const nonPartnerEntities = orderedEntities.filter((entity) => !entity.partnerFlag);
+  const selected: Entity[] = [];
+  const selectedIds = new Set<string>();
+
+  const take = (candidates: Entity[], limit: number) => {
+    for (const entity of rotateEntities(candidates, startIndex)) {
+      if (selected.length >= required || limit <= 0) break;
+      if (selectedIds.has(entity.entityId)) continue;
+      selected.push(entity);
+      selectedIds.add(entity.entityId);
+      limit -= 1;
+    }
+  };
+
+  if (partnerQuota > 0) take(partnerEntities, partnerQuota);
+  take(nonPartnerEntities, required - selected.length);
+  take(orderedEntities, required - selected.length);
+  return selected;
 }
 
 function computeHealth(tpl: PageTemplate, items: RenderedItem[], warnings: string[]): number {

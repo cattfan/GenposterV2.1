@@ -57,23 +57,21 @@ function pickEntityFromList(
   return filtered[0];
 }
 
-function selectEntityForTarget(params: {
+function pickEntityByPartnerMode(params: {
   candidates: Entity[];
   pageUsedIds: Set<string>;
   batchState: EntityBindBatchState;
-  preferPartner: boolean;
+  partnerMode: "partner" | "non-partner";
 }): Entity | undefined {
-  const { candidates, pageUsedIds, batchState, preferPartner } = params;
-  const partners = candidates.filter((entity) => entity.partnerFlag);
-  const others = candidates.filter((entity) => !entity.partnerFlag);
-  const preferred = preferPartner ? partners : others;
-  const fallback = preferPartner ? others : partners;
+  const { candidates, pageUsedIds, batchState, partnerMode } = params;
+  const pool =
+    partnerMode === "partner"
+      ? candidates.filter((entity) => entity.partnerFlag)
+      : candidates.filter((entity) => !entity.partnerFlag);
 
   return (
-    pickEntityFromList(preferred, pageUsedIds, batchState, true) ??
-    pickEntityFromList(preferred, pageUsedIds, batchState, false) ??
-    pickEntityFromList(fallback, pageUsedIds, batchState, true) ??
-    pickEntityFromList(fallback, pageUsedIds, batchState, false)
+    pickEntityFromList(pool, pageUsedIds, batchState, true) ??
+    pickEntityFromList(pool, pageUsedIds, batchState, false)
   );
 }
 
@@ -85,8 +83,7 @@ export function allocateEntityBindingsForTemplate(params: {
   prioritizePartner: boolean;
   batchState: EntityBindBatchState;
 }): AllocateEntityBindingsResult {
-  const { template, orderedEntities, pageOwner, partnerQuota, prioritizePartner, batchState } =
-    params;
+  const { template, orderedEntities, pageOwner, partnerQuota, batchState } = params;
   const targets = buildEntityBindingTargets(template, orderedEntities);
   const warnings: string[] = [];
 
@@ -94,7 +91,7 @@ export function allocateEntityBindingsForTemplate(params: {
     return { items: [], assignedEntities: [], warnings };
   }
 
-  const clampedQuota = Math.max(0, Math.min(partnerQuota, targets.length));
+  const clampedQuota = Math.max(0, Math.min(Math.floor(partnerQuota || 0), targets.length));
   const pageUsedIds = new Set<string>();
   const assignments = new Map<string, Entity | null>();
   let remainingPartnerQuota = clampedQuota;
@@ -103,10 +100,14 @@ export function allocateEntityBindingsForTemplate(params: {
     const ownerTarget = targets.find((target) =>
       target.candidateEntities.some((entity) => entity.entityId === pageOwner.entityId),
     );
-    if (ownerTarget) {
+    const canAssignOwnerWithoutBreakingQuota = pageOwner.partnerFlag
+      ? remainingPartnerQuota > 0
+      : targets.length - 1 >= remainingPartnerQuota;
+
+    if (ownerTarget && canAssignOwnerWithoutBreakingQuota) {
       assignments.set(ownerTarget.targetId, pageOwner);
       pageUsedIds.add(pageOwner.entityId);
-      if (pageOwner.partnerFlag && remainingPartnerQuota > 0) remainingPartnerQuota -= 1;
+      if (pageOwner.partnerFlag) remainingPartnerQuota -= 1;
     }
   }
 
@@ -115,17 +116,30 @@ export function allocateEntityBindingsForTemplate(params: {
   while (unassignedTargets().length > 0) {
     const remainingTargets = unassignedTargets();
     const target = remainingTargets[0];
-    const preferPartner = clampedQuota > 0 ? remainingPartnerQuota > 0 : prioritizePartner;
 
-    const chosen = selectEntityForTarget({
+    let chosen = pickEntityByPartnerMode({
       candidates: target.candidateEntities,
       pageUsedIds,
       batchState,
-      preferPartner,
+      partnerMode: remainingPartnerQuota > 0 ? "partner" : "non-partner",
     });
 
+    if (!chosen && remainingPartnerQuota > 0) {
+      warnings.push(
+        `Page "${template.name}": khong du doi tac de dat quota ${clampedQuota}/trang.`,
+      );
+      chosen = pickEntityByPartnerMode({
+        candidates: target.candidateEntities,
+        pageUsedIds,
+        batchState,
+        partnerMode: "non-partner",
+      });
+    }
+
     if (!chosen) {
-      warnings.push(`Page "${template.name}": không đủ entity khác nhau để fill toàn bộ block.`);
+      warnings.push(
+        `Page "${template.name}": khong du entity khong doi tac de giu quota ${clampedQuota}/trang.`,
+      );
       assignments.set(target.targetId, null);
       continue;
     }

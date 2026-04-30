@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   AlignCenter,
@@ -71,11 +79,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -86,6 +95,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { buildTextStyle } from "@/engines/binding/dataBinding";
 import { LayoutGuides } from "@/features/render/LayoutGuides";
+import { PageRenderer } from "@/features/render/PageRenderer";
 import { db, saveBlob } from "@/storage/db";
 import { makeIdbSrc, resolveImageSrcAsync } from "@/storage/imageSrc";
 import type {
@@ -99,10 +109,18 @@ import type {
   ElementStyle,
   FontAsset,
   ImageCrop,
+  PageTemplate,
 } from "@/models";
 import { DesignRenderer } from "./DesignRenderer";
 import { FONTS } from "./fonts";
-import { getBuiltInAssetLibrary, isHeroiconAsset, type HeroiconAsset } from "./designAssets";
+import {
+  getBuiltInIconSvg,
+  getBuiltInAssetLibrary,
+  isHeroiconAsset,
+  loadExtendedIconLibrary,
+  normalizeIconSearch,
+  type HeroiconAsset,
+} from "./designAssets";
 import { useDesignEditor } from "./designStore";
 import { TextToolbar } from "./TextToolbar";
 import { CropOverlay } from "./CropOverlay";
@@ -113,10 +131,190 @@ import { ColorPicker } from "./ColorPicker";
 type WorkspaceMode = EditorMode;
 type AssetPanelItem = AssetItem | HeroiconAsset;
 type DesignTool = "select" | "pan" | "crop";
+type IconVariantFilter = "all" | HeroiconAsset["styleGroup"];
 const EMPTY_ASSETS: AssetItem[] = [];
 const EMPTY_BRAND_KITS: BrandKit[] = [];
 const EMPTY_FONT_ASSETS: FontAsset[] = [];
+const EMPTY_PAGE_TEMPLATES: PageTemplate[] = [];
 const AUTOSAVE_DELAY_MS = 500;
+const ICON_PICKER_RESULT_LIMIT = 360;
+
+type MovePayload = {
+  elementId: string;
+  moveIds: string[];
+  originById: Record<string, { x: number; y: number }>;
+  nextPrimaryX: number;
+  nextPrimaryY: number;
+};
+
+type SnapLine = { axis: "x" | "y"; value: number };
+
+type ResizePayload = {
+  elementId: string;
+  patch: Partial<DesignElement>;
+  snapLines?: SnapLine[];
+  snapTargetIds?: string[];
+};
+
+type RafScheduler<T> = ((value: T) => void) & { cancel: () => void; flush: () => void };
+
+function createRafScheduler<T>(callback: (value: T) => void): RafScheduler<T> {
+  let frame = 0;
+  let latestValue: T | null = null;
+
+  const schedule = ((value: T) => {
+    latestValue = value;
+    if (frame) return;
+
+    frame = window.requestAnimationFrame(() => {
+      frame = 0;
+      const nextValue = latestValue;
+      latestValue = null;
+      if (nextValue !== null) callback(nextValue);
+    });
+  }) as RafScheduler<T>;
+
+  schedule.cancel = () => {
+    if (frame) window.cancelAnimationFrame(frame);
+    frame = 0;
+    latestValue = null;
+  };
+
+  schedule.flush = () => {
+    if (frame) window.cancelAnimationFrame(frame);
+    frame = 0;
+    const nextValue = latestValue;
+    latestValue = null;
+    if (nextValue !== null) callback(nextValue);
+  };
+
+  return schedule;
+}
+
+function cssAttrValue(value: string) {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function getPreviewNodes(canvas: HTMLElement | null, elementId: string) {
+  if (!canvas) return [];
+  const id = cssAttrValue(elementId);
+  return Array.from(
+    canvas.querySelectorAll<HTMLElement>(
+      `[data-rendered-element-id="${id}"], [data-design-element-id="${id}"]`,
+    ),
+  );
+}
+
+function getSelectionPreviewNodes(canvas: HTMLElement | null) {
+  if (!canvas) return [];
+  return Array.from(canvas.querySelectorAll<HTMLElement>("[data-selection-preview]"));
+}
+
+type PreviewNodeCache = {
+  elementNodes: Map<string, HTMLElement[]>;
+  selectionNodes: HTMLElement[];
+  selectionBoundsNode: HTMLElement | null;
+};
+
+function createPreviewNodeCache(
+  canvas: HTMLElement | null,
+  elementIds: string[],
+): PreviewNodeCache {
+  return {
+    elementNodes: new Map(elementIds.map((id) => [id, getPreviewNodes(canvas, id)])),
+    selectionNodes: getSelectionPreviewNodes(canvas),
+    selectionBoundsNode: canvas?.querySelector<HTMLElement>("[data-selection-bounds]") ?? null,
+  };
+}
+
+function markPreviewNode(node: HTMLElement, willChange: string) {
+  node.dataset.previewing = "true";
+  node.style.willChange = willChange;
+}
+
+function resetPreviewMarkers(
+  canvas: HTMLElement | null,
+  options: { restoreTransform?: boolean } = {},
+) {
+  if (!canvas) return;
+  canvas.querySelectorAll<HTMLElement>('[data-previewing="true"]').forEach((node) => {
+    if (options.restoreTransform && "previewBaseTransform" in node.dataset) {
+      node.style.transform = node.dataset.previewBaseTransform ?? "";
+    }
+    delete node.dataset.previewing;
+    delete node.dataset.previewBaseTransform;
+    node.style.willChange = "";
+  });
+}
+
+function applyMovePreview(
+  canvas: HTMLElement | null,
+  moveIds: string[],
+  dx: number,
+  dy: number,
+  scale: number,
+  cache?: PreviewNodeCache,
+) {
+  const translate = `translate3d(${dx * scale}px, ${dy * scale}px, 0)`;
+  for (const elementId of moveIds) {
+    for (const node of cache?.elementNodes.get(elementId) ?? getPreviewNodes(canvas, elementId)) {
+      const baseTransform = node.dataset.previewBaseTransform ?? node.style.transform;
+      node.dataset.previewBaseTransform = baseTransform;
+      markPreviewNode(node, "transform");
+      node.style.transform = `${translate} ${baseTransform}`.trim();
+    }
+  }
+
+  for (const node of cache?.selectionNodes ?? getSelectionPreviewNodes(canvas)) {
+    const baseTransform = node.dataset.previewBaseTransform ?? node.style.transform;
+    node.dataset.previewBaseTransform = baseTransform;
+    markPreviewNode(node, "transform");
+    node.style.transform = `${translate} ${baseTransform}`.trim();
+  }
+}
+
+function applyResizePreview(
+  canvas: HTMLElement | null,
+  elementId: string,
+  rect: { x?: number; y?: number; width?: number; height?: number },
+  scale: number,
+  updateSelectionBounds = true,
+  cache?: PreviewNodeCache,
+) {
+  for (const node of cache?.elementNodes.get(elementId) ?? getPreviewNodes(canvas, elementId)) {
+    markPreviewNode(node, "left, top, width, height");
+    if (typeof rect.x === "number") node.style.left = `${rect.x * scale}px`;
+    if (typeof rect.y === "number") node.style.top = `${rect.y * scale}px`;
+    if (typeof rect.width === "number") node.style.width = `${rect.width * scale}px`;
+    if (typeof rect.height === "number") node.style.height = `${rect.height * scale}px`;
+  }
+
+  const boundsNode = updateSelectionBounds
+    ? (cache?.selectionBoundsNode ?? canvas?.querySelector<HTMLElement>("[data-selection-bounds]"))
+    : null;
+  if (boundsNode && typeof rect.x === "number" && typeof rect.y === "number") {
+    markPreviewNode(boundsNode, "left, top, width, height");
+    boundsNode.style.left = `${rect.x * scale - 6}px`;
+    boundsNode.style.top = `${rect.y * scale - 6}px`;
+    if (typeof rect.width === "number") boundsNode.style.width = `${rect.width * scale + 12}px`;
+    if (typeof rect.height === "number") boundsNode.style.height = `${rect.height * scale + 12}px`;
+  }
+}
+
+function applyRotationPreview(
+  canvas: HTMLElement | null,
+  elementId: string,
+  deltaDeg: number,
+  cache?: PreviewNodeCache,
+) {
+  const rotate = `rotate(${deltaDeg}deg)`;
+  for (const node of cache?.elementNodes.get(elementId) ?? getPreviewNodes(canvas, elementId)) {
+    const baseTransform = node.dataset.previewBaseTransform ?? node.style.transform;
+    node.dataset.previewBaseTransform = baseTransform;
+    markPreviewNode(node, "transform");
+    node.style.transform = `${rotate} ${baseTransform}`.trim();
+  }
+}
 
 function rectsIntersect(
   a: { x: number; y: number; width: number; height: number },
@@ -151,7 +349,7 @@ function normalizeMarqueeRect(start: { x: number; y: number }, current: { x: num
   };
 }
 
-function snapRotation(rotation: number, event: MouseEvent) {
+function snapRotation(rotation: number, event: { shiftKey: boolean }) {
   if (!event.shiftKey) return rotation;
   return Math.round(rotation / 15) * 15;
 }
@@ -389,7 +587,7 @@ function snapMove(
   scale: number,
 ) {
   const threshold = Math.max(6, 12 / Math.max(scale, 0.1));
-  const snapLines: Array<{ axis: "x" | "y"; value: number }> = [];
+  const snapLines: SnapLine[] = [];
   const snapTargetIds = new Set<string>();
   let nextX = x;
   let nextY = y;
@@ -501,7 +699,7 @@ function snapResize(
   scale: number,
 ) {
   const threshold = Math.max(6, 12 / Math.max(scale, 0.1));
-  const snapLines: Array<{ axis: "x" | "y"; value: number }> = [];
+  const snapLines: SnapLine[] = [];
   const snapTargetIds = new Set<string>();
   const next = { ...rect };
 
@@ -654,6 +852,15 @@ function layerTree(
     ]);
 }
 
+function IconAssetGlyph({ asset, className }: { asset: HeroiconAsset; className?: string }) {
+  const IconComponent = asset.component;
+  if (IconComponent) return <IconComponent className={className} />;
+
+  return (
+    <span className={className} dangerouslySetInnerHTML={{ __html: getBuiltInIconSvg(asset) }} />
+  );
+}
+
 export function DesignWorkspace({
   initialDocument,
   mode,
@@ -662,6 +869,9 @@ export function DesignWorkspace({
   onClose,
   allowMultiplePages = true,
   autosave = false,
+  packPages = EMPTY_PAGE_TEMPLATES,
+  activeTemplateId,
+  onOpenTemplatePage,
 }: {
   initialDocument: DesignDocument;
   mode?: WorkspaceMode;
@@ -670,6 +880,9 @@ export function DesignWorkspace({
   onClose?: () => void;
   allowMultiplePages?: boolean;
   autosave?: boolean;
+  packPages?: PageTemplate[];
+  activeTemplateId?: string;
+  onOpenTemplatePage?: (pageTemplateId: string) => void;
 }) {
   const workspaceDocument = useMemo(
     () => ({
@@ -685,7 +898,10 @@ export function DesignWorkspace({
   const [rightTab, setRightTab] = useState("properties");
   const [assetSearch, setAssetSearch] = useState("");
   const [iconSearch, setIconSearch] = useState("");
-  const [iconPickerOpen, setIconPickerOpen] = useState(false);
+  const deferredIconSearch = useDeferredValue(iconSearch);
+  const [iconVariantFilter, setIconVariantFilter] = useState<IconVariantFilter>("all");
+  const [extendedIconAssets, setExtendedIconAssets] = useState<HeroiconAsset[]>([]);
+  const [extendedIconsLoading, setExtendedIconsLoading] = useState(false);
   const [selectedIconId, setSelectedIconId] = useState("");
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [editingTextValue, setEditingTextValue] = useState("");
@@ -699,13 +915,26 @@ export function DesignWorkspace({
     height: number;
   } | null>(null);
   const stageWrapRef = useRef<HTMLDivElement | null>(null);
+  const stagePanLayerRef = useRef<HTMLDivElement | null>(null);
+  const panPreviewRef = useRef<{
+    startX: number;
+    startY: number;
+    originPanX: number;
+    originPanY: number;
+    latestPanX: number;
+    latestPanY: number;
+  } | null>(null);
+  const panSchedulerRef = useRef<RafScheduler<{ clientX: number; clientY: number }> | null>(null);
   const [isPanning, setIsPanning] = useState(false);
   const [panCursor, setPanCursor] = useState<"grab" | "grabbing">("grab");
-  const [viewportDrag, setViewportDrag] = useState<{ startX: number; startY: number } | null>(null);
+  const [, setViewportDrag] = useState<{ startX: number; startY: number } | null>(null);
   const [cropTargetId, setCropTargetId] = useState<string | null>(null);
   const [autosaveStatus, setAutosaveStatus] = useState<
     "idle" | "pending" | "saving" | "saved" | "error"
   >("idle");
+  const [isElementTransforming, setIsElementTransforming] = useState(false);
+  const elementTransformingRef = useRef(false);
+  const lastComputedDocumentSignatureRef = useRef("");
   const onSaveRef = useRef(onSave);
   const autosaveTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   const saveInFlightRef = useRef(false);
@@ -733,18 +962,73 @@ export function DesignWorkspace({
   const fontAssets = fontAssetsQuery ?? EMPTY_FONT_ASSETS;
   const builtInAssets = useMemo(() => getBuiltInAssetLibrary(), []);
   const uploadedAssets = assetLibrary.filter((asset) => !isHeroiconAsset(asset));
-  const iconAssets = builtInAssets.filter(isHeroiconAsset);
+  const iconAssets = useMemo(
+    () => [...builtInAssets.filter(isHeroiconAsset), ...extendedIconAssets],
+    [builtInAssets, extendedIconAssets],
+  );
   const filteredIconAssets = useMemo(() => {
-    const query = iconSearch.trim().toLowerCase();
-    if (!query) return iconAssets;
+    const query = normalizeIconSearch(deferredIconSearch.trim());
     return iconAssets.filter((asset) => {
-      const haystack = [asset.name, ...(asset.tags ?? [])].join(" ").toLowerCase();
+      if (iconVariantFilter !== "all" && asset.styleGroup !== iconVariantFilter) return false;
+      if (!query) return true;
+      const haystack =
+        asset.searchText ?? normalizeIconSearch([asset.name, ...(asset.tags ?? [])].join(" "));
       return haystack.includes(query);
     });
-  }, [iconAssets, iconSearch]);
-  const selectedIconAsset =
-    iconAssets.find((asset) => asset.assetId === selectedIconId) ?? filteredIconAssets[0] ?? null;
-  const documentSignature = useMemo(() => JSON.stringify(editor.document), [editor.document]);
+  }, [iconAssets, deferredIconSearch, iconVariantFilter]);
+  const visibleIconAssets = useMemo(
+    () => filteredIconAssets.slice(0, ICON_PICKER_RESULT_LIMIT),
+    [filteredIconAssets],
+  );
+  const iconResultsAreLimited = filteredIconAssets.length > visibleIconAssets.length;
+
+  useEffect(() => {
+    if (leftTab !== "insert" || extendedIconAssets.length > 0) return;
+    let cancelled = false;
+    setExtendedIconsLoading(true);
+    loadExtendedIconLibrary()
+      .then((assets) => {
+        if (!cancelled) setExtendedIconAssets(assets);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          toast.error(
+            error instanceof Error ? error.message : "Khong tai duoc thu vien icon mo rong",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setExtendedIconsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [extendedIconAssets.length, leftTab]);
+
+  const documentSignature = useMemo(() => {
+    if (isElementTransforming && lastComputedDocumentSignatureRef.current) {
+      return lastComputedDocumentSignatureRef.current;
+    }
+
+    const nextSignature = [
+      editor.state.designDocumentId,
+      editor.state.mode,
+      editor.state.updatedAt,
+      editor.state.activePageId,
+      editor.state.pageOrder.length,
+      Object.keys(editor.state.elementsById).length,
+    ].join(":");
+    lastComputedDocumentSignatureRef.current = nextSignature;
+    return nextSignature;
+  }, [
+    editor.state.activePageId,
+    editor.state.designDocumentId,
+    editor.state.elementsById,
+    editor.state.mode,
+    editor.state.pageOrder.length,
+    editor.state.updatedAt,
+    isElementTransforming,
+  ]);
   const documentIdentity = `${workspaceDocument.designDocumentId}:${workspaceDocument.mode}`;
   const lastSavedSignatureRef = useRef(documentSignature);
   const autosaveDocumentIdentityRef = useRef(documentIdentity);
@@ -765,6 +1049,18 @@ export function DesignWorkspace({
   onSaveRef.current = onSave;
   latestDocumentRef.current = editor.document;
   latestSignatureRef.current = documentSignature;
+
+  const beginElementTransform = useCallback(() => {
+    if (elementTransformingRef.current) return;
+    elementTransformingRef.current = true;
+    setIsElementTransforming(true);
+  }, []);
+
+  const endElementTransform = useCallback(() => {
+    if (!elementTransformingRef.current) return;
+    elementTransformingRef.current = false;
+    setIsElementTransforming(false);
+  }, []);
 
   const flushAutosaveQueue = useCallback(async () => {
     if (saveInFlightRef.current) return;
@@ -872,6 +1168,7 @@ export function DesignWorkspace({
   const activePage = editor.activePage;
   const selected = editor.selectedElements;
   const primary = selected.at(-1) ?? null;
+  const hasPackPages = packPages.length > 0;
   const zoom = editor.state.viewport.zoom;
   const currentBrandKit =
     brandKits.find((kit) => kit.brandKitId === editor.state.brandKitId) ?? brandKits[0] ?? null;
@@ -1001,6 +1298,7 @@ export function DesignWorkspace({
   const insertAsset = (asset: AssetPanelItem) => {
     if (!activePage) return;
     if (isHeroiconAsset(asset)) {
+      const svgContent = getBuiltInIconSvg(asset);
       editor.insertElement({
         elementId: nanoid(),
         pageId: activePage.pageId,
@@ -1012,6 +1310,7 @@ export function DesignWorkspace({
         height: 180,
         zIndex: editor.activeElements.length,
         iconName: asset.iconName,
+        svgContent: svgContent || asset.svgContent,
         assetId: asset.assetId,
         style: {
           tint: "#0f172a",
@@ -1226,6 +1525,23 @@ export function DesignWorkspace({
     setEditingTextValue("");
   };
 
+  const keyboardStateRef = useRef({
+    editor,
+    selected,
+    editingTextId,
+    insertText,
+    insertShape,
+    cancelInlineTextEdit,
+  });
+  keyboardStateRef.current = {
+    editor,
+    selected,
+    editingTextId,
+    insertText,
+    insertShape,
+    cancelInlineTextEdit,
+  };
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === " ") {
@@ -1237,6 +1553,9 @@ export function DesignWorkspace({
 
       if (isEditableTarget(event.target)) return;
 
+      const keyboard = keyboardStateRef.current;
+      const currentEditor = keyboard.editor;
+      const currentSelected = keyboard.selected;
       const mod = event.ctrlKey || event.metaKey;
       const lower = event.key.toLowerCase();
 
@@ -1252,82 +1571,82 @@ export function DesignWorkspace({
       }
       if (lower === "t" && !mod) {
         event.preventDefault();
-        insertText();
+        keyboard.insertText();
         return;
       }
       if (lower === "r" && !mod) {
         event.preventDefault();
-        insertShape("rectangle");
+        keyboard.insertShape("rectangle");
         return;
       }
       if (event.key === "Escape") {
         event.preventDefault();
-        if (editingTextId) {
-          cancelInlineTextEdit();
+        if (keyboard.editingTextId) {
+          keyboard.cancelInlineTextEdit();
           return;
         }
-        editor.setSelection([]);
+        currentEditor.setSelection([]);
         setMarqueeRect(null);
         return;
       }
       if (mod && lower === "a") {
         event.preventDefault();
-        const selectableIds = editor.activeElements
+        const selectableIds = currentEditor.activeElements
           .filter((element) => !element.hidden)
           .map((element) => element.elementId);
-        editor.setSelection(selectableIds, selectableIds.at(-1) ?? null);
+        currentEditor.setSelection(selectableIds, selectableIds.at(-1) ?? null);
         return;
       }
       if (mod && lower === "z" && !event.shiftKey) {
         event.preventDefault();
-        editor.undo();
+        currentEditor.undo();
         return;
       }
       if (mod && ((lower === "z" && event.shiftKey) || lower === "y")) {
         event.preventDefault();
-        editor.redo();
+        currentEditor.redo();
         return;
       }
       if (mod && lower === "c") {
         event.preventDefault();
-        editor.copySelection();
+        currentEditor.copySelection();
         return;
       }
       if (mod && lower === "v") {
         event.preventDefault();
-        editor.pasteClipboard();
+        currentEditor.pasteClipboard();
         return;
       }
       if (mod && lower === "d") {
         event.preventDefault();
-        editor.duplicateSelection();
+        currentEditor.duplicateSelection();
         return;
       }
       if (mod && lower === "g" && event.shiftKey) {
         event.preventDefault();
-        editor.ungroupSelection();
+        currentEditor.ungroupSelection();
         return;
       }
       if (mod && lower === "g") {
         event.preventDefault();
-        editor.groupSelection();
+        currentEditor.groupSelection();
         return;
       }
       if (mod && event.key === "]") {
         event.preventDefault();
-        if (event.altKey) editor.orderSelection("front");
-        else editor.orderSelection("forward");
+        if (event.altKey) currentEditor.orderSelection("front");
+        else currentEditor.orderSelection("forward");
         return;
       }
       if (mod && event.key === "[") {
         event.preventDefault();
-        if (event.altKey) editor.orderSelection("back");
-        else editor.orderSelection("backward");
+        if (event.altKey) currentEditor.orderSelection("back");
+        else currentEditor.orderSelection("backward");
         return;
       }
-      if ((event.key === "Delete" || event.key === "Backspace") && selected.length > 0) {
+      if ((event.key === "Delete" || event.key === "Backspace") && currentSelected.length > 0) {
         event.preventDefault();
-        editor.deleteSelection();
+        currentEditor.deleteSelection();
         return;
       }
       if (
@@ -1336,19 +1655,19 @@ export function DesignWorkspace({
         event.key === "ArrowUp" ||
         event.key === "ArrowDown"
       ) {
-        if (selected.length === 0) return;
+        if (currentSelected.length === 0) return;
         event.preventDefault();
         const step = event.shiftKey ? 10 : 1;
         const dx = event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0;
         const dy = event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0;
         const moveTargets = new Set<string>();
-        selected.forEach((element) => {
+        currentSelected.forEach((element) => {
           moveTargets.add(element.elementId);
-          getDescendantIds(editor.activeElements, element.elementId).forEach((id) =>
+          getDescendantIds(currentEditor.activeElements, element.elementId).forEach((id) =>
             moveTargets.add(id),
           );
         });
-        editor.updateElements(Array.from(moveTargets), (element) => ({
+        currentEditor.updateElements(Array.from(moveTargets), (element) => ({
           x: element.x + dx,
           y: element.y + dy,
         }));
@@ -1370,7 +1689,7 @@ export function DesignWorkspace({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [editor, selected, editingTextId, cancelInlineTextEdit, insertShape, insertText]);
+  }, []);
 
   useEffect(() => {
     if (!spacePressed) return;
@@ -1386,25 +1705,33 @@ export function DesignWorkspace({
     zoomByStep(editor, zoom, direction);
   };
 
-  const handleCanvasWheel = (event: WheelEvent) => {
-    if (!event.ctrlKey && !event.metaKey) return;
-    event.preventDefault();
-    const currentZoom = zoom;
-    const nextZoom = getNextZoom(currentZoom, event.deltaY < 0 ? 1 : -1);
-    const wrapRect = stageWrapRef.current?.getBoundingClientRect();
-    const pointX = event.clientX - (wrapRect?.left ?? 0);
-    const pointY = event.clientY - (wrapRect?.top ?? 0);
-    const nextPan = zoomAtPoint({
-      currentZoom,
-      nextZoom,
-      panX: editor.state.viewport.panX,
-      panY: editor.state.viewport.panY,
-      pointX,
-      pointY,
-    });
-    editor.setPan(nextPan.panX, nextPan.panY);
-    editor.setZoom(nextZoom);
-  };
+  const viewportPanX = editor.state.viewport.panX;
+  const viewportPanY = editor.state.viewport.panY;
+  const setEditorPan = editor.setPan;
+  const setEditorZoom = editor.setZoom;
+
+  const handleCanvasWheel = useCallback(
+    (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      const currentZoom = zoom;
+      const nextZoom = getNextZoom(currentZoom, event.deltaY < 0 ? 1 : -1);
+      const wrapRect = stageWrapRef.current?.getBoundingClientRect();
+      const pointX = event.clientX - (wrapRect?.left ?? 0);
+      const pointY = event.clientY - (wrapRect?.top ?? 0);
+      const nextPan = zoomAtPoint({
+        currentZoom,
+        nextZoom,
+        panX: viewportPanX,
+        panY: viewportPanY,
+        pointX,
+        pointY,
+      });
+      setEditorPan(nextPan.panX, nextPan.panY);
+      setEditorZoom(nextZoom);
+    },
+    [setEditorPan, setEditorZoom, viewportPanX, viewportPanY, zoom],
+  );
 
   useEffect(() => {
     const onWheel = (event: WheelEvent) => {
@@ -1417,12 +1744,42 @@ export function DesignWorkspace({
   }, [handleCanvasWheel]);
 
   const beginPan = (clientX: number, clientY: number) => {
+    const originPanX = editor.state.viewport.panX;
+    const originPanY = editor.state.viewport.panY;
+    panPreviewRef.current = {
+      startX: clientX,
+      startY: clientY,
+      originPanX,
+      originPanY,
+      latestPanX: originPanX,
+      latestPanY: originPanY,
+    };
+    panSchedulerRef.current?.cancel();
+    panSchedulerRef.current = createRafScheduler(
+      ({ clientX: nextClientX, clientY: nextClientY }) => {
+        const preview = panPreviewRef.current;
+        if (!preview) return;
+        const nextPanX = preview.originPanX + (nextClientX - preview.startX);
+        const nextPanY = preview.originPanY + (nextClientY - preview.startY);
+        preview.latestPanX = nextPanX;
+        preview.latestPanY = nextPanY;
+        const node = stagePanLayerRef.current;
+        if (node) {
+          node.style.willChange = "transform";
+          node.style.transform = `translate(${nextPanX}px, ${nextPanY}px)`;
+        }
+      },
+    );
     setIsPanning(true);
     setPanCursor("grabbing");
     setViewportDrag({ startX: clientX, startY: clientY });
   };
 
   const updatePan = (clientX: number, clientY: number) => {
+    if (panPreviewRef.current && panSchedulerRef.current) {
+      panSchedulerRef.current({ clientX, clientY });
+      return;
+    }
     setViewportDrag((prev) => {
       if (!prev) return prev;
       editor.setPan(
@@ -1434,6 +1791,16 @@ export function DesignWorkspace({
   };
 
   const endPan = () => {
+    panSchedulerRef.current?.flush();
+    const preview = panPreviewRef.current;
+    if (preview) {
+      editor.setPan(preview.latestPanX, preview.latestPanY);
+    }
+    panPreviewRef.current = null;
+    panSchedulerRef.current = null;
+    if (stagePanLayerRef.current) {
+      stagePanLayerRef.current.style.willChange = "";
+    }
     setIsPanning(false);
     setPanCursor("grab");
     setViewportDrag(null);
@@ -2082,13 +2449,13 @@ export function DesignWorkspace({
               <span
                 className="px-1 text-xs text-muted-foreground"
                 aria-live="polite"
-                title="Editor tự động lưu mọi thay đổi"
+                title="Editor lưu tự động khi có thay đổi"
               >
                 {autosaveStatus === "pending" || autosaveStatus === "saving"
-                  ? "Đang tự lưu"
+                  ? "Đang lưu"
                   : autosaveStatus === "error"
-                    ? "Lỗi autosave"
-                    : "Đã tự lưu"}
+                    ? "Đang lưu"
+                    : "Đã lưu"}
               </span>
             ) : null}
 
@@ -2173,62 +2540,82 @@ export function DesignWorkspace({
                     >
                       <Table2 className="mr-2 size-4" /> Table
                     </Button>
-                    <div className="rounded-xl border bg-card p-3">
-                      <Label className="text-xs uppercase text-muted-foreground">Icon</Label>
-                      <div className="mt-3 space-y-2">
-                        <Popover open={iconPickerOpen} onOpenChange={setIconPickerOpen}>
-                          <PopoverTrigger asChild>
-                            <Button className="w-full justify-between" variant="outline">
-                              <span className="flex items-center gap-2 truncate">
-                                {selectedIconAsset ? (
-                                  <selectedIconAsset.component className="size-4 shrink-0" />
-                                ) : (
-                                  <Plus className="size-4 shrink-0" />
-                                )}
-                                <span className="truncate">
-                                  {selectedIconAsset?.name ?? "Chọn Heroicon"}
-                                </span>
-                              </span>
-                              <span className="text-xs text-muted-foreground">
-                                {filteredIconAssets.length}
-                              </span>
-                            </Button>
-                          </PopoverTrigger>
-                          <PopoverContent align="start" className="w-[280px] p-3">
-                            <div className="space-y-3">
-                              <Input
-                                value={iconSearch}
-                                onChange={(event) => setIconSearch(event.target.value)}
-                                placeholder="Tìm Heroicon"
-                              />
-                              <ScrollArea className="h-72">
-                                <div className="grid grid-cols-5 gap-2 pr-3">
-                                  {filteredIconAssets.map((asset) => (
-                                    <button
-                                      key={asset.assetId}
-                                      type="button"
-                                      onClick={() => {
-                                        setSelectedIconId(asset.assetId);
-                                        insertAsset(asset);
-                                        setIconPickerOpen(false);
-                                      }}
-                                      className={
-                                        "flex aspect-square items-center justify-center rounded-lg border bg-background transition " +
-                                        (asset.assetId === selectedIconId
-                                          ? "border-primary bg-primary/5 text-primary"
-                                          : "hover:border-primary/50 hover:bg-muted")
-                                      }
-                                      title={asset.name}
-                                    >
-                                      <asset.component className="size-5" />
-                                    </button>
-                                  ))}
-                                </div>
-                              </ScrollArea>
-                            </div>
-                          </PopoverContent>
-                        </Popover>
+                    <div className="flex flex-col gap-3 rounded-xl border bg-card p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <Label className="text-xs uppercase text-muted-foreground">Icon</Label>
+                        <span className="text-xs tabular-nums text-muted-foreground">
+                          {extendedIconsLoading ? "..." : filteredIconAssets.length}
+                        </span>
                       </div>
+                      <Input
+                        value={iconSearch}
+                        onChange={(event) => setIconSearch(event.target.value)}
+                        placeholder="Tìm icon: địa điểm, pin, phone, cafe..."
+                      />
+                      <ToggleGroup
+                        type="single"
+                        value={iconVariantFilter}
+                        onValueChange={(value) => {
+                          if (value) setIconVariantFilter(value as IconVariantFilter);
+                        }}
+                        variant="outline"
+                        size="sm"
+                        className="grid grid-cols-4"
+                      >
+                        <ToggleGroupItem value="all" aria-label="Tất cả icon">
+                          Tất cả
+                        </ToggleGroupItem>
+                        <ToggleGroupItem value="line" aria-label="Icon line">
+                          Line
+                        </ToggleGroupItem>
+                        <ToggleGroupItem value="solid" aria-label="Icon solid">
+                          Solid
+                        </ToggleGroupItem>
+                        <ToggleGroupItem value="color" aria-label="Icon màu">
+                          Màu
+                        </ToggleGroupItem>
+                      </ToggleGroup>
+                      {extendedIconsLoading ? (
+                        <div className="text-xs text-muted-foreground">
+                          Đang tải thêm icon Canva-like...
+                        </div>
+                      ) : null}
+                      {iconResultsAreLimited ? (
+                        <div className="text-xs text-muted-foreground">
+                          Đang hiển thị {visibleIconAssets.length} icon đầu tiên. Gõ từ khóa để lọc
+                          nhanh hơn.
+                        </div>
+                      ) : null}
+                      <ScrollArea className="h-64 rounded-lg border bg-background p-2">
+                        {visibleIconAssets.length > 0 ? (
+                          <div className="grid grid-cols-6 gap-1.5 pr-2">
+                            {visibleIconAssets.map((asset) => (
+                              <button
+                                key={asset.assetId}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedIconId(asset.assetId);
+                                  insertAsset(asset);
+                                }}
+                                className={
+                                  "flex aspect-square items-center justify-center rounded-md border bg-card transition " +
+                                  (asset.assetId === selectedIconId
+                                    ? "border-primary bg-primary/5 text-primary"
+                                    : "hover:border-primary/50 hover:bg-muted")
+                                }
+                                title={asset.name}
+                                aria-label={`Thêm ${asset.name}`}
+                              >
+                                <IconAssetGlyph asset={asset} className="block size-5" />
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+                            Không có icon phù hợp.
+                          </div>
+                        )}
+                      </ScrollArea>
                     </div>
                   </div>
                 </TabsContent>
@@ -2265,7 +2652,10 @@ export function DesignWorkspace({
                           >
                             <div className="mb-3 flex aspect-square items-center justify-center rounded-lg bg-muted/50">
                               {isHeroiconAsset(asset) ? (
-                                <asset.component className="size-12 text-foreground" />
+                                <IconAssetGlyph
+                                  asset={asset}
+                                  className="block size-12 text-foreground"
+                                />
                               ) : asset.kind === "image" || asset.kind === "logo" ? (
                                 <ImageIcon className="size-8 text-muted-foreground" />
                               ) : (
@@ -2277,7 +2667,7 @@ export function DesignWorkspace({
                             </div>
                             <div className="pr-8 text-sm font-medium">{asset.name}</div>
                             <div className="text-xs text-muted-foreground">
-                              {isHeroiconAsset(asset) ? "Heroicons" : asset.kind}
+                              {isHeroiconAsset(asset) ? asset.provider : asset.kind}
                             </div>
                           </button>
                           <button
@@ -2298,7 +2688,7 @@ export function DesignWorkspace({
                 </TabsContent>
                 <TabsContent value="pages" className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
                   <div className="space-y-3 pt-4">
-                    {allowMultiplePages ? (
+                    {allowMultiplePages && !hasPackPages ? (
                       <Button
                         className="w-full justify-start"
                         variant="outline"
@@ -2307,66 +2697,111 @@ export function DesignWorkspace({
                         <Plus className="mr-2 size-4" /> Add page
                       </Button>
                     ) : null}
-                    {editor.state.pageOrder.map((pageId, index) => {
-                      const page = editor.state.pagesById[pageId];
-                      const selectedPage = editor.state.activePageId === pageId;
-                      return (
-                        <div
-                          key={pageId}
-                          className={`rounded-xl border p-3 ${selectedPage ? "border-primary bg-primary/5" : ""}`}
-                        >
-                          <button
-                            className="w-full text-left"
-                            onClick={() => editor.setActivePage(pageId)}
-                          >
-                            <div className="text-sm font-semibold">{page.name}</div>
-                            <div className="text-xs text-muted-foreground">
-                              {page.width} × {page.height}
+                    {hasPackPages
+                      ? packPages.map((pageTemplate, index) => {
+                          const selectedPage =
+                            activeTemplateId === pageTemplate.pageTemplateId ||
+                            editor.document.sourcePageTemplateId === pageTemplate.pageTemplateId;
+                          const previewScale = Math.min(
+                            72 / pageTemplate.canvas.width,
+                            90 / pageTemplate.canvas.height,
+                          );
+                          return (
+                            <button
+                              key={pageTemplate.pageTemplateId}
+                              type="button"
+                              className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition hover:border-primary/60 hover:bg-muted/40 ${
+                                selectedPage ? "border-primary bg-primary/5" : "bg-card"
+                              }`}
+                              onClick={() => {
+                                if (selectedPage) return;
+                                onOpenTemplatePage?.(pageTemplate.pageTemplateId);
+                              }}
+                            >
+                              <div className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-xs font-semibold text-primary">
+                                {index + 1}
+                              </div>
+                              <div className="shrink-0 overflow-hidden rounded-md border bg-background shadow-sm">
+                                <PageRenderer
+                                  template={pageTemplate}
+                                  entities={[]}
+                                  assets={[]}
+                                  scale={previewScale}
+                                />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-sm font-semibold">
+                                  {pageTemplate.name}
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  {pageTemplate.canvas.width} x {pageTemplate.canvas.height}
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        })
+                      : editor.state.pageOrder.map((pageId, index) => {
+                          const page = editor.state.pagesById[pageId];
+                          const selectedPage = editor.state.activePageId === pageId;
+                          return (
+                            <div
+                              key={pageId}
+                              className={`rounded-xl border p-3 ${selectedPage ? "border-primary bg-primary/5" : ""}`}
+                            >
+                              <button
+                                className="w-full text-left"
+                                onClick={() => editor.setActivePage(pageId)}
+                              >
+                                <div className="text-sm font-semibold">{page.name}</div>
+                                <div className="text-xs text-muted-foreground">
+                                  {page.width} × {page.height}
+                                </div>
+                              </button>
+                              <div className="mt-3 flex gap-2">
+                                {allowMultiplePages ? (
+                                  <>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => editor.movePage(pageId, -1)}
+                                      disabled={index === 0}
+                                    >
+                                      ↑
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => editor.movePage(pageId, 1)}
+                                      disabled={index === editor.state.pageOrder.length - 1}
+                                    >
+                                      ↓
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={editor.duplicateActivePage}
+                                      disabled={!selectedPage}
+                                    >
+                                      Copy
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => editor.removePage(pageId)}
+                                      disabled={editor.state.pageOrder.length <= 1}
+                                    >
+                                      Delete
+                                    </Button>
+                                  </>
+                                ) : (
+                                  <div className="text-xs text-muted-foreground">
+                                    Single-page mode
+                                  </div>
+                                )}
+                              </div>
                             </div>
-                          </button>
-                          <div className="mt-3 flex gap-2">
-                            {allowMultiplePages ? (
-                              <>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => editor.movePage(pageId, -1)}
-                                  disabled={index === 0}
-                                >
-                                  ↑
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => editor.movePage(pageId, 1)}
-                                  disabled={index === editor.state.pageOrder.length - 1}
-                                >
-                                  ↓
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={editor.duplicateActivePage}
-                                  disabled={!selectedPage}
-                                >
-                                  Copy
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => editor.removePage(pageId)}
-                                  disabled={editor.state.pageOrder.length <= 1}
-                                >
-                                  Delete
-                                </Button>
-                              </>
-                            ) : (
-                              <div className="text-xs text-muted-foreground">Single-page mode</div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+                          );
+                        })}
                   </div>
                 </TabsContent>
               </Tabs>
@@ -2377,10 +2812,11 @@ export function DesignWorkspace({
 
           <div
             ref={stageWrapRef}
-            className="min-h-0 min-w-0 overflow-auto bg-muted/30 p-6"
+            className={`design-stage-scroll min-h-0 min-w-0 overflow-auto bg-muted/30 px-6 pb-6 ${primary?.kind === "text" ? "pt-16" : "pt-6"}`}
             onMouseDown={handleStageWrapMouseDown}
           >
             <div
+              ref={stagePanLayerRef}
               className="flex min-h-full items-start justify-center"
               style={{
                 transform: `translate(${editor.state.viewport.panX}px, ${editor.state.viewport.panY}px)`,
@@ -2422,6 +2858,8 @@ export function DesignWorkspace({
                   showSafeZone={editor.state.documentSettings.showSafeZone}
                   showGrid={editor.state.documentSettings.showGrid}
                   showGuides={editor.state.documentSettings.showGuides}
+                  snapToGrid={editor.state.documentSettings.snapToGrid}
+                  gridSize={editor.state.documentSettings.gridSize}
                   renderCanvasContextMenu={renderCanvasContextMenu}
                   renderElementContextMenu={renderElementContextMenu}
                   editingTextId={editingTextId}
@@ -2449,6 +2887,7 @@ export function DesignWorkspace({
                     editor.setSelection([elementId], elementId);
                   }}
                   onMove={({ elementId, moveIds, originById, nextPrimaryX, nextPrimaryY }) => {
+                    beginElementTransform();
                     const primaryTarget =
                       editor.activeElements.find((item) => item.elementId === elementId) ?? null;
                     const primaryOrigin = originById[elementId];
@@ -2478,34 +2917,44 @@ export function DesignWorkspace({
                       (e) => !moveIds.includes(e.elementId) && !e.hidden,
                     );
                     setSpacingLines(computeSpacingLines(movedEl, others));
-                    editor.updateElements(
-                      moveIds,
-                      (element) => ({
-                        x: clamp(
-                          (originById[element.elementId]?.x ?? element.x) + appliedDx,
-                          -activePage.width,
-                          activePage.width * 2,
-                        ),
-                        y: clamp(
-                          (originById[element.elementId]?.y ?? element.y) + appliedDy,
-                          -activePage.height,
-                          activePage.height * 2,
-                        ),
-                      }),
-                      { history: false },
-                    );
+                    editor.updateElements(moveIds, (element) => ({
+                      x: clamp(
+                        (originById[element.elementId]?.x ?? element.x) + appliedDx,
+                        -activePage.width,
+                        activePage.width * 2,
+                      ),
+                      y: clamp(
+                        (originById[element.elementId]?.y ?? element.y) + appliedDy,
+                        -activePage.height,
+                        activePage.height * 2,
+                      ),
+                    }));
                   }}
                   onMoveCommit={() => {
+                    endElementTransform();
                     editor.setSnapLines([]);
                     setSnapTargetIds([]);
                     setSpacingLines([]);
                   }}
                   onResize={({ elementId, patch, snapLines, snapTargetIds }) => {
-                    editor.updateElements([elementId], patch, { history: false });
+                    beginElementTransform();
+                    editor.updateElements([elementId], patch);
                     editor.setSnapLines(snapLines ?? []);
                     setSnapTargetIds(snapTargetIds ?? []);
                   }}
+                  onResizeMany={(payloads) => {
+                    beginElementTransform();
+                    if (payloads.length === 0) return;
+                    const patchById = new Map(
+                      payloads.map((payload) => [payload.elementId, payload.patch]),
+                    );
+                    editor.updateElements(
+                      payloads.map((payload) => payload.elementId),
+                      (element) => patchById.get(element.elementId) ?? {},
+                    );
+                  }}
                   onResizeCommit={() => {
+                    endElementTransform();
                     editor.setSnapLines([]);
                     setSnapTargetIds([]);
                   }}
@@ -2540,18 +2989,34 @@ export function DesignWorkspace({
             <aside className="min-h-0 min-w-0 overflow-hidden border-l">
               <Tabs value={rightTab} onValueChange={setRightTab} className="flex h-full flex-col">
                 <TabsList className="mx-4 mt-4 grid grid-cols-3">
-                  <TabsTrigger value="properties">Properties</TabsTrigger>
-                  <TabsTrigger value="layers">Layers</TabsTrigger>
+                  <TabsTrigger value="properties">Thuộc tính</TabsTrigger>
+                  <TabsTrigger value="layers">Lớp</TabsTrigger>
                   <TabsTrigger value="brand">Brand</TabsTrigger>
                 </TabsList>
                 <TabsContent
                   value="properties"
                   className="min-h-0 flex-1 overflow-y-auto px-4 pb-4"
                 >
-                  <div className="space-y-4 pt-4">
-                    <div className="rounded-xl border bg-card p-3">
-                      <Label className="text-xs uppercase text-muted-foreground">Page</Label>
-                      <div className="mt-3 grid grid-cols-2 gap-2">
+                  <div className="flex flex-col gap-3 pt-4">
+                    <InspectorSection
+                      title="Trang"
+                      action={
+                        <Button
+                          size="sm"
+                          variant={editor.state.documentSettings.snapToGrid ? "default" : "outline"}
+                          className="h-7 gap-1.5 px-2 text-[11px]"
+                          onClick={() =>
+                            editor.updateDocumentSettings({
+                              snapToGrid: !editor.state.documentSettings.snapToGrid,
+                            })
+                          }
+                        >
+                          <Grid2X2 className="size-3.5" />
+                          Snap {editor.state.documentSettings.snapToGrid ? "On" : "Off"}
+                        </Button>
+                      }
+                    >
+                      <div className="grid grid-cols-2 gap-2">
                         <NumberField
                           label="W"
                           value={activePage.width}
@@ -2567,130 +3032,131 @@ export function DesignWorkspace({
                           }
                         />
                       </div>
-                      <div className="mt-3 space-y-2">
-                        <Label className="text-xs">Background</Label>
-                        <ColorPicker
-                          value={activePage.background ?? "#ffffff"}
-                          onChange={(color) =>
-                            editor.updatePage(activePage.pageId, { background: color })
-                          }
-                        />
-                      </div>
-                      <div className="mt-3 flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
-                        <span className="text-sm">Grid snap</span>
-                        <Button
-                          size="sm"
-                          variant={editor.state.documentSettings.snapToGrid ? "default" : "outline"}
-                          onClick={() =>
-                            editor.updateDocumentSettings({
-                              snapToGrid: !editor.state.documentSettings.snapToGrid,
-                            })
-                          }
-                        >
-                          <Grid2X2 className="mr-2 size-4" />
-                          {editor.state.documentSettings.snapToGrid ? "On" : "Off"}
-                        </Button>
-                      </div>
-                    </div>
+                      <CompactColorControl
+                        label="Nền"
+                        value={activePage.background ?? "#ffffff"}
+                        onChange={(color) =>
+                          editor.updatePage(activePage.pageId, { background: color })
+                        }
+                      />
+                    </InspectorSection>
 
                     {primary ? (
-                      <div className="space-y-4 rounded-xl border bg-card p-3">
-                        <div className="space-y-2">
-                          <Label className="text-xs uppercase text-muted-foreground">Element</Label>
-                          <Input
-                            value={primary.name ?? ""}
-                            onChange={(event) =>
-                              editor.updateElements(
-                                [primary.elementId],
-                                { name: event.target.value },
-                                { history: false },
-                              )
-                            }
-                            placeholder="Layer name"
-                          />
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <NumberField
-                            label="X"
-                            value={primary.x}
-                            onChange={(value) =>
-                              editor.updateSelectedElements({ x: value }, { history: false })
-                            }
-                          />
-                          <NumberField
-                            label="Y"
-                            value={primary.y}
-                            onChange={(value) =>
-                              editor.updateSelectedElements({ y: value }, { history: false })
-                            }
-                          />
-                          <NumberField
-                            label="W"
-                            value={primary.width}
-                            onChange={(value) =>
-                              editor.updateSelectedElements({ width: value }, { history: false })
-                            }
-                          />
-                          <NumberField
-                            label="H"
-                            value={primary.height}
-                            onChange={(value) =>
-                              editor.updateSelectedElements({ height: value }, { history: false })
-                            }
-                          />
-                        </div>
-                        <NumberField
-                          label="Rotation"
-                          value={primary.rotation ?? 0}
-                          suffix="°"
-                          onChange={(value) =>
-                            editor.updateSelectedElements({ rotation: value }, { history: false })
+                      <div className="flex flex-col gap-3">
+                        <InspectorSection
+                          title="Element"
+                          action={
+                            <span className="rounded-md bg-muted px-2 py-1 text-[11px] font-medium capitalize text-muted-foreground">
+                              {selected.length > 1 ? `${selected.length} items` : primary.kind}
+                            </span>
                           }
-                        />
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() =>
-                              editor.updateSelectedElements(
-                                { rotation: (primary.rotation ?? 0) - 15 },
-                                { history: false },
-                              )
-                            }
-                          >
-                            <RotateCcw className="mr-2 size-4" /> -15°
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() =>
-                              editor.updateSelectedElements(
-                                { rotation: (primary.rotation ?? 0) + 15 },
-                                { history: false },
-                              )
-                            }
-                          >
-                            <RotateCw className="mr-2 size-4" /> +15°
-                          </Button>
-                        </div>
-                        <div className="flex gap-2">
-                          <Button size="sm" variant="outline" onClick={editor.copySelection}>
-                            <Copy className="mr-2 size-4" /> Copy
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => editor.duplicateSelection()}
-                          >
-                            <Layers className="mr-2 size-4" /> Duplicate
-                          </Button>
-                        </div>
-                        <div className="space-y-2 border-t pt-3">
-                          <Label className="text-xs uppercase text-muted-foreground">Layer</Label>
+                        >
+                          <div className="flex flex-col gap-2">
+                            <Label className="text-[11px] font-medium text-muted-foreground">
+                              Tên layer
+                            </Label>
+                            <Input
+                              value={primary.name ?? ""}
+                              onChange={(event) =>
+                                editor.updateElements(
+                                  [primary.elementId],
+                                  { name: event.target.value },
+                                  { history: false },
+                                )
+                              }
+                              placeholder="Layer name"
+                              className="h-8"
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <NumberField
+                              label="X"
+                              value={primary.x}
+                              onChange={(value) =>
+                                editor.updateSelectedElements({ x: value }, { history: false })
+                              }
+                            />
+                            <NumberField
+                              label="Y"
+                              value={primary.y}
+                              onChange={(value) =>
+                                editor.updateSelectedElements({ y: value }, { history: false })
+                              }
+                            />
+                            <NumberField
+                              label="W"
+                              value={primary.width}
+                              onChange={(value) =>
+                                editor.updateSelectedElements({ width: value }, { history: false })
+                              }
+                            />
+                            <NumberField
+                              label="H"
+                              value={primary.height}
+                              onChange={(value) =>
+                                editor.updateSelectedElements({ height: value }, { history: false })
+                              }
+                            />
+                          </div>
+                          <div className="grid grid-cols-[1fr_auto_auto] items-end gap-2">
+                            <NumberField
+                              label="Rotation"
+                              value={primary.rotation ?? 0}
+                              suffix="°"
+                              onChange={(value) =>
+                                editor.updateSelectedElements(
+                                  { rotation: value },
+                                  { history: false },
+                                )
+                              }
+                            />
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 w-10 px-0"
+                              onClick={() =>
+                                editor.updateSelectedElements(
+                                  { rotation: (primary.rotation ?? 0) - 15 },
+                                  { history: false },
+                                )
+                              }
+                            >
+                              <RotateCcw className="size-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 w-10 px-0"
+                              onClick={() =>
+                                editor.updateSelectedElements(
+                                  { rotation: (primary.rotation ?? 0) + 15 },
+                                  { history: false },
+                                )
+                              }
+                            >
+                              <RotateCw className="size-4" />
+                            </Button>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <Button size="sm" variant="outline" onClick={editor.copySelection}>
+                              <Copy className="mr-2 size-4" /> Copy
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => editor.duplicateSelection()}
+                            >
+                              <Layers className="mr-2 size-4" /> Duplicate
+                            </Button>
+                          </div>
+                        </InspectorSection>
+
+                        <InspectorSection title="Layer">
                           <div className="grid grid-cols-2 gap-2">
                             <Button
                               size="sm"
                               variant="outline"
+                              className="justify-start"
                               onClick={() => editor.orderSelection("front")}
                             >
                               Lên cùng
@@ -2698,6 +3164,7 @@ export function DesignWorkspace({
                             <Button
                               size="sm"
                               variant="outline"
+                              className="justify-start"
                               onClick={() => editor.orderSelection("forward")}
                             >
                               Lên 1 lớp
@@ -2705,6 +3172,7 @@ export function DesignWorkspace({
                             <Button
                               size="sm"
                               variant="outline"
+                              className="justify-start"
                               onClick={() => editor.orderSelection("backward")}
                             >
                               Xuống 1 lớp
@@ -2712,20 +3180,18 @@ export function DesignWorkspace({
                             <Button
                               size="sm"
                               variant="outline"
+                              className="justify-start"
                               onClick={() => editor.orderSelection("back")}
                             >
                               Xuống cùng
                             </Button>
                           </div>
-                        </div>
+                        </InspectorSection>
 
                         {primary.kind === "text" ? (
-                          <div className="space-y-3 border-t pt-3">
-                            <Label className="text-xs uppercase text-muted-foreground">
-                              Typography
-                            </Label>
-                            <div className="text-xs text-muted-foreground">
-                              Double-click trực tiếp trên textbox để sửa nhanh nội dung.
+                          <InspectorSection title="Text">
+                            <div className="text-[11px] text-muted-foreground">
+                              Double-click trên canvas để sửa nhanh.
                             </div>
                             <textarea
                               value={primary.text}
@@ -2792,47 +3258,52 @@ export function DesignWorkspace({
                                 </SelectContent>
                               </Select>
                             </div>
-                            <div className="space-y-2">
-                              <Label className="text-xs">Text color</Label>
-                              <ColorPicker
-                                value={primary.style?.color ?? "#0f172a"}
-                                onChange={(color) =>
-                                  editor.updateElements(
-                                    [primary.elementId],
-                                    {
-                                      style: {
-                                        ...(primary.style ?? {}),
-                                        color,
-                                      },
-                                    } as Partial<DesignElement>,
-                                    { history: false },
-                                  )
-                                }
-                              />
-                            </div>
-                            <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
+                            <CompactColorControl
+                              label="Màu chữ"
+                              value={primary.style?.color ?? "#0f172a"}
+                              onChange={(color) =>
+                                editor.updateElements(
+                                  [primary.elementId],
+                                  {
+                                    style: {
+                                      ...(primary.style ?? {}),
+                                      color,
+                                    },
+                                  } as Partial<DesignElement>,
+                                  { history: false },
+                                )
+                              }
+                            />
+                            <div className="flex flex-col gap-3 rounded-lg border bg-muted/20 p-3">
                               <div className="flex items-center justify-between gap-2">
                                 <Label className="text-xs">Text outline</Label>
                                 <Button
                                   size="sm"
-                                  variant="outline"
-                                  onClick={() =>
+                                  variant={
+                                    Number(primary.style?.textStrokeWidth ?? 0) > 0
+                                      ? "default"
+                                      : "outline"
+                                  }
+                                  onClick={() => {
+                                    const enabled = Number(primary.style?.textStrokeWidth ?? 0) > 0;
                                     editor.updateElements(
                                       [primary.elementId],
                                       {
                                         style: {
                                           ...(primary.style ?? {}),
-                                          textStrokeWidth: 0,
+                                          textStrokeWidth: enabled ? 0 : 2,
+                                          textStrokeColor:
+                                            primary.style?.textStrokeColor ?? "#ffffff",
                                         },
                                       } as Partial<DesignElement>,
                                       { history: false },
-                                    )
-                                  }
+                                    );
+                                  }}
                                 >
-                                  Off
+                                  {Number(primary.style?.textStrokeWidth ?? 0) > 0 ? "On" : "Off"}
                                 </Button>
                               </div>
-                              <div className="grid grid-cols-[1fr_96px] items-end gap-2">
+                              <div className="grid grid-cols-[1fr_120px] items-end gap-2">
                                 <NumberField
                                   label="Width"
                                   value={Number(primary.style?.textStrokeWidth ?? 0)}
@@ -2851,40 +3322,143 @@ export function DesignWorkspace({
                                     )
                                   }
                                 />
-                                <div className="space-y-1">
-                                  <Label className="text-xs text-muted-foreground">Color</Label>
-                                  <Input
-                                    type="color"
-                                    value={primary.style?.textStrokeColor ?? "#ffffff"}
-                                    onChange={(event) =>
+                                <CompactColorControl
+                                  label="Color"
+                                  value={primary.style?.textStrokeColor ?? "#ffffff"}
+                                  onChange={(color) =>
+                                    editor.updateElements(
+                                      [primary.elementId],
+                                      {
+                                        style: {
+                                          ...(primary.style ?? {}),
+                                          textStrokeColor: color,
+                                          textStrokeWidth:
+                                            Number(primary.style?.textStrokeWidth ?? 0) > 0
+                                              ? primary.style?.textStrokeWidth
+                                              : 2,
+                                        },
+                                      } as Partial<DesignElement>,
+                                      { history: false },
+                                    )
+                                  }
+                                />
+                              </div>
+                            </div>
+                            <div className="flex flex-col gap-3 rounded-lg border bg-muted/20 p-3">
+                              <div className="flex items-center justify-between gap-2">
+                                <Label className="text-xs">Text shadow</Label>
+                                <Button
+                                  size="sm"
+                                  variant={primary.style?.textShadowColor ? "default" : "outline"}
+                                  onClick={() => {
+                                    const enabled = !!primary.style?.textShadowColor;
+                                    editor.updateElements(
+                                      [primary.elementId],
+                                      {
+                                        style: {
+                                          ...(primary.style ?? {}),
+                                          textShadowColor: enabled ? undefined : "#000000",
+                                          textShadowBlur: enabled ? undefined : 8,
+                                          textShadowX: enabled ? undefined : 2,
+                                          textShadowY: enabled ? undefined : 4,
+                                          textShadow: enabled
+                                            ? undefined
+                                            : primary.style?.textShadow,
+                                        },
+                                      } as Partial<DesignElement>,
+                                      { history: false },
+                                    );
+                                  }}
+                                >
+                                  {primary.style?.textShadowColor ? "On" : "Off"}
+                                </Button>
+                              </div>
+                              {primary.style?.textShadowColor ? (
+                                <>
+                                  <CompactColorControl
+                                    label="Color"
+                                    value={primary.style.textShadowColor}
+                                    onChange={(color) =>
                                       editor.updateElements(
                                         [primary.elementId],
                                         {
                                           style: {
                                             ...(primary.style ?? {}),
-                                            textStrokeColor: event.target.value,
-                                            textStrokeWidth:
-                                              Number(primary.style?.textStrokeWidth ?? 0) > 0
-                                                ? primary.style?.textStrokeWidth
-                                                : 2,
+                                            textShadowColor: color,
                                           },
                                         } as Partial<DesignElement>,
                                         { history: false },
                                       )
                                     }
-                                    className="h-10 p-1"
                                   />
-                                </div>
-                              </div>
+                                  <div className="flex flex-col gap-2">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <Label className="text-xs text-muted-foreground">Blur</Label>
+                                      <span className="text-[11px] tabular-nums text-muted-foreground">
+                                        {Number(primary.style?.textShadowBlur ?? 8)}px
+                                      </span>
+                                    </div>
+                                    <Slider
+                                      value={[Number(primary.style?.textShadowBlur ?? 8)]}
+                                      min={0}
+                                      max={40}
+                                      step={1}
+                                      onValueChange={(value) =>
+                                        editor.updateElements(
+                                          [primary.elementId],
+                                          {
+                                            style: {
+                                              ...(primary.style ?? {}),
+                                              textShadowBlur: value[0],
+                                            },
+                                          } as Partial<DesignElement>,
+                                          { history: false },
+                                        )
+                                      }
+                                    />
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <NumberField
+                                      label="X"
+                                      value={Number(primary.style?.textShadowX ?? 2)}
+                                      onChange={(value) =>
+                                        editor.updateElements(
+                                          [primary.elementId],
+                                          {
+                                            style: {
+                                              ...(primary.style ?? {}),
+                                              textShadowX: value,
+                                            },
+                                          } as Partial<DesignElement>,
+                                          { history: false },
+                                        )
+                                      }
+                                    />
+                                    <NumberField
+                                      label="Y"
+                                      value={Number(primary.style?.textShadowY ?? 4)}
+                                      onChange={(value) =>
+                                        editor.updateElements(
+                                          [primary.elementId],
+                                          {
+                                            style: {
+                                              ...(primary.style ?? {}),
+                                              textShadowY: value,
+                                            },
+                                          } as Partial<DesignElement>,
+                                          { history: false },
+                                        )
+                                      }
+                                    />
+                                  </div>
+                                </>
+                              ) : null}
                             </div>
-                          </div>
+                          </InspectorSection>
                         ) : null}
 
                         {primary.kind === "image" || primary.kind === "shape" ? (
-                          <div className="space-y-3 border-t pt-3">
-                            <Label className="text-xs uppercase text-muted-foreground">
-                              Visual
-                            </Label>
+                          <InspectorSection title="Visual">
                             <div className="space-y-2">
                               <Label className="text-xs">Border radius</Label>
                               <Slider
@@ -2904,24 +3478,22 @@ export function DesignWorkspace({
                               />
                             </div>
                             {primary.kind === "shape" ? (
-                              <div className="space-y-2">
-                                <Label className="text-xs">Fill</Label>
-                                <ColorPicker
-                                  value={primary.style?.fill ?? "#f97316"}
-                                  onChange={(color) =>
-                                    editor.updateElements(
-                                      [primary.elementId],
-                                      {
-                                        style: {
-                                          ...(primary.style ?? {}),
-                                          fill: color,
-                                        },
-                                      } as Partial<DesignElement>,
-                                      { history: false },
-                                    )
-                                  }
-                                />
-                              </div>
+                              <CompactColorControl
+                                label="Fill"
+                                value={primary.style?.fill ?? "#f97316"}
+                                onChange={(color) =>
+                                  editor.updateElements(
+                                    [primary.elementId],
+                                    {
+                                      style: {
+                                        ...(primary.style ?? {}),
+                                        fill: color,
+                                      },
+                                    } as Partial<DesignElement>,
+                                    { history: false },
+                                  )
+                                }
+                              />
                             ) : null}
                             {primary.kind === "image" ? (
                               <div className="space-y-2">
@@ -3073,7 +3645,7 @@ export function DesignWorkspace({
                                 </Button>
                               </div>
                             ) : null}
-                          </div>
+                          </InspectorSection>
                         ) : null}
 
                         {/* Gradient fill — available for shape + text */}
@@ -3491,6 +4063,8 @@ function DesignStage({
   showSafeZone,
   showGrid,
   showGuides,
+  snapToGrid,
+  gridSize: documentGridSize,
   renderCanvasContextMenu,
   renderElementContextMenu,
   editingTextId,
@@ -3504,6 +4078,7 @@ function DesignStage({
   onMove,
   onMoveCommit,
   onResize,
+  onResizeMany,
   onResizeCommit,
   availableFontFamilies,
   onUpdateElementStyle,
@@ -3521,11 +4096,13 @@ function DesignStage({
   marqueeRect: { x: number; y: number; width: number; height: number } | null;
   selectedIds: string[];
   primaryId: string | null;
-  snapLines: Array<{ axis: "x" | "y"; value: number }>;
+  snapLines: SnapLine[];
   snapTargetIds: string[];
   showSafeZone: boolean;
   showGrid: boolean;
   showGuides: boolean;
+  snapToGrid: boolean;
+  gridSize: number;
   renderCanvasContextMenu: () => React.ReactNode;
   renderElementContextMenu: (element: DesignElement) => React.ReactNode;
   editingTextId: string | null;
@@ -3536,20 +4113,10 @@ function DesignStage({
   onCancelTextEdit: () => void;
   onStageMouseDown: (event: React.MouseEvent<HTMLDivElement>) => void;
   onSelect: (elementId: string | null, additive: boolean) => void;
-  onMove: (payload: {
-    elementId: string;
-    moveIds: string[];
-    originById: Record<string, { x: number; y: number }>;
-    nextPrimaryX: number;
-    nextPrimaryY: number;
-  }) => void;
+  onMove: (payload: MovePayload) => void;
   onMoveCommit: () => void;
-  onResize: (payload: {
-    elementId: string;
-    patch: Partial<DesignElement>;
-    snapLines?: Array<{ axis: "x" | "y"; value: number }>;
-    snapTargetIds?: string[];
-  }) => void;
+  onResize: (payload: ResizePayload) => void;
+  onResizeMany: (payloads: ResizePayload[]) => void;
   onResizeCommit: () => void;
   availableFontFamilies: string[];
   onUpdateElementStyle: (elementId: string, patch: Partial<ElementStyle>) => void;
@@ -3569,6 +4136,25 @@ function DesignStage({
         backgroundSize: `${gridSize}px ${gridSize}px`,
       }
     : undefined;
+  const [previewSnapLines, setPreviewSnapLines] = useState<SnapLine[]>([]);
+  const [previewSnapTargetIds, setPreviewSnapTargetIds] = useState<string[]>([]);
+  const previewSnapSignatureRef = useRef("");
+  const activeSnapLines = previewSnapLines.length ? previewSnapLines : snapLines;
+  const activeSnapTargetIds = previewSnapTargetIds.length ? previewSnapTargetIds : snapTargetIds;
+  const setLiveSnapState = useCallback((lines: SnapLine[], targetIds: string[]) => {
+    const signature = `${lines
+      .map((line) => `${line.axis}:${Math.round(line.value * 100) / 100}`)
+      .join("|")}::${targetIds.join("|")}`;
+    if (previewSnapSignatureRef.current === signature) return;
+    previewSnapSignatureRef.current = signature;
+    setPreviewSnapLines(lines);
+    setPreviewSnapTargetIds(targetIds);
+  }, []);
+  const clearPreviewSnapState = useCallback(() => {
+    previewSnapSignatureRef.current = "";
+    setPreviewSnapLines([]);
+    setPreviewSnapTargetIds([]);
+  }, []);
   const bounds = getSelectionBounds(
     selectedIds
       .map((id) => elements.find((element) => element.elementId === id))
@@ -3580,7 +4166,7 @@ function DesignStage({
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
-            className="relative overflow-hidden bg-background shadow-sm"
+            className="relative overflow-visible bg-background shadow-sm"
             data-design-canvas
             style={{ width: page.width * scale, height: page.height * scale, ...gridBackground }}
             onMouseDown={onStageMouseDown}
@@ -3630,6 +4216,7 @@ function DesignStage({
                   elements={elements}
                   scale={scale}
                   suppressElementIds={editingTextId ? [editingTextId] : []}
+                  showGuides={showGuides}
                 />
               </div>
               {showSafeZone ? (
@@ -3643,27 +4230,37 @@ function DesignStage({
                 />
               ) : null}
 
-              {snapLines.map((line, index) => (
-                <div
-                  key={`${line.axis}-${line.value}-${index}`}
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    pointerEvents: "none",
-                  }}
-                >
+              {activeSnapLines.map((line, index) => {
+                const isCenterLine =
+                  line.axis === "x"
+                    ? Math.abs(line.value - page.width / 2) < 0.5
+                    : Math.abs(line.value - page.height / 2) < 0.5;
+                return (
                   <div
+                    key={`${line.axis}-${line.value}-${index}`}
                     style={{
                       position: "absolute",
-                      left: line.axis === "x" ? line.value * scale : 0,
-                      top: line.axis === "y" ? line.value * scale : 0,
-                      width: line.axis === "x" ? 1 : "100%",
-                      height: line.axis === "y" ? 1 : "100%",
-                      background: "rgba(236,72,153,0.95)",
+                      inset: 0,
+                      pointerEvents: "none",
+                      zIndex: 2147483630,
                     }}
-                  />
-                </div>
-              ))}
+                  >
+                    <div
+                      style={{
+                        position: "absolute",
+                        left: line.axis === "x" ? line.value * scale : 0,
+                        top: line.axis === "y" ? line.value * scale : 0,
+                        width: line.axis === "x" ? 2 : "100%",
+                        height: line.axis === "y" ? 2 : "100%",
+                        background: isCenterLine ? "rgba(37,99,235,0.95)" : "rgba(236,72,153,0.95)",
+                        boxShadow: isCenterLine
+                          ? "0 0 0 1px rgba(255,255,255,0.9), 0 0 12px rgba(37,99,235,0.35)"
+                          : "0 0 0 1px rgba(255,255,255,0.85), 0 0 12px rgba(236,72,153,0.3)",
+                      }}
+                    />
+                  </div>
+                );
+              })}
 
               <SmartSpacing lines={spacingLines} scale={scale} />
 
@@ -3674,7 +4271,7 @@ function DesignStage({
                 .map((element) => {
                   const selected = selectedIds.includes(element.elementId);
                   const primary = primaryId === element.elementId;
-                  const isSnapTarget = snapTargetIds.includes(element.elementId);
+                  const isSnapTarget = activeSnapTargetIds.includes(element.elementId);
                   const isEditingText =
                     editingTextId === element.elementId && element.kind === "text";
                   const isCropTarget =
@@ -3695,6 +4292,7 @@ function DesignStage({
                   const overlay = (
                     <div
                       data-design-element
+                      data-design-element-id={element.elementId}
                       onContextMenu={() => {
                         if (!selected) onSelect(element.elementId, false);
                       }}
@@ -3735,14 +4333,57 @@ function DesignStage({
                             );
                           }
                         });
+                        const moveIdsArray = Array.from(moveIds);
+                        const nonMovingElements = elements.filter(
+                          (item) => !moveIds.has(item.elementId),
+                        );
                         const originById = Object.fromEntries(
-                          Array.from(moveIds)
+                          moveIdsArray
                             .map((id) => elements.find((entry) => entry.elementId === id))
                             .filter((entry): entry is DesignElement => !!entry)
                             .map((entry) => [entry.elementId, { x: entry.x, y: entry.y }]),
                         );
+                        const previewCache = createPreviewNodeCache(canvas, moveIdsArray);
                         const pointerOffsetX = startPoint.x - element.x;
                         const pointerOffsetY = startPoint.y - element.y;
+                        let latestMovePayload: MovePayload | null = null;
+                        const scheduleMovePreview = createRafScheduler((payload: MovePayload) => {
+                          const primaryOrigin = payload.originById[payload.elementId];
+                          if (!primaryOrigin) return;
+                          const primaryTarget =
+                            elements.find((item) => item.elementId === payload.elementId) ?? null;
+                          if (!primaryTarget) return;
+                          let nextPrimaryX = payload.nextPrimaryX;
+                          let nextPrimaryY = payload.nextPrimaryY;
+                          if (snapToGrid) {
+                            nextPrimaryX =
+                              Math.round(nextPrimaryX / documentGridSize) * documentGridSize;
+                            nextPrimaryY =
+                              Math.round(nextPrimaryY / documentGridSize) * documentGridSize;
+                          }
+                          const snapped = snapMove(
+                            page,
+                            primaryTarget,
+                            nextPrimaryX,
+                            nextPrimaryY,
+                            nonMovingElements,
+                            scale,
+                          );
+                          latestMovePayload = {
+                            ...payload,
+                            nextPrimaryX: snapped.x,
+                            nextPrimaryY: snapped.y,
+                          };
+                          setLiveSnapState(snapped.snapLines, snapped.snapTargetIds);
+                          applyMovePreview(
+                            canvas,
+                            payload.moveIds,
+                            snapped.x - primaryOrigin.x,
+                            snapped.y - primaryOrigin.y,
+                            scale,
+                            previewCache,
+                          );
+                        });
                         const onMouseMove = (moveEvent: MouseEvent) => {
                           const point = getCanvasPoint(
                             canvas,
@@ -3761,9 +4402,9 @@ function DesignStage({
                               nextPrimaryY = originById[element.elementId].y;
                             else nextPrimaryX = originById[element.elementId].x;
                           }
-                          onMove({
+                          scheduleMovePreview({
                             elementId: element.elementId,
-                            moveIds: Array.from(moveIds),
+                            moveIds: moveIdsArray,
                             originById,
                             nextPrimaryX,
                             nextPrimaryY,
@@ -3772,7 +4413,13 @@ function DesignStage({
                         const onMouseUp = () => {
                           window.removeEventListener("mousemove", onMouseMove);
                           window.removeEventListener("mouseup", onMouseUp);
+                          scheduleMovePreview.flush();
+                          if (latestMovePayload) onMove(latestMovePayload);
                           onMoveCommit();
+                          clearPreviewSnapState();
+                          window.requestAnimationFrame(() =>
+                            resetPreviewMarkers(canvas, { restoreTransform: true }),
+                          );
                         };
                         window.addEventListener("mousemove", onMouseMove);
                         window.addEventListener("mouseup", onMouseUp);
@@ -3786,27 +4433,21 @@ function DesignStage({
                         border: isSnapTarget
                           ? "2px solid rgba(236,72,153,0.9)"
                           : selected
-                            ? "1px solid rgba(37,99,235,0.95)"
-                            : visibleBounds
-                              ? "1px dashed rgba(15,23,42,0.28)"
-                              : "1px solid transparent",
-                        outline: primary ? "2px solid rgba(37,99,235,0.95)" : undefined,
-                        outlineOffset: primary ? 3 : undefined,
+                            ? "1px solid rgba(124,58,237,0.9)"
+                            : "1px solid transparent",
                         background: isSnapTarget
                           ? "rgba(236,72,153,0.08)"
                           : selected
-                            ? "rgba(59,130,246,0.06)"
+                            ? "rgba(124,58,237,0.025)"
                             : "transparent",
                         cursor: element.locked ? "default" : "move",
                         boxSizing: "border-box",
                         boxShadow: selected
-                          ? "0 0 0 1px rgba(255,255,255,0.95), 0 8px 22px rgba(15,23,42,0.12)"
-                          : visibleBounds
-                            ? "inset 0 0 0 1px rgba(255,255,255,0.7)"
-                            : undefined,
+                          ? "0 0 0 1px rgba(124,58,237,0.16)"
+                          : undefined,
                       }}
                     >
-                      {visibleBounds && !isEditingText && !isCropTarget ? (
+                      {visibleBounds && (selected || primary) && !isEditingText && !isCropTarget ? (
                         <>
                           <div
                             className="pointer-events-none absolute left-1 top-1 z-20 rounded bg-slate-950/70 px-1.5 py-0.5 text-[10px] font-medium text-white opacity-80"
@@ -3931,34 +4572,57 @@ function DesignStage({
                                 startPoint.x - centerX,
                               );
                               const originRotation = element.rotation ?? 0;
+                              const previewCache = createPreviewNodeCache(canvas, [
+                                element.elementId,
+                              ]);
+                              let latestRotatePayload: ResizePayload | null = null;
+                              const scheduleRotate = createRafScheduler(
+                                (move: { clientX: number; clientY: number; shiftKey: boolean }) => {
+                                  const point = getCanvasPoint(
+                                    canvas,
+                                    scale,
+                                    move.clientX,
+                                    move.clientY,
+                                    0,
+                                    0,
+                                  );
+                                  const currentAngle = Math.atan2(
+                                    point.y - centerY,
+                                    point.x - centerX,
+                                  );
+                                  const deltaDeg = ((currentAngle - startAngle) * 180) / Math.PI;
+                                  const nextRotation = snapRotation(
+                                    Math.round(originRotation + deltaDeg),
+                                    move,
+                                  );
+                                  latestRotatePayload = {
+                                    elementId: element.elementId,
+                                    patch: {
+                                      rotation: nextRotation,
+                                    },
+                                  };
+                                  applyRotationPreview(
+                                    canvas,
+                                    element.elementId,
+                                    nextRotation - originRotation,
+                                    previewCache,
+                                  );
+                                },
+                              );
                               const onMouseMove = (moveEvent: MouseEvent) => {
-                                const point = getCanvasPoint(
-                                  canvas,
-                                  scale,
-                                  moveEvent.clientX,
-                                  moveEvent.clientY,
-                                  0,
-                                  0,
-                                );
-                                const currentAngle = Math.atan2(
-                                  point.y - centerY,
-                                  point.x - centerX,
-                                );
-                                const deltaDeg = ((currentAngle - startAngle) * 180) / Math.PI;
-                                onResize({
-                                  elementId: element.elementId,
-                                  patch: {
-                                    rotation: snapRotation(
-                                      Math.round(originRotation + deltaDeg),
-                                      moveEvent,
-                                    ),
-                                  },
+                                scheduleRotate({
+                                  clientX: moveEvent.clientX,
+                                  clientY: moveEvent.clientY,
+                                  shiftKey: moveEvent.shiftKey,
                                 });
                               };
                               const onMouseUp = () => {
                                 window.removeEventListener("mousemove", onMouseMove);
                                 window.removeEventListener("mouseup", onMouseUp);
+                                scheduleRotate.flush();
+                                if (latestRotatePayload) onResize(latestRotatePayload);
                                 onResizeCommit();
+                                window.requestAnimationFrame(() => resetPreviewMarkers(canvas));
                               };
                               window.addEventListener("mousemove", onMouseMove);
                               window.addEventListener("mouseup", onMouseUp);
@@ -3971,9 +4635,9 @@ function DesignStage({
                               height: 28,
                               marginLeft: -14,
                               borderRadius: 9999,
-                              border: "2px solid hsl(var(--primary))",
+                              border: "1px solid rgba(124,58,237,0.9)",
                               background: "#ffffff",
-                              boxShadow: "0 2px 8px rgba(15,23,42,0.18)",
+                              boxShadow: "0 0 0 1px rgba(124,58,237,0.16), 0 1px 4px rgba(15,23,42,0.14)",
                               display: "grid",
                               placeItems: "center",
                               cursor: "grab",
@@ -3988,6 +4652,9 @@ function DesignStage({
                               key={handle.key}
                               onMouseDown={(event) => {
                                 event.stopPropagation();
+                                const canvas = (event.currentTarget as HTMLElement).closest(
+                                  "[data-design-canvas]",
+                                ) as HTMLElement | null;
                                 const startX = event.clientX;
                                 const startY = event.clientY;
                                 const origin = {
@@ -3996,48 +4663,81 @@ function DesignStage({
                                   width: element.width,
                                   height: element.height,
                                 };
+                                const otherResizeElements = elements.filter(
+                                  (entry) => entry.elementId !== element.elementId,
+                                );
+                                const previewCache = createPreviewNodeCache(canvas, [
+                                  element.elementId,
+                                ]);
+                                let latestResizePayload: ResizePayload | null = null;
+                                const scheduleResize = createRafScheduler(
+                                  (move: {
+                                    clientX: number;
+                                    clientY: number;
+                                    shiftKey: boolean;
+                                    altKey: boolean;
+                                  }) => {
+                                    const dx = (move.clientX - startX) / scale;
+                                    const dy = (move.clientY - startY) / scale;
+                                    const draft = applyResizeModifiers(
+                                      origin,
+                                      handle.key,
+                                      dx,
+                                      dy,
+                                      move.shiftKey,
+                                      move.altKey,
+                                    );
+                                    const snapped = snapResize(
+                                      page,
+                                      element.elementId,
+                                      handle.key,
+                                      {
+                                        x: draft.x,
+                                        y: draft.y,
+                                        width: draft.width,
+                                        height: draft.height,
+                                      },
+                                      otherResizeElements,
+                                      scale,
+                                    );
+                                    latestResizePayload = {
+                                      elementId: element.elementId,
+                                      patch: {
+                                        x: snapped.x,
+                                        y: snapped.y,
+                                        width: snapped.width,
+                                        height: snapped.height,
+                                      },
+                                      snapLines: snapped.snapLines,
+                                      snapTargetIds: snapped.snapTargetIds,
+                                    };
+                                    setLiveSnapState(snapped.snapLines, snapped.snapTargetIds);
+                                    applyResizePreview(
+                                      canvas,
+                                      element.elementId,
+                                      snapped,
+                                      scale,
+                                      true,
+                                      previewCache,
+                                    );
+                                  },
+                                );
                                 const onMouseMove = (moveEvent: MouseEvent) => {
-                                  const dx = (moveEvent.clientX - startX) / scale;
-                                  const dy = (moveEvent.clientY - startY) / scale;
-                                  const draft = applyResizeModifiers(
-                                    origin,
-                                    handle.key,
-                                    dx,
-                                    dy,
-                                    moveEvent.shiftKey,
-                                    moveEvent.altKey,
-                                  );
-                                  const snapped = snapResize(
-                                    page,
-                                    element.elementId,
-                                    handle.key,
-                                    {
-                                      x: draft.x,
-                                      y: draft.y,
-                                      width: draft.width,
-                                      height: draft.height,
-                                    },
-                                    elements.filter(
-                                      (entry) => entry.elementId !== element.elementId,
-                                    ),
-                                    scale,
-                                  );
-                                  onResize({
-                                    elementId: element.elementId,
-                                    patch: {
-                                      x: snapped.x,
-                                      y: snapped.y,
-                                      width: snapped.width,
-                                      height: snapped.height,
-                                    },
-                                    snapLines: snapped.snapLines,
-                                    snapTargetIds: snapped.snapTargetIds,
+                                  scheduleResize({
+                                    clientX: moveEvent.clientX,
+                                    clientY: moveEvent.clientY,
+                                    shiftKey: moveEvent.shiftKey,
+                                    altKey: moveEvent.altKey,
                                   });
                                 };
                                 const onMouseUp = () => {
                                   window.removeEventListener("mousemove", onMouseMove);
                                   window.removeEventListener("mouseup", onMouseUp);
+                                  scheduleResize.flush();
+                                  if (latestResizePayload) onResize(latestResizePayload);
                                   onResizeCommit();
+                                  clearPreviewSnapState();
+                                  window.requestAnimationFrame(() => resetPreviewMarkers(canvas));
                                 };
                                 window.addEventListener("mousemove", onMouseMove);
                                 window.addEventListener("mouseup", onMouseUp);
@@ -4048,8 +4748,8 @@ function DesignStage({
                                 height: 16,
                                 borderRadius: 4,
                                 background: "#ffffff",
-                                border: "2px solid hsl(var(--primary))",
-                                boxShadow: "0 2px 6px rgba(15,23,42,0.15)",
+                                border: "1px solid rgba(124,58,237,0.9)",
+                                boxShadow: "0 0 0 1px rgba(124,58,237,0.16), 0 1px 4px rgba(15,23,42,0.12)",
                                 cursor: handle.cursor,
                                 zIndex: 20,
                                 ...handle.style,
@@ -4069,9 +4769,11 @@ function DesignStage({
                   );
                 })}
 
-              {bounds ? (
+              {bounds && selectedIds.length > 1 ? (
                 <div
-                  className="absolute rounded-md border-2 border-dashed border-primary/70"
+                  data-selection-bounds
+                  data-selection-preview
+                  className="absolute rounded-sm border border-dashed border-primary/70"
                   style={{
                     left: bounds.x * scale - 6,
                     top: bounds.y * scale - 6,
@@ -4080,52 +4782,93 @@ function DesignStage({
                     pointerEvents: selectedIds.length > 1 ? "auto" : "none",
                   }}
                 >
-                  {/* Multi-select resize handles */}
-                  {selectedIds.length > 1
-                    ? RESIZE_HANDLES.map((handle) => (
+                  {RESIZE_HANDLES.map((handle) => (
                         <button
                           key={handle.key}
                           onMouseDown={(event) => {
                             event.stopPropagation();
+                            const canvas = (event.currentTarget as HTMLElement).closest(
+                              "[data-design-canvas]",
+                            ) as HTMLElement | null;
                             const startX = event.clientX;
                             const startY = event.clientY;
                             const origBounds = { ...bounds };
                             const origElements = selectedIds
                               .map((id) => elements.find((e) => e.elementId === id))
                               .filter((e): e is DesignElement => !!e);
+                            const previewCache = createPreviewNodeCache(canvas, selectedIds);
 
-                            const onMouseMove = (moveEvent: MouseEvent) => {
-                              const dx = (moveEvent.clientX - startX) / scale;
-                              const dy = (moveEvent.clientY - startY) / scale;
-                              const draft = applyResizeModifiers(
-                                origBounds,
-                                handle.key,
-                                dx,
-                                dy,
-                                moveEvent.shiftKey,
-                                moveEvent.altKey,
-                              );
-                              // Scale each element proportionally
-                              const sx = draft.width / Math.max(origBounds.width, 1);
-                              const sy = draft.height / Math.max(origBounds.height, 1);
-                              for (const el of origElements) {
-                                const relX = el.x - origBounds.x;
-                                const relY = el.y - origBounds.y;
-                                onResize({
-                                  elementId: el.elementId,
-                                  patch: {
+                            let latestMultiResizePayloads: ResizePayload[] = [];
+                            const scheduleMultiResize = createRafScheduler(
+                              (move: {
+                                clientX: number;
+                                clientY: number;
+                                shiftKey: boolean;
+                                altKey: boolean;
+                              }) => {
+                                const dx = (move.clientX - startX) / scale;
+                                const dy = (move.clientY - startY) / scale;
+                                const draft = applyResizeModifiers(
+                                  origBounds,
+                                  handle.key,
+                                  dx,
+                                  dy,
+                                  move.shiftKey,
+                                  move.altKey,
+                                );
+                                // Scale each element proportionally
+                                const sx = draft.width / Math.max(origBounds.width, 1);
+                                const sy = draft.height / Math.max(origBounds.height, 1);
+                                latestMultiResizePayloads = [];
+                                for (const el of origElements) {
+                                  const relX = el.x - origBounds.x;
+                                  const relY = el.y - origBounds.y;
+                                  const nextRect = {
                                     x: draft.x + relX * sx,
                                     y: draft.y + relY * sy,
                                     width: Math.max(20, el.width * sx),
                                     height: Math.max(20, el.height * sy),
-                                  },
-                                });
-                              }
+                                  };
+                                  latestMultiResizePayloads.push({
+                                    elementId: el.elementId,
+                                    patch: nextRect,
+                                  });
+                                  applyResizePreview(
+                                    canvas,
+                                    el.elementId,
+                                    nextRect,
+                                    scale,
+                                    false,
+                                    previewCache,
+                                  );
+                                }
+                                const boundsNode =
+                                  previewCache.selectionBoundsNode ??
+                                  canvas?.querySelector<HTMLElement>("[data-selection-bounds]");
+                                if (boundsNode) {
+                                  markPreviewNode(boundsNode, "left, top, width, height");
+                                  boundsNode.style.left = `${draft.x * scale - 6}px`;
+                                  boundsNode.style.top = `${draft.y * scale - 6}px`;
+                                  boundsNode.style.width = `${draft.width * scale + 12}px`;
+                                  boundsNode.style.height = `${draft.height * scale + 12}px`;
+                                }
+                              },
+                            );
+                            const onMouseMove = (moveEvent: MouseEvent) => {
+                              scheduleMultiResize({
+                                clientX: moveEvent.clientX,
+                                clientY: moveEvent.clientY,
+                                shiftKey: moveEvent.shiftKey,
+                                altKey: moveEvent.altKey,
+                              });
                             };
                             const onMouseUp = () => {
                               window.removeEventListener("mousemove", onMouseMove);
                               window.removeEventListener("mouseup", onMouseUp);
+                              scheduleMultiResize.flush();
+                              onResizeMany(latestMultiResizePayloads);
                               onResizeCommit();
+                              window.requestAnimationFrame(() => resetPreviewMarkers(canvas));
                             };
                             window.addEventListener("mousemove", onMouseMove);
                             window.addEventListener("mouseup", onMouseUp);
@@ -4136,15 +4879,14 @@ function DesignStage({
                             height: 16,
                             borderRadius: 4,
                             background: "#ffffff",
-                            border: "2px solid hsl(var(--primary))",
-                            boxShadow: "0 2px 6px rgba(15,23,42,0.15)",
+                            border: "1px solid rgba(124,58,237,0.9)",
+                            boxShadow: "0 0 0 1px rgba(124,58,237,0.16), 0 1px 4px rgba(15,23,42,0.12)",
                             cursor: handle.cursor,
                             zIndex: 20,
                             ...handle.style,
                           }}
                         />
-                      ))
-                    : null}
+                      ))}
                 </div>
               ) : null}
 
@@ -4175,6 +4917,7 @@ function DesignStage({
                 const opacity = primaryEl.style?.opacity ?? 1;
                 return (
                   <div
+                    data-selection-preview
                     className="pointer-events-auto absolute z-30 flex items-center gap-2 rounded-md border bg-card px-2 py-1 shadow"
                     style={{
                       left: bounds.x * scale,
@@ -4208,6 +4951,60 @@ function DesignStage({
   );
 }
 
+function InspectorSection({
+  title,
+  action,
+  children,
+}: {
+  title: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="rounded-xl border bg-card p-3">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          {title}
+        </Label>
+        {action}
+      </div>
+      <div className="flex flex-col gap-3">{children}</div>
+    </section>
+  );
+}
+
+function CompactColorControl({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (color: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 rounded-lg border bg-background px-2 py-2">
+      <Label className="min-w-14 text-[11px] font-medium text-muted-foreground">{label}</Label>
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 min-w-0 flex-1 justify-start gap-2 px-2"
+          >
+            <span className="size-4 shrink-0 rounded-sm border" style={{ background: value }} />
+            <span className="truncate font-mono text-[11px]">{value}</span>
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-64 p-3">
+          <ColorPicker value={value} onChange={onChange} />
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
 function NumberField({
   label,
   value,
@@ -4224,14 +5021,14 @@ function NumberField({
   const factor = Math.pow(10, precision);
   const displayValue = Number.isFinite(value) ? Math.round(value * factor) / factor : 0;
   return (
-    <div className="space-y-1">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
+    <div className="flex flex-col gap-1">
+      <Label className="text-[11px] font-medium text-muted-foreground">{label}</Label>
       <div className="relative">
         <Input
           type="number"
           value={displayValue}
           step={precision > 0 ? 1 / factor : 1}
-          className="pr-8 tabular-nums"
+          className="h-8 pr-8 text-xs tabular-nums"
           onChange={(event) => onChange(Number(event.target.value) || 0)}
         />
         {suffix ? (

@@ -1,12 +1,19 @@
 import { useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from "react";
 import { nanoid } from "nanoid";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, saveBlob } from "@/storage/db";
-import { matchFilesToEntities, type MatchResult } from "@/features/data/imageMatcher";
-import { makeIdbSrc } from "@/storage/imageSrc";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { toast } from "sonner";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  FolderOpen,
+  ImagePlus,
+  RefreshCw,
+  Upload,
+  X,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -15,19 +22,23 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import { toast } from "sonner";
+import { matchFilesToEntities, type MatchResult } from "@/features/data/imageMatcher";
 import type { Asset, Entity } from "@/models";
+import { db, saveBlob } from "@/storage/db";
+import { makeIdbSrc } from "@/storage/imageSrc";
 
 interface PendingFile {
   file: File;
   relativePath?: string;
   match: MatchResult;
-  manualEntityId?: string | null; // override
+  manualEntityId?: string | null;
   role: Asset["role"];
 }
 
 const PREVIEW_PAGE_SIZE = 80;
 const PREVIEW_INCREMENT = 80;
+const EMPTY_ENTITIES: Entity[] = [];
+const EMPTY_ASSETS: Asset[] = [];
 
 function pendingKey(item: PendingFile): string {
   const path = item.relativePath || item.file.name;
@@ -48,10 +59,10 @@ async function collectDirectoryFiles(
   prefix = "",
 ): Promise<Array<{ file: File; relativePath: string }>> {
   const out: Array<{ file: File; relativePath: string }> = [];
-
   const entries = directoryHandle as FileSystemDirectoryHandle & {
     values(): AsyncIterable<FileSystemDirectoryHandle | FileSystemFileHandle>;
   };
+
   for await (const entry of entries.values()) {
     if (entry.kind === "file") {
       const file = await entry.getFile();
@@ -110,7 +121,8 @@ async function buildPendingFiles(
 }
 
 export function BulkImageUpload() {
-  const entities = useLiveQuery(() => db.entities.toArray(), []) ?? [];
+  const entities = useLiveQuery(() => db.entities.toArray(), []) ?? EMPTY_ENTITIES;
+  const allAssets = useLiveQuery(() => db.assets.toArray(), []) ?? EMPTY_ASSETS;
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [pending, setPending] = useState<PendingFile[]>([]);
   const [threshold, setThreshold] = useState(0.78);
@@ -121,11 +133,12 @@ export function BulkImageUpload() {
   const previewUrlsRef = useRef(new Map<string, string>());
 
   useEffect(() => {
+    const previewUrls = previewUrlsRef.current;
     return () => {
-      for (const url of previewUrlsRef.current.values()) {
+      for (const url of previewUrls.values()) {
         URL.revokeObjectURL(url);
       }
-      previewUrlsRef.current.clear();
+      previewUrls.clear();
     };
   }, []);
 
@@ -148,31 +161,30 @@ export function BulkImageUpload() {
         changed = true;
       }
     }
-    if (changed) {
-      setPreviewVersion((value) => value + 1);
-    }
+    if (changed) setPreviewVersion((value) => value + 1);
   }, [pending, visiblePending]);
 
   const finishImportPrep = (next: PendingFile[]) => {
     setPending(next);
     setVisibleCount(Math.min(PREVIEW_PAGE_SIZE, next.length));
-    const matched = next.filter((p) => p.manualEntityId).length;
-    const needsReview = next.filter((p) => p.match.needsReview).length;
+    const matched = next.filter((item) => item.manualEntityId).length;
+    const needsReview = next.filter((item) => item.match.needsReview).length;
     toast.success(
-      `${next.length} ảnh • Khớp tự động: ${matched}/${next.length} • Cần review: ${needsReview}`,
+      `${next.length} ảnh, khớp tự động ${matched}/${next.length}, cần review ${needsReview}`,
     );
   };
 
   const onFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     if (entities.length === 0) {
-      toast.error("Chưa có quán nào. Hãy import dữ liệu CSV/Sheet trước.");
+      toast.error("Chưa có quán nào. Hãy import dữ liệu trước.");
       return;
     }
+
     setMatching(true);
     try {
       await yieldToBrowser();
-      const arr = Array.from(files)
+      const items = Array.from(files)
         .filter(isImageFile)
         .map((file) => ({
           file,
@@ -181,7 +193,7 @@ export function BulkImageUpload() {
               ? file.webkitRelativePath || undefined
               : undefined,
         }));
-      const next = await buildPendingFiles(arr, entities, threshold);
+      const next = await buildPendingFiles(items, entities, threshold);
       finishImportPrep(next);
     } finally {
       setMatching(false);
@@ -190,7 +202,7 @@ export function BulkImageUpload() {
 
   const onPickDirectory = async () => {
     if (entities.length === 0) {
-      toast.error("Chưa có quán nào. Hãy import dữ liệu CSV/Sheet trước.");
+      toast.error("Chưa có quán nào. Hãy import dữ liệu trước.");
       return;
     }
 
@@ -220,24 +232,24 @@ export function BulkImageUpload() {
 
   const rerunMatch = () => {
     if (pending.length === 0) return;
-    const matchInputs = pending.map((p) => ({
-      fileName: p.file.name,
+    const matchInputs = pending.map((item) => ({
+      fileName: item.file.name,
       relativePath:
-        "webkitRelativePath" in p.file && typeof p.file.webkitRelativePath === "string"
-          ? p.file.webkitRelativePath || undefined
+        "webkitRelativePath" in item.file && typeof item.file.webkitRelativePath === "string"
+          ? item.file.webkitRelativePath || undefined
           : undefined,
     }));
     const matches = matchFilesToEntities(matchInputs, entities, { fuzzyThreshold: threshold });
     setPending(
-      pending.map((p, i) => ({
-        ...p,
-        match: matches[i],
-        manualEntityId: matches[i].autoAssign ? matches[i].matchedEntityId : null,
+      pending.map((item, index) => ({
+        ...item,
+        match: matches[index],
+        manualEntityId: matches[index].autoAssign ? matches[index].matchedEntityId : null,
       })),
     );
-    const matched = matches.filter((m) => m.autoAssign && m.matchedEntityId).length;
-    const needsReview = matches.filter((m) => m.needsReview).length;
-    toast.success(`Đã match lại: ${matched}/${matches.length} • Cần review: ${needsReview}`);
+    const matched = matches.filter((match) => match.autoAssign && match.matchedEntityId).length;
+    const needsReview = matches.filter((match) => match.needsReview).length;
+    toast.success(`Đã match lại: ${matched}/${matches.length}, cần review ${needsReview}`);
   };
 
   const setManual = (idx: number, entityId: string | null) => {
@@ -253,29 +265,29 @@ export function BulkImageUpload() {
   };
 
   const removeRow = (idx: number) => {
-    setPending(pending.filter((_, i) => i !== idx));
+    setPending(pending.filter((_, index) => index !== idx));
   };
 
   const importAll = async () => {
-    const ready = pending.filter((p) => p.manualEntityId);
+    const ready = pending.filter((item) => item.manualEntityId);
     if (ready.length === 0) {
       toast.error("Không có ảnh nào đã được gán quán");
       return;
     }
+
     setBusy(true);
     try {
       const newAssets: Asset[] = [];
-      // Đếm sẵn cover hiện tại của từng entity để không tạo trùng cover
       const coverCount: Record<string, number> = {};
       const existing = await db.assets.toArray();
-      for (const a of existing) {
-        if (a.isCover) coverCount[a.entityId] = (coverCount[a.entityId] ?? 0) + 1;
+      for (const asset of existing) {
+        if (asset.isCover) coverCount[asset.entityId] = (coverCount[asset.entityId] ?? 0) + 1;
       }
 
-      for (const p of ready) {
-        const entityId = p.manualEntityId!;
-        const blobKey = await saveBlob(p.file);
-        const isCover = p.role === "cover" && (coverCount[entityId] ?? 0) === 0;
+      for (const item of ready) {
+        const entityId = item.manualEntityId!;
+        const blobKey = await saveBlob(item.file);
+        const isCover = item.role === "cover" && (coverCount[entityId] ?? 0) === 0;
         if (isCover) coverCount[entityId] = (coverCount[entityId] ?? 0) + 1;
         newAssets.push({
           assetId: nanoid(),
@@ -283,66 +295,41 @@ export function BulkImageUpload() {
           sourceType: "local",
           sourceValue: makeIdbSrc(blobKey),
           blobKey,
-          role: p.role,
+          role: item.role,
           isCover,
           qualityScore: 80,
           status: "ok",
         });
       }
+
       await db.assets.bulkPut(newAssets);
       toast.success(
-        `Đã import ${newAssets.length} ảnh local vào ${new Set(newAssets.map((a) => a.entityId)).size} quán`,
+        `Đã import ${newAssets.length} ảnh vào ${new Set(newAssets.map((asset) => asset.entityId)).size} quán`,
       );
       setPending([]);
-    } catch (e) {
-      toast.error("Lỗi khi import: " + (e as Error).message);
+    } catch (error) {
+      toast.error("Lỗi khi import: " + (error as Error).message);
     } finally {
       setBusy(false);
     }
   };
 
-  const matchedCount = pending.filter((p) => p.manualEntityId).length;
-
-  // Báo cáo: quán nào còn thiếu ảnh
-  const allAssets = useLiveQuery(() => db.assets.toArray(), []) ?? [];
+  const matchedCount = pending.filter((item) => item.manualEntityId).length;
   const entitiesWithoutImage = entities.filter(
-    (e) => !allAssets.some((a) => a.entityId === e.entityId),
+    (entity) => !allAssets.some((asset) => asset.entityId === entity.entityId),
   );
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Upload ảnh local hàng loạt + Auto-match theo tên quán</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="text-sm text-muted-foreground space-y-1">
-            <p>
-              1. Đặt tên file ảnh theo tên quán (có thể bỏ dấu, dùng <code>-1</code>,{" "}
-              <code>-2</code> cho ảnh phụ).
-            </p>
-            <p>
-              2. Có thể chọn nhiều ảnh hoặc chọn cả thư mục ảnh quán. App sẽ tự gán ảnh vào đúng
-              quán nếu confidence đủ mạnh.
-            </p>
-            <p>
-              3. Các match yếu sẽ để trống và gắn nhãn cần review để bạn kiểm tra trước khi Import.
-            </p>
-            <p>
-              Gợi ý chuẩn hoá lâu dài: <code>Tên-sheet/Tên-quán/ảnh-1.jpg</code>,{" "}
-              <code>Tên-sheet/Tên-quán/ảnh-2.jpg</code>. App sẽ ưu tiên match theo tên thư mục quán,
-              rồi mới fallback sang tên file.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3 flex-wrap">
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={(e) => onFiles(e.target.files)}
-              className="text-sm"
-            />
+    <div className="flex flex-col gap-4">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle>Ghép ảnh vào quán</CardTitle>
+            <CardDescription>
+              Match theo tên thư mục hoặc tên file, sau đó review nhanh trước khi import.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
             <input
               ref={(node) => {
                 folderInputRef.current = node;
@@ -355,201 +342,279 @@ export function BulkImageUpload() {
                 webkitdirectory: "true",
                 directory: "true",
               } as unknown as InputHTMLAttributes<HTMLInputElement>)}
-              onChange={(e) => {
-                onFiles(e.target.files);
-                e.currentTarget.value = "";
+              onChange={(event) => {
+                void onFiles(event.target.files);
+                event.currentTarget.value = "";
               }}
             />
-            <Button type="button" variant="outline" size="sm" onClick={onPickDirectory}>
-              Chọn thư mục ảnh
-            </Button>
-            <div className="flex items-center gap-2 text-xs">
-              <span>Ngưỡng fuzzy:</span>
-              <div className="w-32">
-                <Slider
-                  value={[threshold * 100]}
-                  min={50}
-                  max={95}
-                  step={1}
-                  onValueChange={(v) => setThreshold(v[0] / 100)}
+
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative inline-flex">
+                <Button type="button" disabled={matching}>
+                  <ImagePlus /> Chọn ảnh
+                </Button>
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  disabled={matching}
+                  aria-label="Chọn ảnh"
+                  className="absolute inset-0 cursor-pointer opacity-0 disabled:pointer-events-none"
+                  onChange={(event) => {
+                    void onFiles(event.target.files);
+                    event.currentTarget.value = "";
+                  }}
                 />
               </div>
-              <span className="font-mono">{Math.round(threshold * 100)}%</span>
+              <Button type="button" variant="outline" onClick={onPickDirectory} disabled={matching}>
+                <FolderOpen /> Chọn thư mục
+              </Button>
               <Button
-                size="sm"
                 variant="outline"
                 onClick={rerunMatch}
-                disabled={pending.length === 0}
+                disabled={pending.length === 0 || matching}
               >
-                Match lại
+                <RefreshCw /> Match lại
               </Button>
             </div>
-          </div>
 
-          {matching && (
-            <div className="rounded border bg-muted/30 p-3 text-sm text-muted-foreground">
-              Đang đọc và match thư mục ảnh. Với folder lớn vài trăm ảnh, bước này có thể mất một
-              lúc.
-            </div>
-          )}
-
-          {pending.length > 0 && (
-            <div className="border rounded">
-              <div className="flex items-center justify-between p-2 bg-muted text-sm">
-                <span>
-                  {pending.length} file • Đã gán: <strong>{matchedCount}</strong> • Chưa gán:{" "}
-                  <strong>{pending.length - matchedCount}</strong>
-                </span>
-                <div className="flex gap-2">
-                  <Badge variant="outline">
-                    Hiển thị {Math.min(visibleCount, pending.length)}/{pending.length}
-                  </Badge>
-                  {visibleCount < pending.length && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        setVisibleCount((count) =>
-                          Math.min(count + PREVIEW_INCREMENT, pending.length),
-                        )
-                      }
-                    >
-                      Xem thêm {Math.min(PREVIEW_INCREMENT, pending.length - visibleCount)}
-                    </Button>
-                  )}
-                  <Button size="sm" variant="ghost" onClick={() => setPending([])}>
-                    Xoá hết
-                  </Button>
-                  <Button size="sm" onClick={importAll} disabled={busy || matchedCount === 0}>
-                    Import {matchedCount} ảnh
-                  </Button>
+            <div className="rounded-lg border bg-muted/20 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">Độ khớp tên</div>
+                  <div className="text-xs text-muted-foreground">
+                    Cao hơn thì ít match sai hơn, nhưng cần review nhiều hơn.
+                  </div>
                 </div>
+                <Badge variant="secondary">{Math.round(threshold * 100)}%</Badge>
               </div>
-              <div className="max-h-96 overflow-y-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-muted/50 sticky top-0">
-                    <tr>
-                      <th className="text-left p-2">Preview</th>
-                      <th className="text-left p-2">Tên file</th>
-                      <th className="text-left p-2">Match</th>
-                      <th className="text-left p-2">Quán (chỉnh tay nếu sai)</th>
-                      <th className="text-left p-2">Vai trò</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visiblePending.map((p, idx) => (
-                      <tr key={pendingKey(p)} className="border-t">
-                        <td className="p-2">
-                          <img
-                            src={previewUrlsRef.current.get(pendingKey(p))}
-                            alt=""
-                            className="w-12 h-12 object-cover rounded"
-                          />
-                        </td>
-                        <td className="p-2 font-mono max-w-48 truncate">{p.file.name}</td>
-                        <td className="p-2">
-                          <div className="space-y-1">
-                            <Badge
-                              variant={
-                                p.match.reason === "exact"
-                                  ? "default"
-                                  : p.match.reason === "no_match"
-                                    ? "destructive"
-                                    : p.match.needsReview
-                                      ? "outline"
-                                      : "secondary"
-                              }
-                            >
-                              {p.match.reason === "exact" && "Khớp 100%"}
-                              {p.match.reason === "contains" && `Chứa ${p.match.score}%`}
-                              {p.match.reason === "fuzzy" && `Gần đúng ${p.match.score}%`}
-                              {p.match.reason === "no_match" && "Không khớp"}
-                            </Badge>
-                            {p.match.needsReview && (
-                              <div className="text-[10px] text-amber-600">Cần review</div>
-                            )}
-                            {p.match.relativePath && (
-                              <div className="max-w-40 truncate text-[10px] text-muted-foreground">
-                                {p.match.relativePath}
-                              </div>
-                            )}
-                          </div>
-                        </td>
-                        <td className="p-2">
-                          <Select
-                            value={p.manualEntityId ?? "__none__"}
-                            onValueChange={(v) => setManual(idx, v === "__none__" ? null : v)}
-                          >
-                            <SelectTrigger className="h-7 w-56 text-xs">
-                              <SelectValue placeholder="-- chọn quán --" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__none__">— Bỏ qua —</SelectItem>
-                              {entities.map((e) => (
-                                <SelectItem key={e.entityId} value={e.entityId}>
-                                  {e.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </td>
-                        <td className="p-2">
-                          <Select
-                            value={p.role}
-                            onValueChange={(v) => setRole(idx, v as Asset["role"])}
-                          >
-                            <SelectTrigger className="h-7 w-32 text-xs">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="cover">cover</SelectItem>
-                              <SelectItem value="facade">facade</SelectItem>
-                              <SelectItem value="food_closeup">food_closeup</SelectItem>
-                              <SelectItem value="space">space</SelectItem>
-                              <SelectItem value="portrait">portrait</SelectItem>
-                              <SelectItem value="square_thumb">square_thumb</SelectItem>
-                              <SelectItem value="section_image">section_image</SelectItem>
-                              <SelectItem value="generic">generic</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </td>
-                        <td className="p-2">
-                          <Button size="sm" variant="ghost" onClick={() => removeRow(idx)}>
-                            ✕
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground">Thoáng</span>
+                <div className="min-w-32 flex-1">
+                  <Slider
+                    value={[threshold * 100]}
+                    min={50}
+                    max={95}
+                    step={1}
+                    onValueChange={(value) => setThreshold(value[0] / 100)}
+                  />
+                </div>
+                <span className="text-xs text-muted-foreground">Chặt</span>
               </div>
             </div>
-          )}
-        </CardContent>
-      </Card>
+
+            {matching && (
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
+                Đang đọc và match ảnh. Folder lớn có thể mất một lúc.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle>Tình trạng ảnh</CardTitle>
+            <CardDescription>{entities.length} quán trong dữ liệu hiện tại</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <div className="rounded-lg border p-3">
+              <div className="text-2xl font-semibold">{allAssets.length}</div>
+              <div className="text-sm text-muted-foreground">Ảnh đã import</div>
+            </div>
+            <div className="rounded-lg border p-3">
+              <div className="flex items-center gap-2">
+                <div className="text-2xl font-semibold">{entitiesWithoutImage.length}</div>
+                {entitiesWithoutImage.length === 0 ? (
+                  <CheckCircle2 className="text-primary" />
+                ) : (
+                  <AlertTriangle className="text-destructive" />
+                )}
+              </div>
+              <div className="text-sm text-muted-foreground">Quán thiếu ảnh</div>
+            </div>
+            {pending.length > 0 ? (
+              <div className="rounded-lg border p-3">
+                <div className="text-2xl font-semibold">
+                  {matchedCount}/{pending.length}
+                </div>
+                <div className="text-sm text-muted-foreground">Ảnh đã gán quán</div>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      </div>
+
+      {pending.length > 0 && (
+        <Card>
+          <CardHeader className="flex flex-col gap-3 pb-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <CardTitle>Review trước khi import</CardTitle>
+              <CardDescription>
+                {pending.length} file, {matchedCount} đã gán, {pending.length - matchedCount} chưa
+                gán.
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">
+                Hiển thị {Math.min(visibleCount, pending.length)}/{pending.length}
+              </Badge>
+              {visibleCount < pending.length && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    setVisibleCount((count) => Math.min(count + PREVIEW_INCREMENT, pending.length))
+                  }
+                >
+                  Xem thêm {Math.min(PREVIEW_INCREMENT, pending.length - visibleCount)}
+                </Button>
+              )}
+              <Button size="sm" variant="ghost" onClick={() => setPending([])}>
+                Bỏ danh sách
+              </Button>
+              <Button size="sm" onClick={importAll} disabled={busy || matchedCount === 0}>
+                <Upload /> Import {matchedCount} ảnh
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="max-h-[520px] overflow-auto">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-muted/80 backdrop-blur">
+                  <tr>
+                    <th className="p-3 text-left font-medium text-muted-foreground">Ảnh</th>
+                    <th className="p-3 text-left font-medium text-muted-foreground">File</th>
+                    <th className="p-3 text-left font-medium text-muted-foreground">Match</th>
+                    <th className="p-3 text-left font-medium text-muted-foreground">Quán</th>
+                    <th className="p-3 text-left font-medium text-muted-foreground">Vai trò</th>
+                    <th className="p-3" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {visiblePending.map((item, idx) => (
+                    <tr key={pendingKey(item)} className="border-t">
+                      <td className="p-3">
+                        <img
+                          src={previewUrlsRef.current.get(pendingKey(item))}
+                          alt=""
+                          className="size-12 rounded-md object-cover"
+                        />
+                      </td>
+                      <td className="max-w-64 p-3">
+                        <div className="truncate font-medium">{item.file.name}</div>
+                        {item.match.relativePath ? (
+                          <div className="truncate text-[11px] text-muted-foreground">
+                            {item.match.relativePath}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className="p-3">
+                        <div className="flex flex-col gap-1">
+                          <Badge
+                            variant={
+                              item.match.reason === "exact"
+                                ? "default"
+                                : item.match.reason === "no_match"
+                                  ? "destructive"
+                                  : item.match.needsReview
+                                    ? "outline"
+                                    : "secondary"
+                            }
+                            className="w-fit"
+                          >
+                            {item.match.reason === "exact" && "Khớp 100%"}
+                            {item.match.reason === "contains" && `Chứa ${item.match.score}%`}
+                            {item.match.reason === "fuzzy" && `Gần đúng ${item.match.score}%`}
+                            {item.match.reason === "no_match" && "Không khớp"}
+                          </Badge>
+                          {item.match.needsReview ? (
+                            <span className="text-[11px] text-muted-foreground">Cần review</span>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td className="p-3">
+                        <Select
+                          value={item.manualEntityId ?? "__none__"}
+                          onValueChange={(value) =>
+                            setManual(idx, value === "__none__" ? null : value)
+                          }
+                        >
+                          <SelectTrigger className="h-8 w-60 text-xs">
+                            <SelectValue placeholder="Chọn quán" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__">Bỏ qua</SelectItem>
+                            {entities.map((entity) => (
+                              <SelectItem key={entity.entityId} value={entity.entityId}>
+                                {entity.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </td>
+                      <td className="p-3">
+                        <Select
+                          value={item.role}
+                          onValueChange={(value) => setRole(idx, value as Asset["role"])}
+                        >
+                          <SelectTrigger className="h-8 w-36 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="cover">cover</SelectItem>
+                            <SelectItem value="facade">facade</SelectItem>
+                            <SelectItem value="food_closeup">food_closeup</SelectItem>
+                            <SelectItem value="space">space</SelectItem>
+                            <SelectItem value="portrait">portrait</SelectItem>
+                            <SelectItem value="square_thumb">square_thumb</SelectItem>
+                            <SelectItem value="section_image">section_image</SelectItem>
+                            <SelectItem value="generic">generic</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </td>
+                      <td className="p-3 text-right">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => removeRow(idx)}
+                          aria-label="Bỏ ảnh khỏi danh sách import"
+                        >
+                          <X />
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
-        <CardHeader>
-          <CardTitle>
-            Quán còn thiếu ảnh{" "}
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between gap-3">
+            <CardTitle>Quán còn thiếu ảnh</CardTitle>
             <Badge variant={entitiesWithoutImage.length === 0 ? "default" : "destructive"}>
               {entitiesWithoutImage.length}/{entities.length}
             </Badge>
-          </CardTitle>
+          </div>
         </CardHeader>
         <CardContent>
           {entitiesWithoutImage.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Tất cả quán đã có ít nhất 1 ảnh ✅</p>
+            <p className="text-sm text-muted-foreground">Tất cả quán đã có ít nhất 1 ảnh.</p>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-1 text-xs max-h-64 overflow-y-auto">
-              {entitiesWithoutImage.map((e) => (
-                <div key={e.entityId} className="flex items-center gap-2 p-1 bg-muted/50 rounded">
-                  <span className="font-mono text-muted-foreground">·</span>
-                  <span className="truncate">{e.name}</span>
-                  {e.partnerFlag && (
-                    <Badge variant="outline" className="text-[10px]">
-                      P
+            <div className="grid max-h-64 grid-cols-1 gap-2 overflow-y-auto text-sm md:grid-cols-2 xl:grid-cols-3">
+              {entitiesWithoutImage.map((entity) => (
+                <div
+                  key={entity.entityId}
+                  className="flex min-w-0 items-center gap-2 rounded-md border p-2"
+                >
+                  <span className="size-2 shrink-0 rounded-full bg-destructive" />
+                  <span className="truncate">{entity.name}</span>
+                  {entity.partnerFlag && (
+                    <Badge variant="outline" className="ml-auto">
+                      Đối tác
                     </Badge>
                   )}
                 </div>

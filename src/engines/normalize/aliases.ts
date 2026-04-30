@@ -9,11 +9,17 @@ export const FIELD_ALIASES: Record<string, string[]> = {
     "tên quán",
     "ten quan",
     "title",
+    "tieu_de",
+    "tieu de",
+    "hoat_dong",
+    "hoat dong",
     "tên địa điểm",
     "ten dia diem",
     "tên homestay",
     "ten homestay",
     "địa điểm",
+    "dia_diem",
+    "dia diem",
   ],
   categoryMain: [
     "category",
@@ -32,6 +38,8 @@ export const FIELD_ALIASES: Record<string, string[]> = {
     "loai dich vu",
     "dich_vu",
     "dịch vụ",
+    "danh_muc",
+    "danh muc",
   ],
   categorySub: [
     "sub",
@@ -42,18 +50,9 @@ export const FIELD_ALIASES: Record<string, string[]> = {
     "phong_cach",
     "phong cách",
   ],
-  address: [
-    "address",
-    "dia_chi",
-    "địa chỉ",
-    "dia chi",
-    "addr",
-    "vị trí",
-    "vi tri",
-    "location",
-  ],
-  phone: ["phone", "sdt", "hotline", "điện thoại", "dien_thoai"],
-  openingHours: ["hours", "gio_mo_cua", "giờ mở cửa", "open"],
+  address: ["address", "dia_chi", "địa chỉ", "dia chi", "addr", "vị trí", "vi tri", "location"],
+  phone: ["phone", "sdt", "hotline", "điện thoại", "dien_thoai", "so_dien_thoai"],
+  openingHours: ["hours", "gio_mo_cua", "giờ mở cửa", "open", "khung_gio", "khung gio"],
   priceRange: [
     "price",
     "gia",
@@ -64,25 +63,14 @@ export const FIELD_ALIASES: Record<string, string[]> = {
     "chi phí",
     "chi phi",
     "cost",
+    "gia_ve_tham_khao_vnd_ve",
+    "gia ve tham khao vnd ve",
   ],
   style: ["style"],
-  partnerFlag: [
-    "partner",
-    "doi_tac",
-    "đối tác",
-    "doi tac",
-    "sponsor",
-    "partnerFlag",
-  ],
+  partnerFlag: ["partner", "doi_tac", "đối tác", "doi tac", "sponsor", "partnerFlag"],
   partnerPriority: ["priority", "uu_tien", "ưu tiên", "partnerPriority"],
   partnerType: ["partnerType", "loai_doi_tac", "loại đối tác"],
-  campaignTags: [
-    "tags",
-    "campaign",
-    "campaignTags",
-    "chien_dich",
-    "chiến dịch",
-  ],
+  campaignTags: ["tags", "campaign", "campaignTags", "chien_dich", "chiến dịch"],
   seoKeywords: ["keywords", "seo", "seoKeywords"],
   signatureDish: [
     "mon_an_noi_bat",
@@ -91,6 +79,8 @@ export const FIELD_ALIASES: Record<string, string[]> = {
     "signature",
     "signatureDish",
     "highlight",
+    "noi_bat",
+    "noi bat",
   ],
   image: [
     "image",
@@ -110,15 +100,36 @@ export const FIELD_ALIASES: Record<string, string[]> = {
   images: ["images", "anh_phu", "ảnh phụ", "gallery"],
   // Cột tuỳ ý cho lịch trình du lịch — sẽ chui vào entity.metadata
   day: ["day", "ngày", "ngay", "ngay_thu", "day_no"],
-  description: ["description", "desc", "mô tả", "mo ta", "ghi chú", "ghi chu", "notes"],
+  description: [
+    "description",
+    "desc",
+    "mô tả",
+    "mo ta",
+    "ghi chú",
+    "ghi chu",
+    "notes",
+    "giai_thich",
+    "giai thich",
+  ],
 };
 
 export function normalizeKey(key: string): string {
-  const k = key.trim().toLowerCase();
+  const k = normalizeAliasToken(key);
   for (const [field, aliases] of Object.entries(FIELD_ALIASES)) {
-    if (aliases.some((a) => a.toLowerCase() === k)) return field;
+    if (aliases.some((a) => normalizeAliasToken(a) === k)) return field;
   }
   return key;
+}
+
+function normalizeAliasToken(value: string): string {
+  return value
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/gi, "d")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
 export function parseBool(v: unknown): boolean {
@@ -180,4 +191,3 @@ export const FIELD_LABELS_VI: Record<string, string> = {
 export function fieldLabelVi(key: string): string {
   return FIELD_LABELS_VI[key] ?? key;
 }
-

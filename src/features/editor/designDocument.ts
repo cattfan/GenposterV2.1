@@ -102,13 +102,28 @@ export function createBlankDesignDocument(params?: {
   };
 }
 
-function slotBindingToRef(slot: Slot): DataBindingRef | undefined {
+function isGeneratedCoverBackgroundSlot(slot: Slot, canvas: CanvasSize) {
+  if (slot.kind !== "image" || slot.bindingPath !== "asset.cover") return false;
+  const name = slot.name.toLowerCase();
+  const coversCanvas =
+    slot.x <= canvas.width * 0.05 &&
+    slot.y <= canvas.height * 0.05 &&
+    slot.width >= canvas.width * 0.84 &&
+    slot.height >= canvas.height * 0.84;
+  return slot.isUploadedBackground || name.includes("mood_background") || coversCanvas;
+}
+
+function staticImageForTemplateSlot(slot: Slot, canvas: CanvasSize): string | undefined {
+  return isGeneratedCoverBackgroundSlot(slot, canvas) ? undefined : slot.staticImage;
+}
+
+function slotBindingToRef(slot: Slot, canvas: CanvasSize): DataBindingRef | undefined {
   if (!slot.bindingPath) return undefined;
   return {
     source: "legacy_template",
     path: slot.bindingPath,
     fallbackText: slot.staticText,
-    fallbackImage: slot.staticImage,
+    fallbackImage: staticImageForTemplateSlot(slot, canvas),
     meta: {
       allowedAssetRoles: slot.allowedAssetRoles,
       overflowRule: slot.overflowRule,
@@ -117,7 +132,8 @@ function slotBindingToRef(slot: Slot): DataBindingRef | undefined {
   };
 }
 
-function slotToElement(slot: Slot, pageId: string): DesignElement {
+function slotToElement(slot: Slot, pageId: string, canvas: CanvasSize): DesignElement {
+  const staticImage = staticImageForTemplateSlot(slot, canvas);
   const common = {
     elementId: slot.slotId,
     pageId,
@@ -132,7 +148,7 @@ function slotToElement(slot: Slot, pageId: string): DesignElement {
     locked: slot.locked,
     hidden: !!slot.style?.hidden,
     style: slot.style ? clone(slot.style) : undefined,
-    binding: slotBindingToRef(slot),
+    binding: slotBindingToRef(slot, canvas),
     meta: {
       legacy: {
         slotKind: slot.kind,
@@ -171,7 +187,7 @@ function slotToElement(slot: Slot, pageId: string): DesignElement {
     return {
       ...common,
       kind: "image",
-      src: slot.staticImage,
+      src: staticImage,
       crop: slot.crop ? clone(slot.crop) : undefined,
     };
   }
@@ -181,7 +197,7 @@ function slotToElement(slot: Slot, pageId: string): DesignElement {
       ...common,
       kind: "shape",
       shapeKind: slot.shapeKind,
-      src: slot.staticImage,
+      src: staticImage,
       crop: slot.crop ? clone(slot.crop) : undefined,
       text: slot.staticText,
     };
@@ -340,7 +356,7 @@ export function pageTemplateToDesignDocument(
     designDocumentId: template.pageTemplateId,
     name: template.name,
     pages: [page],
-    elements: template.slots.map((slot) => slotToElement(slot, page.pageId)),
+    elements: template.slots.map((slot) => slotToElement(slot, page.pageId, template.canvas)),
     activePageId: page.pageId,
     mode,
     sourcePageTemplateId: template.pageTemplateId,

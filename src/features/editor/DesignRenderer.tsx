@@ -1,4 +1,4 @@
-import type { CSSProperties, Ref } from "react";
+import { memo, type CSSProperties, type Ref } from "react";
 import type { DesignElement, DesignPage, ElementStyle } from "@/models";
 import {
   buildBorder,
@@ -20,6 +20,7 @@ export function DesignRenderer({
   className,
   innerRef,
   suppressElementIds = [],
+  showGuides = false,
 }: {
   page: DesignPage;
   elements: DesignElement[];
@@ -27,6 +28,7 @@ export function DesignRenderer({
   className?: string;
   innerRef?: Ref<HTMLDivElement>;
   suppressElementIds?: string[];
+  showGuides?: boolean;
 }) {
   const ordered = elements
     .filter((element) => !element.hidden && !suppressElementIds.includes(element.elementId))
@@ -49,7 +51,12 @@ export function DesignRenderer({
       }}
     >
       {ordered.map((element) => (
-        <DesignElementNode key={element.elementId} element={element} scale={scale} />
+        <DesignElementNode
+          key={element.elementId}
+          element={element}
+          scale={scale}
+          showGuides={showGuides}
+        />
       ))}
     </div>
   );
@@ -70,6 +77,7 @@ function baseElementStyle(element: DesignElement, scale: number): CSSProperties 
     transformOrigin: "center",
     opacity: element.style?.opacity ?? 1,
     boxShadow: buildBoxShadow(element.style, scale),
+    contain: "layout paint style",
   };
 }
 
@@ -79,60 +87,227 @@ function resolveAssetSrc(src: string | undefined): string | undefined {
   return src;
 }
 
-function DesignElementNode({ element, scale }: { element: DesignElement; scale: number }) {
-  const style = baseElementStyle(element, scale);
+function displayEditorText(text: string | undefined): string {
+  const raw = String(text ?? "");
+  const token = raw.trim().match(/^\{\{([a-z0-9_]+)\}\}$/i)?.[1];
+  if (!token) return raw;
+  const base = token.replace(/_\d+$/g, "");
+  const labels: Record<string, string> = {
+    title: "Tiêu đề",
+    subtitle: "Mô tả ngắn",
+    eyebrow: "Nhãn nhỏ",
+    cta: "CTA",
+    section_title: "Tiêu đề nhóm",
+    items_group: "Nhóm nội dung",
+    name: "Tên mục",
+    address: "Địa chỉ",
+    phone: "Số điện thoại",
+    price: "Giá",
+    hours: "Giờ mở cửa",
+    category: "Danh mục",
+    subcategory: "Nhóm phụ",
+    signature_dish: "Món nổi bật",
+    description: "Mô tả",
+    text: "Text mới",
+  };
+  if (base.startsWith("title")) return "Tiêu đề";
+  if (base.startsWith("item")) return "Mục";
+  if (base.includes("image")) return "Ảnh";
+  return labels[base] ?? token.replace(/_\d+$/g, "").replace(/_/g, " ");
+}
+
+function shouldSuppressGeneratedCoverSrc(element: DesignElement): boolean {
+  if (element.kind !== "image" && element.kind !== "shape") return false;
   const legacyMeta = (element.meta?.legacy ?? {}) as Record<string, unknown>;
-  const resolvedSrc = useResolvedImageSrc(
-    element.kind === "image" || element.kind === "shape" ? element.src : undefined,
+  return (
+    element.binding?.path === "asset.cover" &&
+    (legacyMeta.isUploadedBackground === true ||
+      element.name.toLowerCase().includes("mood_background"))
   );
+}
 
-  if (element.kind === "text") {
-    const textStyle = buildTextStyle(element.style, scale);
-    return (
-      <div
-        style={{
-          ...style,
-          ...textStyle,
-        }}
-      >
-        {element.text}
-      </div>
+function isGeneratedBackgroundOverlayElement(element: DesignElement): boolean {
+  return element.kind === "shape" && element.name === "mood_background_overlay";
+}
+
+function EditorGuideBounds({ kind, show }: { kind: DesignElement["kind"]; show: boolean }) {
+  if (!show) return null;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        pointerEvents: "none",
+        zIndex: 2,
+        border: "1px dashed rgba(100,116,139,0.55)",
+        boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.75)",
+        background:
+          kind === "image"
+            ? "repeating-linear-gradient(135deg, rgba(59,130,246,0.08) 0, rgba(59,130,246,0.08) 8px, transparent 8px, transparent 16px)"
+            : "rgba(255,255,255,0.02)",
+      }}
+    />
+  );
+}
+
+const DesignElementNode = memo(
+  function DesignElementNode({
+    element,
+    scale,
+    showGuides,
+  }: {
+    element: DesignElement;
+    scale: number;
+    showGuides: boolean;
+  }) {
+    const style = baseElementStyle(element, scale);
+    const legacyMeta = (element.meta?.legacy ?? {}) as Record<string, unknown>;
+    const rawSrc = shouldSuppressGeneratedCoverSrc(element) ? undefined : element.src;
+    const resolvedSrc = useResolvedImageSrc(
+      element.kind === "image" || element.kind === "shape" ? rawSrc : undefined,
     );
-  }
 
-  if (element.kind === "image") {
-    const usableSrc =
-      resolvedSrc && !resolvedSrc.startsWith("idb://") ? resolvedSrc : resolveAssetSrc(element.src);
-    const fit = (
-      element.style?.fit === "stretch" ? "fill" : (element.style?.fit ?? "cover")
-    ) as CSSProperties["objectFit"];
-    const filter = buildCssFilter(element.style);
+    if (isGeneratedBackgroundOverlayElement(element)) {
+      return null;
+    }
 
-    return (
-      <div
-        style={{
-          ...style,
-          overflow: "hidden",
-          borderRadius: (element.style?.borderRadius ?? 0) * scale,
-        }}
-      >
-        {usableSrc ? (
-          element.crop ? (
-            <img
-              src={usableSrc}
-              alt=""
+    if (element.kind === "text") {
+      const textStyle = buildTextStyle(element.style, scale);
+      return (
+        <div
+          data-rendered-element-id={element.elementId}
+          style={{
+            ...style,
+            ...textStyle,
+          }}
+        >
+          {displayEditorText(element.text)}
+          <EditorGuideBounds kind={element.kind} show={showGuides} />
+        </div>
+      );
+    }
+
+    if (element.kind === "image") {
+      const usableSrc =
+        resolvedSrc && !resolvedSrc.startsWith("idb://") ? resolvedSrc : resolveAssetSrc(rawSrc);
+      if (shouldSuppressGeneratedCoverSrc(element) && !usableSrc) {
+        return null;
+      }
+      const fit = (
+        element.style?.fit === "stretch" ? "fill" : (element.style?.fit ?? "cover")
+      ) as CSSProperties["objectFit"];
+      const filter = buildCssFilter(element.style);
+
+      return (
+        <div
+          data-rendered-element-id={element.elementId}
+          style={{
+            ...style,
+            overflow: "hidden",
+            borderRadius: (element.style?.borderRadius ?? 0) * scale,
+          }}
+        >
+          {usableSrc ? (
+            element.crop ? (
+              <img
+                src={usableSrc}
+                alt=""
+                style={{
+                  position: "absolute",
+                  left: `${-element.crop.x * 100}%`,
+                  top: `${-element.crop.y * 100}%`,
+                  width: `${100 / element.crop.w}%`,
+                  height: `${100 / element.crop.h}%`,
+                  objectFit: "fill",
+                  filter,
+                  display: "block",
+                }}
+              />
+            ) : (
+              <img
+                src={usableSrc}
+                alt=""
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: fit,
+                  filter,
+                  display: "block",
+                }}
+              />
+            )
+          ) : (
+            <div
+              className="grid h-full place-items-center text-xs text-muted-foreground"
+              style={{
+                background:
+                  "repeating-linear-gradient(135deg, rgba(59,130,246,0.08) 0, rgba(59,130,246,0.08) 8px, transparent 8px, transparent 16px)",
+              }}
+            >
+              Image
+            </div>
+          )}
+          {element.style?.overlayColor && (
+            <div
               style={{
                 position: "absolute",
-                left: `${-element.crop.x * 100}%`,
-                top: `${-element.crop.y * 100}%`,
-                width: `${100 / element.crop.w}%`,
-                height: `${100 / element.crop.h}%`,
-                objectFit: "fill",
-                filter,
-                display: "block",
+                inset: 0,
+                background: element.style.overlayColor,
               }}
             />
-          ) : (
+          )}
+          <EditorGuideBounds kind={element.kind} show={showGuides} />
+        </div>
+      );
+    }
+
+    if (element.kind === "shape") {
+      const usableSrc =
+        resolvedSrc && !resolvedSrc.startsWith("idb://") ? resolvedSrc : resolveAssetSrc(rawSrc);
+      if (shouldSuppressGeneratedCoverSrc(element) && !usableSrc && !element.text) {
+        return null;
+      }
+      const gradient = buildGradient(element.style);
+      const fill = gradient ?? element.style?.fill ?? "#111827";
+      const border = buildBorder(element.style, scale);
+      const filter = buildCssFilter(element.style);
+      const radius = shapeBorderRadius(element.shapeKind, element.style?.borderRadius, scale);
+      const clipPath = element.shapeKind ? shapeClipPath(element.shapeKind) : undefined;
+      const fit = (
+        element.style?.fit === "stretch" ? "fill" : (element.style?.fit ?? "cover")
+      ) as CSSProperties["objectFit"];
+
+      if (element.shapeKind === "line" || element.shapeKind === "divider") {
+        return (
+          <div
+            data-rendered-element-id={element.elementId}
+            style={{
+              ...style,
+              height: Math.max(1, (element.style?.strokeWidth ?? 2) * scale),
+              top:
+                (element.y + element.height / 2) * scale -
+                Math.max(1, (element.style?.strokeWidth ?? 2) * scale) / 2,
+              background: fill,
+            }}
+          >
+            <EditorGuideBounds kind={element.kind} show={showGuides} />
+          </div>
+        );
+      }
+
+      return (
+        <div
+          data-rendered-element-id={element.elementId}
+          style={{
+            ...style,
+            overflow: "hidden",
+            background: usableSrc ? undefined : fill,
+            borderRadius: radius,
+            border: usableSrc ? undefined : border,
+            clipPath,
+          }}
+        >
+          {usableSrc && (
             <img
               src={usableSrc}
               alt=""
@@ -144,213 +319,150 @@ function DesignElementNode({ element, scale }: { element: DesignElement; scale: 
                 display: "block",
               }}
             />
-          )
-        ) : (
-          <div className="grid h-full place-items-center bg-muted/40 text-xs text-muted-foreground">
-            Image
-          </div>
-        )}
-        {element.style?.overlayColor && (
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              background: element.style.overlayColor,
-            }}
-          />
-        )}
-      </div>
-    );
-  }
-
-  if (element.kind === "shape") {
-    const usableSrc =
-      resolvedSrc && !resolvedSrc.startsWith("idb://") ? resolvedSrc : resolveAssetSrc(element.src);
-    const gradient = buildGradient(element.style);
-    const fill = gradient ?? element.style?.fill ?? "#111827";
-    const border = buildBorder(element.style, scale);
-    const filter = buildCssFilter(element.style);
-    const radius = shapeBorderRadius(element.shapeKind, element.style?.borderRadius, scale);
-    const clipPath = element.shapeKind ? shapeClipPath(element.shapeKind) : undefined;
-    const fit = (
-      element.style?.fit === "stretch" ? "fill" : (element.style?.fit ?? "cover")
-    ) as CSSProperties["objectFit"];
-
-    if (element.shapeKind === "line" || element.shapeKind === "divider") {
-      return (
-        <div
-          style={{
-            ...style,
-            height: Math.max(1, (element.style?.strokeWidth ?? 2) * scale),
-            top:
-              (element.y + element.height / 2) * scale -
-              Math.max(1, (element.style?.strokeWidth ?? 2) * scale) / 2,
-            background: fill,
-          }}
-        />
-      );
-    }
-
-    return (
-      <div
-        style={{
-          ...style,
-          overflow: "hidden",
-          background: usableSrc ? undefined : fill,
-          borderRadius: radius,
-          border: usableSrc ? undefined : border,
-          clipPath,
-        }}
-      >
-        {usableSrc && (
-          <img
-            src={usableSrc}
-            alt=""
-            style={{
-              width: "100%",
-              height: "100%",
-              objectFit: fit,
-              filter,
-              display: "block",
-            }}
-          />
-        )}
-        {element.style?.overlayColor && (
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              background: element.style.overlayColor,
-            }}
-          />
-        )}
-        {element.text ? (
-          <div
-            style={{
-              ...buildTextStyle(element.style, scale),
-              position: "absolute",
-              inset: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent:
-                element.style?.textAlign === "center"
-                  ? "center"
-                  : element.style?.textAlign === "right"
-                    ? "flex-end"
-                    : "flex-start",
-            }}
-          >
-            {element.text}
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
-  if (element.kind === "frame") {
-    const isLegacySection = legacyMeta.slotKind === "section";
-    return (
-      <div
-        style={{
-          ...style,
-          background: element.background ?? element.style?.background ?? "rgba(255,255,255,0.12)",
-          borderRadius: (element.style?.borderRadius ?? 16) * scale,
-          border: buildBorder(element.style, scale) ?? "1px dashed rgba(148,163,184,0.55)",
-          padding: (element.padding ?? element.style?.padding ?? 0) * scale,
-          overflow: "hidden",
-        }}
-      >
-        {isLegacySection ? (
-          <div className="grid h-full place-items-center text-center text-xs text-muted-foreground">
-            Section
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
-  if (element.kind === "group") {
-    return null;
-  }
-
-  if (element.kind === "icon") {
-    const Heroicon = getHeroiconComponent(element.iconName);
-    if (Heroicon) {
-      return (
-        <div
-          style={{
-            ...style,
-            color: element.style?.tint ?? element.style?.color ?? "#0f172a",
-          }}
-        >
-          <Heroicon style={{ width: "100%", height: "100%", display: "block" }} />
+          )}
+          {element.style?.overlayColor && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: element.style.overlayColor,
+              }}
+            />
+          )}
+          {element.text ? (
+            <div
+              style={{
+                ...buildTextStyle(element.style, scale),
+                position: "absolute",
+                inset: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent:
+                  element.style?.textAlign === "center"
+                    ? "center"
+                    : element.style?.textAlign === "right"
+                      ? "flex-end"
+                      : "flex-start",
+              }}
+            >
+              {displayEditorText(element.text)}
+            </div>
+          ) : null}
+          {!element.text ? <EditorGuideBounds kind={element.kind} show={showGuides} /> : null}
         </div>
       );
     }
 
-    if (element.svgContent) {
+    if (element.kind === "frame") {
+      const isLegacySection = legacyMeta.slotKind === "section";
       return (
         <div
           style={{
             ...style,
-            color: element.style?.tint ?? element.style?.color ?? "#0f172a",
+            background: element.background ?? element.style?.background ?? "rgba(255,255,255,0.12)",
+            borderRadius: (element.style?.borderRadius ?? 16) * scale,
+            border: buildBorder(element.style, scale) ?? "1px dashed rgba(148,163,184,0.55)",
+            padding: (element.padding ?? element.style?.padding ?? 0) * scale,
+            overflow: "hidden",
           }}
-          dangerouslySetInnerHTML={{ __html: element.svgContent }}
-        />
+        >
+          {isLegacySection ? (
+            <div className="grid h-full place-items-center text-center text-xs text-muted-foreground">
+              Section
+            </div>
+          ) : null}
+          <EditorGuideBounds kind={element.kind} show={showGuides} />
+        </div>
       );
     }
-  }
 
-  if (element.kind === "table") {
-    const cellWidth = element.width / Math.max(element.columns, 1);
-    const cellHeight = element.height / Math.max(element.rows, 1);
+    if (element.kind === "group") {
+      return null;
+    }
+
+    if (element.kind === "icon") {
+      const Heroicon = getHeroiconComponent(element.iconName);
+      if (Heroicon) {
+        return (
+          <div
+            style={{
+              ...style,
+              color: element.style?.tint ?? element.style?.color ?? "#0f172a",
+            }}
+          >
+            <Heroicon style={{ width: "100%", height: "100%", display: "block" }} />
+          </div>
+        );
+      }
+
+      if (element.svgContent) {
+        return (
+          <div
+            style={{
+              ...style,
+              color: element.style?.tint ?? element.style?.color ?? "#0f172a",
+            }}
+            dangerouslySetInnerHTML={{ __html: element.svgContent }}
+          />
+        );
+      }
+    }
+
+    if (element.kind === "table") {
+      const cellWidth = element.width / Math.max(element.columns, 1);
+      const cellHeight = element.height / Math.max(element.rows, 1);
+      return (
+        <div
+          style={{
+            ...style,
+            display: "grid",
+            gridTemplateColumns: `repeat(${element.columns}, 1fr)`,
+            gridTemplateRows: `repeat(${element.rows}, 1fr)`,
+            border: buildBorder(element.style, scale) ?? "1px solid rgba(148,163,184,0.6)",
+            background: element.style?.fill ?? "rgba(255,255,255,0.9)",
+          }}
+        >
+          {Array.from({ length: element.columns * element.rows }).map((_, index) => {
+            const cell = element.cells[index];
+            return (
+              <div
+                key={cell?.cellId ?? index}
+                style={{
+                  borderRight:
+                    index % element.columns === element.columns - 1
+                      ? undefined
+                      : "1px solid rgba(148,163,184,0.4)",
+                  borderBottom:
+                    index >= element.columns * (element.rows - 1)
+                      ? undefined
+                      : "1px solid rgba(148,163,184,0.4)",
+                  width: cellWidth * scale,
+                  height: cellHeight * scale,
+                  padding: 8 * scale,
+                  ...buildTextStyle(cell?.style as ElementStyle | undefined, scale),
+                }}
+              >
+                {cell?.text}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    const svg = element.svgContent ?? "";
     return (
       <div
         style={{
           ...style,
-          display: "grid",
-          gridTemplateColumns: `repeat(${element.columns}, 1fr)`,
-          gridTemplateRows: `repeat(${element.rows}, 1fr)`,
-          border: buildBorder(element.style, scale) ?? "1px solid rgba(148,163,184,0.6)",
-          background: element.style?.fill ?? "rgba(255,255,255,0.9)",
+          color: element.style?.tint ?? element.style?.color ?? "#0f172a",
         }}
-      >
-        {Array.from({ length: element.columns * element.rows }).map((_, index) => {
-          const cell = element.cells[index];
-          return (
-            <div
-              key={cell?.cellId ?? index}
-              style={{
-                borderRight:
-                  index % element.columns === element.columns - 1
-                    ? undefined
-                    : "1px solid rgba(148,163,184,0.4)",
-                borderBottom:
-                  index >= element.columns * (element.rows - 1)
-                    ? undefined
-                    : "1px solid rgba(148,163,184,0.4)",
-                width: cellWidth * scale,
-                height: cellHeight * scale,
-                padding: 8 * scale,
-                ...buildTextStyle(cell?.style as ElementStyle | undefined, scale),
-              }}
-            >
-              {cell?.text}
-            </div>
-          );
-        })}
-      </div>
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
     );
-  }
-
-  const svg = element.svgContent ?? "";
-  return (
-    <div
-      style={{
-        ...style,
-        color: element.style?.tint ?? element.style?.color ?? "#0f172a",
-      }}
-      dangerouslySetInnerHTML={{ __html: svg }}
-    />
-  );
-}
+  },
+  (prev, next) =>
+    prev.element === next.element &&
+    prev.scale === next.scale &&
+    prev.showGuides === next.showGuides,
+);

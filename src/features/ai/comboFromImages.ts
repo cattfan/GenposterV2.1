@@ -11,6 +11,7 @@ interface ComboServerPage {
   dayNumber?: number;
   suggestedName: string;
   layoutJson: string;
+  sourceImageDataUrl?: string;
 }
 
 interface ComboServerResult {
@@ -55,13 +56,21 @@ export function buildComboFromAiResult(
     } catch {
       layout = { slots: [] };
     }
-    const { template: tpl, quality } = aiLayoutToTemplateWithQuality(
-      layout,
-      p.suggestedName,
-    );
+    const { template: tpl, quality } = aiLayoutToTemplateWithQuality(layout, p.suggestedName, {
+      sourceImageDataUrl: p.sourceImageDataUrl,
+    });
     // Gộp quality warnings vào validationRules nếu có
     if (quality.warnings.length > 0) {
-      tpl.validationRules = [...(tpl.validationRules ?? []), ...quality.warnings.filter((w) => w.includes("không hỗ trợ") || w.includes("đã bỏ") || w.includes("quá nhỏ") || w.includes("quá dài"))];
+      tpl.validationRules = [
+        ...(tpl.validationRules ?? []),
+        ...quality.warnings.filter(
+          (w) =>
+            w.includes("không hỗ trợ") ||
+            w.includes("đã bỏ") ||
+            w.includes("quá nhỏ") ||
+            w.includes("quá dài"),
+        ),
+      ];
     }
     // Set type theo role
     if (p.role === "cover") tpl.type = "cover";

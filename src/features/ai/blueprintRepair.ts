@@ -10,28 +10,54 @@ import type {
   DataBlueprintBindingHint,
   VisualBlueprint,
 } from "@/models";
+import { normalizeEntityTextPath } from "@/engines/binding/dataBinding";
 import { AI_POSTER_FONT_FAMILIES } from "@/features/editor/fonts";
 
 // ── Hằng số ──
 
 const VALID_BLOCK_KINDS = new Set(["text", "image", "shape"]);
 const VALID_ROLES = new Set<BlueprintBlockRole>([
-  "background", "title", "subtitle", "eyebrow", "list_line", "list_group",
-  "section_title", "image_holder", "shape_label", "badge", "body_text",
-  "cta", "decor", "other",
+  "background",
+  "title",
+  "subtitle",
+  "eyebrow",
+  "list_line",
+  "list_group",
+  "section_title",
+  "image_holder",
+  "shape_label",
+  "badge",
+  "body_text",
+  "cta",
+  "decor",
+  "other",
 ]);
 const VALID_SHAPE_KINDS = new Set(["rectangle", "circle", "badge", "line", "divider"]);
 
 /** Binding path được renderer hỗ trợ (dùng để repair) */
 const SUPPORTED_TEXT_BINDINGS = new Set([
-  "entity.name", "entity.address", "entity.phone", "entity.priceRange",
-  "entity.style", "entity.openingHours", "entity.categoryMain", "entity.categorySub",
-  "entity.signatureDish", "entity.metadata.signatureDish", "entity.metadata.description",
+  "entity.name",
+  "entity.address",
+  "entity.phone",
+  "entity.priceRange",
+  "entity.style",
+  "entity.openingHours",
+  "entity.categoryMain",
+  "entity.categorySub",
+  "entity.signatureDish",
+  "entity.metadata.signatureDish",
+  "entity.metadata.description",
 ]);
 const SUPPORTED_IMAGE_BINDINGS = new Set([
-  "asset.random", "asset.random_global", "asset.cover",
-  "asset.byRole:cover", "asset.byRole:facade", "asset.byRole:food_closeup",
-  "asset.byRole:space", "asset.byRole:portrait", "asset.byRole:square_thumb",
+  "asset.random",
+  "asset.random_global",
+  "asset.cover",
+  "asset.byRole:cover",
+  "asset.byRole:facade",
+  "asset.byRole:food_closeup",
+  "asset.byRole:space",
+  "asset.byRole:portrait",
+  "asset.byRole:square_thumb",
   "asset.byRole:section_image",
 ]);
 
@@ -62,9 +88,13 @@ function clamp01(v: number): number {
   return Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));
 }
 
-function isSupportedBindingPath(path: string | undefined, kind: "text" | "image" | "shape"): boolean {
+function isSupportedBindingPath(
+  path: string | undefined,
+  kind: "text" | "image" | "shape",
+): boolean {
   if (!path) return false;
   if (path.startsWith("entity.list:")) return kind === "text";
+  if (path.startsWith("entity.compose:")) return kind === "text" || kind === "shape";
   if (path.startsWith("entity.metadata.")) return kind === "text";
   if (SUPPORTED_TEXT_BINDINGS.has(path)) return kind === "text" || kind === "shape";
   if (SUPPORTED_IMAGE_BINDINGS.has(path)) return kind === "image" || kind === "shape";
@@ -79,12 +109,27 @@ function repairBindingPath(
   if (!path) return { path: undefined, repaired: false };
   if (isSupportedBindingPath(path, kind)) return { path, repaired: false };
 
+  if (kind === "text" || kind === "shape") {
+    const normalizedTextPath = normalizeEntityTextPath(path);
+    if (normalizedTextPath !== path && isSupportedBindingPath(normalizedTextPath, kind)) {
+      return {
+        path: normalizedTextPath,
+        repaired: true,
+        warning: `Binding "${path}" → "${normalizedTextPath}" (auto-repair)`,
+      };
+    }
+  }
+
   // Thử sửa các path phổ biến AI hay trả sai
   const normalized = normalizeToken(path).replace(/\s+/g, ".");
   const mapping: Record<string, string> = {
     "entity.title": "entity.name",
     "entity.ten": "entity.name",
     "entity.dia_chi": "entity.address",
+    "entity.name.entity.address": "entity.compose:name,address",
+    "entity.ten.entity.dia_chi": "entity.compose:name,address",
+    "entity.ten.dia_chi": "entity.compose:name,address",
+    "entity.name.address": "entity.compose:name,address",
     "entity.gia": "entity.priceRange",
     "entity.gia_ca": "entity.priceRange",
     "entity.sdt": "entity.phone",
@@ -102,14 +147,45 @@ function repairBindingPath(
   };
   const mapped = mapping[normalized];
   if (mapped && isSupportedBindingPath(mapped, kind)) {
-    return { path: mapped, repaired: true, warning: `Binding "${path}" → "${mapped}" (auto-repair)` };
+    return {
+      path: mapped,
+      repaired: true,
+      warning: `Binding "${path}" → "${mapped}" (auto-repair)`,
+    };
+  }
+
+  if (kind === "text" || kind === "shape") {
+    const trimmed = path.trim();
+    if (trimmed.startsWith("metadata.")) {
+      const metadataPath = `entity.${trimmed}`;
+      return {
+        path: metadataPath,
+        repaired: true,
+        warning: `Binding "${path}" → "${metadataPath}" (metadata field)`,
+      };
+    }
+    if (trimmed.startsWith("entity.")) {
+      const rawKey = trimmed.slice("entity.".length);
+      if (rawKey && !rawKey.includes(":")) {
+        const metadataPath = `entity.metadata.${rawKey}`;
+        return {
+          path: metadataPath,
+          repaired: true,
+          warning: `Binding "${path}" → "${metadataPath}" (metadata field)`,
+        };
+      }
+    }
   }
 
   // asset.byRole:* — kiểm tra role hợp lệ
   if (path.startsWith("asset.byRole:")) {
     const role = path.slice("asset.byRole:".length);
     if (!SUPPORTED_IMAGE_BINDINGS.has(`asset.byRole:${role}`)) {
-      return { path: "asset.random", repaired: true, warning: `asset.byRole:${role} không hỗ trợ → asset.random` };
+      return {
+        path: "asset.random",
+        repaired: true,
+        warning: `asset.byRole:${role} không hỗ trợ → asset.random`,
+      };
     }
   }
 
@@ -126,15 +202,18 @@ function repairStyle(
 
   // Font family: chỉ giữ nếu trong danh sách cho phép hoặc undefined
   if (s.fontFamily && allowedFontFamilies.length > 0) {
-    const match = allowedFontFamilies.find(
-      (f) => f.toLowerCase() === s.fontFamily!.toLowerCase(),
-    );
+    const match = allowedFontFamilies.find((f) => f.toLowerCase() === s.fontFamily!.toLowerCase());
     s.fontFamily = match ?? allowedFontFamilies[0];
   }
 
   // Font size: clamp 8..200
   if (s.fontSize != null) {
     s.fontSize = Math.max(8, Math.min(200, Math.round(s.fontSize)));
+  }
+
+  // Line-height quá thấp là nguyên nhân làm chữ bị cắt dưới trong editor/preview.
+  if (s.lineHeight != null) {
+    s.lineHeight = Math.max(1.05, Math.min(2.4, s.lineHeight));
   }
 
   // Opacity: clamp 0..1
@@ -188,7 +267,11 @@ function repairBlock(
   }
 
   // Unique name
-  const name = makeUniqueBlockName(block.name || block.placeholder || `block_${index + 1}`, index, seen);
+  const name = makeUniqueBlockName(
+    block.name || block.placeholder || `block_${index + 1}`,
+    index,
+    seen,
+  );
 
   // ShapeKind
   let shapeKind = block.shapeKind;
@@ -299,20 +382,27 @@ function computeQuality(
 ): BlueprintQualitySummary {
   const blocks = visualBlueprint.blocks ?? [];
   const bindings = dataBlueprint?.bindings ?? [];
-  const blockNamesWithBinding = new Set(bindings.filter((b) => b.bindingPath).map((b) => b.blockName));
+  const blockNamesWithBinding = new Set(
+    bindings.filter((b) => b.bindingPath).map((b) => b.blockName),
+  );
 
   const totalBlocks = blocks.length;
   const textBlocks = blocks.filter((b) => b.kind === "text").length;
   const imageBlocks = blocks.filter((b) => b.kind === "image").length;
   const shapeBlocks = blocks.filter((b) => b.kind === "shape").length;
   const listLineBlocks = blocks.filter((b) => b.role === "list_line").length;
-  const sectionCount = dataBlueprint?.numberOfSections ?? new Set(blocks.map((b) => b.clusterId).filter(Boolean)).size;
+  const sectionCount =
+    dataBlueprint?.numberOfSections ?? new Set(blocks.map((b) => b.clusterId).filter(Boolean)).size;
   const estimatedItemCount = dataBlueprint?.estimatedItemCount ?? listLineBlocks;
   const hasMainTitle = dataBlueprint?.hasMainTitle ?? blocks.some((b) => b.role === "title");
-  const hasBackgroundImage = dataBlueprint?.hasBackgroundImage ?? blocks.some((b) => b.role === "background");
-  const hasListRepeater = dataBlueprint?.hasListRepeater ?? blocks.some((b) => b.role === "list_line" || b.role === "list_group");
+  const hasBackgroundImage =
+    dataBlueprint?.hasBackgroundImage ?? blocks.some((b) => b.role === "background");
+  const hasListRepeater =
+    dataBlueprint?.hasListRepeater ??
+    blocks.some((b) => b.role === "list_line" || b.role === "list_group");
   const hasCTA = dataBlueprint?.hasCTA ?? blocks.some((b) => b.role === "cta");
-  const hasSectionImages = dataBlueprint?.hasSectionImages ?? blocks.filter((b) => b.role === "image_holder").length >= 2;
+  const hasSectionImages =
+    dataBlueprint?.hasSectionImages ?? blocks.filter((b) => b.role === "image_holder").length >= 2;
 
   // Binding coverage: % block có binding (từ data hoặc guess)
   const boundBlocks = blocks.filter((b) => blockNamesWithBinding.has(b.name)).length;
@@ -322,7 +412,7 @@ function computeQuality(
   const visualConf = visualBlueprint.confidence ?? 0.7;
   const dataConf = dataBlueprint?.bindingConfidence ?? 0.5;
   const structureConf = dataBlueprint?.structureConfidence ?? 0.6;
-  const confidence = Math.min(1, (visualConf * 0.35 + dataConf * 0.35 + structureConf * 0.3));
+  const confidence = Math.min(1, visualConf * 0.35 + dataConf * 0.35 + structureConf * 0.3);
 
   return {
     totalBlocks,
@@ -379,7 +469,10 @@ export function repairCombinedLayoutBlueprint(
   let dataBlueprint: DataBlueprint | undefined = input.dataBlueprint;
   if (dataBlueprint) {
     const blockNameMap = new Map(repairedBlocks.map((b) => [b.name, b.kind]));
-    const { hints, warnings: bindWarnings } = repairBindingHints(dataBlueprint.bindings, blockNameMap);
+    const { hints, warnings: bindWarnings } = repairBindingHints(
+      dataBlueprint.bindings,
+      blockNameMap,
+    );
     allWarnings.push(...bindWarnings);
     repairCount += bindWarnings.length;
 
@@ -387,11 +480,15 @@ export function repairCombinedLayoutBlueprint(
     const visualSectionCount = new Set(repairedBlocks.map((b) => b.clusterId).filter(Boolean)).size;
     const visualItemCount = repairedBlocks.filter((b) => b.role === "list_line").length;
     if (dataBlueprint.numberOfSections !== visualSectionCount && visualSectionCount > 0) {
-      allWarnings.push(`dataBlueprint.numberOfSections (${dataBlueprint.numberOfSections}) ≠ visual clusters (${visualSectionCount}), đã sửa.`);
+      allWarnings.push(
+        `dataBlueprint.numberOfSections (${dataBlueprint.numberOfSections}) ≠ visual clusters (${visualSectionCount}), đã sửa.`,
+      );
       repairCount += 1;
     }
     if (dataBlueprint.estimatedItemCount !== visualItemCount && visualItemCount > 0) {
-      allWarnings.push(`dataBlueprint.estimatedItemCount (${dataBlueprint.estimatedItemCount}) ≠ visual list_lines (${visualItemCount}), đã sửa.`);
+      allWarnings.push(
+        `dataBlueprint.estimatedItemCount (${dataBlueprint.estimatedItemCount}) ≠ visual list_lines (${visualItemCount}), đã sửa.`,
+      );
       repairCount += 1;
     }
 

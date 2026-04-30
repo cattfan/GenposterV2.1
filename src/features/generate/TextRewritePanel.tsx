@@ -33,7 +33,7 @@ export function TextRewritePanel({
   return (
     <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <Label className="text-xs">Paste nội dung gốc</Label>
+        <Label className="text-xs">Dán nội dung gốc</Label>
         <Button
           type="button"
           size="sm"
@@ -42,7 +42,7 @@ export function TextRewritePanel({
           disabled={!trimmedCurrent || busy}
           onClick={() => setSourceText(currentText)}
         >
-          Lấy từ textbox
+          Lấy từ khung chữ
         </Button>
       </div>
       <Textarea
@@ -63,7 +63,7 @@ export function TextRewritePanel({
         ) : (
           <Wand2 className="size-3 mr-1" />
         )}
-        AI gen cách viết khác
+        AI viết lại
       </Button>
     </div>
   );

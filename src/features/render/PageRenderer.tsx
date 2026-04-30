@@ -1,7 +1,7 @@
 // PageRenderer: render 1 page template + dữ liệu thực ra HTML pixel-chuẩn (1080x...)
 // Dùng cho cả preview thumbnail và export PNG
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import type {
   Asset,
   Entity,
@@ -28,8 +28,12 @@ import {
   type PlannedImage,
   type SlotImagePlan,
 } from "@/engines/binding/imagePlan";
+import { getAssetImageSource } from "@/engines/binding/assetImage";
 import { useResolvedImageSrc } from "@/storage/imageSrc";
 import { expandPageWithCardGroups } from "@/engines/binding/cardRepeater";
+
+const IMAGE_PLACEHOLDER_BACKGROUND =
+  "repeating-linear-gradient(135deg, rgba(59,130,246,0.08) 0, rgba(59,130,246,0.08) 14px, #f8fafc 14px, #f8fafc 28px)";
 
 interface Props {
   template: PageTemplate;
@@ -44,6 +48,21 @@ interface Props {
   slotItems?: RenderedItem[];
   seedKey?: string;
   showSlotBounds?: boolean;
+}
+
+function isGeneratedCoverBackgroundSlot(slot: Slot, template: PageTemplate) {
+  if (slot.kind !== "image" || slot.bindingPath !== "asset.cover") return false;
+  const name = slot.name.toLowerCase();
+  const coversCanvas =
+    slot.x <= template.canvas.width * 0.05 &&
+    slot.y <= template.canvas.height * 0.05 &&
+    slot.width >= template.canvas.width * 0.84 &&
+    slot.height >= template.canvas.height * 0.84;
+  return slot.isUploadedBackground || name.includes("mood_background") || coversCanvas;
+}
+
+function isGeneratedBackgroundOverlaySlot(slot: Slot) {
+  return slot.kind === "shape" && slot.name === "mood_background_overlay";
 }
 
 export function PageRenderer({
@@ -69,7 +88,10 @@ export function PageRenderer({
   const { width, height, background, backgroundImage } = template.canvas;
   const resolvedBg = useResolvedImageSrc(backgroundImage);
   const bgUsable = resolvedBg && !resolvedBg.startsWith("idb://") ? resolvedBg : undefined;
-  const effectiveSlotItems = page?.items ?? slotItems ?? [];
+  const effectiveSlotItems = useMemo(
+    () => page?.items ?? slotItems ?? [],
+    [page?.items, slotItems],
+  );
 
   const sectionItemsMap = useMemo(() => {
     const map = new Map<string, Array<{ entityId?: string; assetId?: string }>>();
@@ -104,27 +126,28 @@ export function PageRenderer({
     return expandPageWithCardGroups(template, pool);
   }, [template, entityPool, entity, effectiveSlotItems]);
 
-  const resolveEntityForSlot = (
-    slot: Slot & { originalSlotId?: string; __cardEntityId?: string },
-  ) => {
-    const override =
-      slotEntityOverride.get(slot.slotId) ??
-      slotEntityOverride.get(slot.originalSlotId ?? slot.slotId);
-    if (override?.entityId) return entityMap.get(override.entityId);
-    if (slot.sectionRefId) {
-      const sectionItems = sectionItemsMap.get(slot.sectionRefId) ?? [];
-      const firstEntityId = sectionItems.find((item) => item.entityId)?.entityId;
-      if (firstEntityId) return entityMap.get(firstEntityId);
-    }
-    if (effectiveSlotItems.length > 0) return undefined;
-    if (slot.__cardEntityId) return entityMap.get(slot.__cardEntityId);
-    return entity;
-  };
+  const resolveEntityForSlot = useCallback(
+    (slot: Slot & { originalSlotId?: string; __cardEntityId?: string }) => {
+      const override =
+        slotEntityOverride.get(slot.slotId) ??
+        slotEntityOverride.get(slot.originalSlotId ?? slot.slotId);
+      if (override?.entityId) return entityMap.get(override.entityId);
+      if (slot.sectionRefId) {
+        const sectionItems = sectionItemsMap.get(slot.sectionRefId) ?? [];
+        const firstEntityId = sectionItems.find((item) => item.entityId)?.entityId;
+        if (firstEntityId) return entityMap.get(firstEntityId);
+      }
+      if (effectiveSlotItems.length > 0) return undefined;
+      if (slot.__cardEntityId) return entityMap.get(slot.__cardEntityId);
+      return entity;
+    },
+    [effectiveSlotItems.length, entity, entityMap, sectionItemsMap, slotEntityOverride],
+  );
 
   const imageSeedKey = seedKey ?? `${template.pageTemplateId}:${page?.pageIndex ?? "preview"}`;
   const imagePlan: SlotImagePlan = useMemo(
     () => buildExpandedSlotImagePlan(expanded.slots, assets, resolveEntityForSlot, imageSeedKey),
-    [expanded.slots, assets, entityMap, slotEntityOverride, entity, imageSeedKey],
+    [expanded.slots, assets, resolveEntityForSlot, imageSeedKey],
   );
 
   return (
@@ -140,6 +163,7 @@ export function PageRenderer({
         backgroundSize: "cover",
         backgroundPosition: "center",
         overflow: "hidden",
+        isolation: "isolate",
         fontFamily: "'Be Vietnam Pro', system-ui, sans-serif",
       }}
     >
@@ -156,6 +180,7 @@ export function PageRenderer({
             entityMap={entityMap}
             assetMap={assetMap}
             assets={assets}
+            allEntities={entities}
             entity={resolveEntityForSlot(slot)}
             entityPool={entityPool}
             sectionItemsMap={sectionItemsMap}
@@ -164,12 +189,45 @@ export function PageRenderer({
               slotEntityOverride.get(slot.originalSlotId ?? slot.slotId)
             }
             planned={imagePlan.get(slot.slotId)}
+            seedKey={imageSeedKey}
             debug={debug}
             showSlotBounds={showSlotBounds}
+            renderGeneratedOverlay={
+              assets.length > 0 || !!entity || !!entityPool?.length || effectiveSlotItems.length > 0
+            }
           />
         ))}
     </div>
   );
+}
+
+function displayRenderedText(text: string | undefined): string {
+  const raw = String(text ?? "");
+  const token = raw.trim().match(/^\{\{([a-z0-9_]+)\}\}$/i)?.[1];
+  if (!token) return raw;
+  const base = token.replace(/_\d+$/g, "");
+  const labels: Record<string, string> = {
+    title: "Tiêu đề",
+    subtitle: "Mô tả ngắn",
+    eyebrow: "Nhãn nhỏ",
+    cta: "CTA",
+    section_title: "Tiêu đề nhóm",
+    items_group: "Nhóm nội dung",
+    name: "Tên mục",
+    address: "Địa chỉ",
+    phone: "Số điện thoại",
+    price: "Giá",
+    hours: "Giờ mở cửa",
+    category: "Danh mục",
+    subcategory: "Nhóm phụ",
+    signature_dish: "Món nổi bật",
+    description: "Mô tả",
+    text: "Text mới",
+  };
+  if (base.startsWith("title")) return "Tiêu đề";
+  if (base.startsWith("item")) return "Mục";
+  if (base.includes("image")) return "Ảnh";
+  return labels[base] ?? token.replace(/_\d+$/g, "").replace(/_/g, " ");
 }
 
 function SlotRenderer({
@@ -179,13 +237,16 @@ function SlotRenderer({
   entityMap,
   assetMap,
   assets,
+  allEntities,
   entity,
   entityPool,
   sectionItemsMap,
   slotOverride,
   planned,
+  seedKey,
   debug,
   showSlotBounds,
+  renderGeneratedOverlay,
 }: {
   slot: Slot;
   scale: number;
@@ -193,13 +254,16 @@ function SlotRenderer({
   entityMap: Map<string, Entity>;
   assetMap: Map<string, Asset>;
   assets: Asset[];
+  allEntities: Entity[];
   entity?: Entity;
   entityPool?: Entity[];
   sectionItemsMap: Map<string, Array<{ entityId?: string; assetId?: string }>>;
   slotOverride?: { entityId?: string; assetId?: string };
   planned?: PlannedImage;
+  seedKey: string;
   debug?: boolean;
   showSlotBounds?: boolean;
+  renderGeneratedOverlay?: boolean;
 }) {
   const flip = buildFlipTransform(slot.style);
   const rot = slot.rotation ? `rotate(${slot.rotation}deg)` : "";
@@ -217,21 +281,64 @@ function SlotRenderer({
     opacity: slot.style?.opacity ?? 1,
   };
 
+  let shapeRawSrc: string | undefined;
   if (slot.kind === "shape") {
-    let rawSrc = slot.staticImage;
+    shapeRawSrc = slot.staticImage;
     if (planned?.src) {
-      rawSrc = planned.src;
-    } else if (slot.bindingPath && entity) {
-      const result = resolveImageBinding(slot.bindingPath, entity, assets, rawSrc);
-      if (result.src) rawSrc = result.src;
+      shapeRawSrc = planned.src;
+    } else if (slot.bindingPath) {
+      const result = resolveImageBinding(slot.bindingPath, entity, assets, shapeRawSrc, {
+        entities: allEntities,
+        seed: `${seedKey}:${slot.slotId}:shape`,
+      });
+      if (result.src) shapeRawSrc = result.src;
+    }
+  }
+  const resolvedShapeSrc = useResolvedImageSrc(shapeRawSrc);
+
+  let imageRawSrc: string | undefined;
+  let imageEntityIdLog: string | undefined;
+  let imageAssetIdLog: string | undefined;
+  if (slot.kind === "image") {
+    imageRawSrc = isGeneratedCoverBackgroundSlot(slot, template) ? undefined : slot.staticImage;
+
+    if (planned?.src) {
+      imageRawSrc = planned.src;
+      imageAssetIdLog = planned.assetId;
+      imageEntityIdLog = planned.entityId;
+    } else if (slot.bindingPath) {
+      const result = resolveImageBinding(slot.bindingPath, entity, assets, imageRawSrc, {
+        entities: allEntities,
+        seed: `${seedKey}:${slot.slotId}:image`,
+      });
+      if (result.src) {
+        imageRawSrc = result.src;
+        imageAssetIdLog = result.assetId;
+        imageEntityIdLog = result.entityId;
+      }
     }
 
-    const resolvedShapeSrc = useResolvedImageSrc(rawSrc);
+    if (!imageRawSrc && slotOverride?.assetId) {
+      const asset = assetMap.get(slotOverride.assetId);
+      if (asset) {
+        imageRawSrc = getAssetImageSource(asset);
+        imageAssetIdLog = asset.assetId;
+        imageEntityIdLog = asset.entityId;
+      }
+    }
+  }
+  const resolvedImgSrc = useResolvedImageSrc(imageRawSrc);
+
+  if (isGeneratedBackgroundOverlaySlot(slot) && !renderGeneratedOverlay) {
+    return null;
+  }
+
+  if (slot.kind === "shape") {
     const usableSrc =
       resolvedShapeSrc && !resolvedShapeSrc.startsWith("idb://")
         ? resolvedShapeSrc
-        : rawSrc && !rawSrc.startsWith("idb://")
-          ? rawSrc
+        : shapeRawSrc && !shapeRawSrc.startsWith("idb://")
+          ? shapeRawSrc
           : undefined;
     const fit = (
       slot.style?.fit === "stretch" ? "fill" : (slot.style?.fit ?? "cover")
@@ -314,54 +421,32 @@ function SlotRenderer({
                     : "flex-start",
             }}
           >
-            {shapeText}
+            {displayRenderedText(shapeText)}
           </div>
         )}
-        <SlotPreviewBounds kind="shape" show={showSlotBounds} />
+        <SlotPreviewBounds kind="shape" show={showSlotBounds && !hasShapeText} />
         <DebugBadge debug={debug} text={`shape${planned?.fallback ? "*" : ""}`} />
       </div>
     );
   }
 
   if (slot.kind === "image") {
-    let rawSrc = slot.staticImage;
-    let entityIdLog: string | undefined;
-    let assetIdLog: string | undefined;
-
-    if (planned?.src) {
-      rawSrc = planned.src;
-      assetIdLog = planned.assetId;
-      entityIdLog = planned.entityId;
-    } else if (slot.bindingPath && entity) {
-      const result = resolveImageBinding(slot.bindingPath, entity, assets, rawSrc);
-      if (result.src) {
-        rawSrc = result.src;
-        assetIdLog = result.assetId;
-        entityIdLog = result.entityId;
-      }
-    }
-
-    if (!rawSrc && slotOverride?.assetId) {
-      const asset = assetMap.get(slotOverride.assetId);
-      if (asset) {
-        rawSrc = asset.sourceValue;
-        assetIdLog = asset.assetId;
-        entityIdLog = asset.entityId;
-      }
-    }
-
-    const resolvedImgSrc = useResolvedImageSrc(rawSrc);
+    const isGeneratedCoverBackground = isGeneratedCoverBackgroundSlot(slot, template);
     const usableSrc =
       resolvedImgSrc && !resolvedImgSrc.startsWith("idb://")
         ? resolvedImgSrc
-        : rawSrc && !rawSrc.startsWith("idb://")
-          ? rawSrc
+        : imageRawSrc && !imageRawSrc.startsWith("idb://")
+          ? imageRawSrc
           : undefined;
     const filter = buildCssFilter(slot.style);
     const objectFit = (
       slot.style?.fit === "stretch" ? "fill" : (slot.style?.fit ?? "cover")
     ) as React.CSSProperties["objectFit"];
     const crop = slot.crop;
+
+    if (isGeneratedCoverBackground && !usableSrc && !renderGeneratedOverlay) {
+      return null;
+    }
 
     return (
       <div
@@ -407,13 +492,11 @@ function SlotRenderer({
             style={{
               width: "100%",
               height: "100%",
-              background:
-                slot.style?.overlayColor ??
-                "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02))",
+              background: IMAGE_PLACEHOLDER_BACKGROUND,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              color: "rgba(255,255,255,0.28)",
+              color: "rgba(71,85,105,0.6)",
               fontSize: 10 * scale,
             }}
           >
@@ -432,7 +515,7 @@ function SlotRenderer({
         <SlotPreviewBounds kind="image" show={showSlotBounds} />
         <DebugBadge
           debug={debug}
-          text={`img${planned?.fallback ? "*" : ""} ${entityIdLog?.slice(0, 4) ?? ""} ${assetIdLog?.slice(0, 4) ?? ""}`}
+          text={`img${planned?.fallback ? "*" : ""} ${imageEntityIdLog?.slice(0, 4) ?? ""} ${imageAssetIdLog?.slice(0, 4) ?? ""}`}
         />
       </div>
     );
@@ -450,8 +533,7 @@ function SlotRenderer({
           ...textCss,
         }}
       >
-        {text}
-        <SlotPreviewBounds kind="text" show={showSlotBounds} />
+        {displayRenderedText(text)}
         <DebugBadge debug={debug} text="text" />
       </div>
     );
@@ -520,6 +602,10 @@ function SectionView({
         letterSpacing: slot.style?.letterSpacing ?? 0,
         textAlign: slot.style?.textAlign ?? "left",
         textShadow: slot.style?.textShadow,
+        textShadowColor: slot.style?.textShadowColor,
+        textShadowBlur: slot.style?.textShadowBlur,
+        textShadowX: slot.style?.textShadowX,
+        textShadowY: slot.style?.textShadowY,
         textStrokeColor: slot.style?.textStrokeColor,
         textStrokeWidth: slot.style?.textStrokeWidth,
       },
@@ -639,20 +725,7 @@ function SectionView({
                   borderRadius: 12 * scale,
                 }}
               >
-                {asset && (
-                  <img
-                    src={asset.sourceValue}
-                    crossOrigin="anonymous"
-                    alt=""
-                    style={{
-                      width: 80 * scale,
-                      height: 80 * scale,
-                      objectFit: "cover",
-                      borderRadius: isZigzag ? 9999 : 12 * scale,
-                      flexShrink: 0,
-                    }}
-                  />
-                )}
+                {asset && <ResolvedAssetImage asset={asset} scale={scale} isZigzag={isZigzag} />}
                 <div style={{ flex: 1, minWidth: 0, textAlign: flipRow ? "right" : "left" }}>
                   <div
                     style={{
@@ -728,17 +801,51 @@ function SectionView({
   );
 }
 
+function ResolvedAssetImage({
+  asset,
+  scale,
+  isZigzag,
+}: {
+  asset: Asset;
+  scale: number;
+  isZigzag: boolean;
+}) {
+  const rawSrc = getAssetImageSource(asset);
+  const resolvedSrc = useResolvedImageSrc(rawSrc);
+  const usableSrc =
+    resolvedSrc && !resolvedSrc.startsWith("idb://")
+      ? resolvedSrc
+      : rawSrc && !rawSrc.startsWith("idb://")
+        ? rawSrc
+        : undefined;
+
+  if (!usableSrc) return null;
+
+  return (
+    <img
+      src={usableSrc}
+      crossOrigin="anonymous"
+      alt=""
+      style={{
+        width: 80 * scale,
+        height: 80 * scale,
+        objectFit: "cover",
+        borderRadius: isZigzag ? 9999 : 12 * scale,
+        flexShrink: 0,
+      }}
+    />
+  );
+}
+
 function SlotPreviewBounds({ kind, show }: { kind: Slot["kind"]; show?: boolean }) {
   if (!show) return null;
-  const label =
-    kind === "image" ? "Image" : kind === "text" ? "Text" : kind === "shape" ? "Shape" : "Section";
   return (
     <div
       style={{
         position: "absolute",
         inset: 0,
         pointerEvents: "none",
-        zIndex: 9998,
+        zIndex: 2,
         border: "1px dashed rgba(100,116,139,0.55)",
         boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.75)",
         background:
@@ -746,25 +853,7 @@ function SlotPreviewBounds({ kind, show }: { kind: Slot["kind"]; show?: boolean 
             ? "repeating-linear-gradient(135deg, rgba(59,130,246,0.08) 0, rgba(59,130,246,0.08) 8px, transparent 8px, transparent 16px)"
             : "rgba(255,255,255,0.02)",
       }}
-    >
-      <div
-        style={{
-          position: "absolute",
-          left: 4,
-          top: 4,
-          borderRadius: 4,
-          background: "rgba(15,23,42,0.68)",
-          color: "#fff",
-          fontSize: 10,
-          fontWeight: 700,
-          lineHeight: 1,
-          padding: "4px 6px",
-          letterSpacing: 0.1,
-        }}
-      >
-        {label}
-      </div>
-    </div>
+    />
   );
 }
 
@@ -782,7 +871,7 @@ function DebugBadge({ debug, text }: { debug?: boolean; text: string }) {
         padding: "1px 4px",
         borderRadius: 3,
         pointerEvents: "none",
-        zIndex: 9999,
+        zIndex: 3,
       }}
     >
       {text}

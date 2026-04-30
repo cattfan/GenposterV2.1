@@ -38,6 +38,29 @@ export function NumField({
   );
 }
 
+function isGeneratedCoverBackgroundSlot(slot: Slot, template: PageTemplate): boolean {
+  if (slot.kind !== "image" || slot.bindingPath !== "asset.cover") return false;
+  const name = slot.name.toLowerCase();
+  const coversCanvas =
+    slot.x <= template.canvas.width * 0.05 &&
+    slot.y <= template.canvas.height * 0.05 &&
+    slot.width >= template.canvas.width * 0.84 &&
+    slot.height >= template.canvas.height * 0.84;
+  return slot.isUploadedBackground || name.includes("mood_background") || coversCanvas;
+}
+
+function isGeneratedBackgroundOverlaySlot(slot: Slot): boolean {
+  return slot.kind === "shape" && slot.name === "mood_background_overlay";
+}
+
+function canvasStaticImage(slot: Slot, template: PageTemplate): string | undefined {
+  return isGeneratedCoverBackgroundSlot(slot, template) ? undefined : slot.staticImage;
+}
+
+function shouldHideGeneratedCoverBackground(slot: Slot, template: PageTemplate): boolean {
+  return isGeneratedCoverBackgroundSlot(slot, template) && !canvasStaticImage(slot, template);
+}
+
 export function Canvas({
   template,
   zoom,
@@ -73,14 +96,15 @@ export function Canvas({
         if (e.target === ref.current) onSelect(null);
       }}
     >
-      <LayoutGuides
-        width={template.canvas.width}
-        height={template.canvas.height}
-        scale={zoom}
-      />
+      <LayoutGuides width={template.canvas.width} height={template.canvas.height} scale={zoom} />
 
       {template.slots
         .slice()
+        .filter(
+          (slot) =>
+            !isGeneratedBackgroundOverlaySlot(slot) &&
+            !shouldHideGeneratedCoverBackground(slot, template),
+        )
         .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))
         .map((slot) => (
           <SlotEditor
@@ -96,7 +120,7 @@ export function Canvas({
             menuActions={buildMenuActions?.(slot.slotId)}
           />
         ))}
-      {cropSlot && cropSlot.staticImage && (
+      {cropSlot && canvasStaticImage(cropSlot, template) && (
         <CropContainer
           slot={cropSlot}
           zoom={zoom}
@@ -134,6 +158,8 @@ function SlotEditor({
   template: PageTemplate;
   menuActions?: SlotMenuActions;
 }) {
+  const staticImage = canvasStaticImage(slot, template);
+  const resolvedStaticImage = useResolvedImageSrc(staticImage);
   const startMove = useCallback(
     (e: React.MouseEvent) => {
       if (slot.locked) return;
@@ -202,6 +228,11 @@ function SlotEditor({
   const transform = (rot + flip).trim() || undefined;
 
   const isHidden = !!slot.style?.hidden;
+  const hasTextContent = !!slot.staticText?.trim();
+  const defaultOutline =
+    slot.kind === "text" || (slot.kind === "shape" && hasTextContent)
+      ? "none"
+      : "1px dashed rgba(0,0,0,0.15)";
   const baseStyle: React.CSSProperties = {
     position: "absolute",
     left: slot.x * zoom,
@@ -214,7 +245,7 @@ function SlotEditor({
       ? "2px solid hsl(var(--primary))"
       : isHidden
         ? "1px dashed rgba(239,68,68,0.5)"
-        : "1px dashed rgba(0,0,0,0.15)",
+        : defaultOutline,
     outlineOffset: 0,
     boxSizing: "border-box",
     // Khi ẩn: editor render mờ + viền đỏ để designer biết block tồn tại nhưng không xuất hiện trong export.
@@ -239,13 +270,18 @@ function SlotEditor({
     );
   } else if (slot.kind === "image") {
     const filter = buildCssFilter(slot.style);
-    const objectFit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
-    const resolved = useResolvedImageSrc(slot.staticImage);
+    const objectFit = (
+      slot.style?.fit === "stretch" ? "fill" : (slot.style?.fit ?? "cover")
+    ) as React.CSSProperties["objectFit"];
     // KHÔNG fallback về `idb://...` string — gây <img> hỏng. Chỉ render khi có URL thật.
-    const isIdb = !!slot.staticImage && slot.staticImage.startsWith("idb://");
-    const isPending = isIdb && resolved === undefined;
-    const isMissing = isIdb && resolved === undefined && !isPending; // resolver trả null => undefined sau .then
-    const displaySrc = resolved && !resolved.startsWith("idb://") ? resolved : (!isIdb ? slot.staticImage : undefined);
+    const isIdb = !!staticImage && staticImage.startsWith("idb://");
+    const isPending = isIdb && resolvedStaticImage === undefined;
+    const displaySrc =
+      resolvedStaticImage && !resolvedStaticImage.startsWith("idb://")
+        ? resolvedStaticImage
+        : !isIdb
+          ? staticImage
+          : undefined;
     const crop = slot.crop;
 
     // Khi có crop, render qua wrapper overflow:hidden + img scale lên rồi offset
@@ -289,7 +325,11 @@ function SlotEditor({
       <div className="w-full h-full bg-muted/50 grid place-items-center text-xs text-muted-foreground gap-1 flex-col p-2 text-center">
         <ImageIcon className="size-5 opacity-50" />
         <span>
-          {isIdb ? (resolved === undefined ? "Đang tải / ảnh đã mất" : "Ảnh đã mất — upload lại") : "Image placeholder"}
+          {isIdb
+            ? isPending
+              ? "Đang tải / ảnh đã mất"
+              : "Ảnh đã mất — upload lại"
+            : "Image placeholder"}
         </span>
       </div>
     );
@@ -305,7 +345,14 @@ function SlotEditor({
       >
         {imgEl}
         {slot.style?.overlayColor && (
-          <div style={{ position: "absolute", inset: 0, background: slot.style.overlayColor, pointerEvents: "none" }} />
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: slot.style.overlayColor,
+              pointerEvents: "none",
+            }}
+          />
         )}
       </div>
     );
@@ -316,11 +363,15 @@ function SlotEditor({
     const border = buildBorder(slot.style, zoom);
     const radius = shapeBorderRadius(slot.shapeKind, slot.style?.borderRadius, zoom);
     const clip = slot.shapeKind ? shapeClipPath(slot.shapeKind) : undefined;
-    const objectFit = (slot.style?.fit === "stretch" ? "fill" : slot.style?.fit ?? "cover") as React.CSSProperties["objectFit"];
-    const resolvedShape = useResolvedImageSrc(slot.staticImage);
-    const src = resolvedShape && !resolvedShape.startsWith("idb://")
-      ? resolvedShape
-      : (slot.staticImage && !slot.staticImage.startsWith("idb://") ? slot.staticImage : undefined);
+    const objectFit = (
+      slot.style?.fit === "stretch" ? "fill" : (slot.style?.fit ?? "cover")
+    ) as React.CSSProperties["objectFit"];
+    const src =
+      resolvedStaticImage && !resolvedStaticImage.startsWith("idb://")
+        ? resolvedStaticImage
+        : staticImage && !staticImage.startsWith("idb://")
+          ? staticImage
+          : undefined;
 
     if (slot.shapeKind === "line" || slot.shapeKind === "divider") {
       content = (
@@ -364,7 +415,14 @@ function SlotEditor({
                 }}
               />
               {slot.style?.overlayColor && (
-                <div style={{ position: "absolute", inset: 0, background: slot.style.overlayColor, pointerEvents: "none" }} />
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    background: slot.style.overlayColor,
+                    pointerEvents: "none",
+                  }}
+                />
               )}
             </>
           ) : null}
@@ -402,7 +460,7 @@ function SlotEditor({
         if (!selected) onSelect();
       }}
       onDoubleClick={(e) => {
-        if (slot.kind === "image" && slot.staticImage && !slot.locked) {
+        if (slot.kind === "image" && staticImage && !slot.locked) {
           e.stopPropagation();
           onStartCrop();
         }
@@ -491,9 +549,12 @@ function CropContainer({
   onCancel: () => void;
 }) {
   const resolvedCrop = useResolvedImageSrc(slot.staticImage);
-  const resolved = resolvedCrop && !resolvedCrop.startsWith("idb://")
-    ? resolvedCrop
-    : (slot.staticImage && !slot.staticImage.startsWith("idb://") ? slot.staticImage : "");
+  const resolved =
+    resolvedCrop && !resolvedCrop.startsWith("idb://")
+      ? resolvedCrop
+      : slot.staticImage && !slot.staticImage.startsWith("idb://")
+        ? slot.staticImage
+        : "";
   return (
     <div
       style={{

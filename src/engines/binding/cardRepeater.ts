@@ -92,6 +92,102 @@ function bboxOfGroup(
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
+function normalizeSlotToken(value: string | undefined): string {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\u0111/gi, "d")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function semanticItemIndexFromSlot(slot: Slot): number | undefined {
+  const source = normalizeSlotToken(
+    [slot.name, slot.staticText, slot.bindingPath].filter(Boolean).join(" "),
+  );
+  const structuralMatch = source.match(
+    /(?:^|_)(?:list_line|line|row|item|text|composite|block)_(\d+)(?:_|$)/,
+  );
+  if (structuralMatch) {
+    const index = Number(structuralMatch[1]);
+    if (Number.isFinite(index) && index > 0) return index;
+  }
+  const match = source.match(
+    /(?:^|_)(?:name|ten|ten_quan|title|address|dia_chi|phone|sdt|hotline|price|gia|openinghours|opening_hours|hours|gio_mo_cua|category|categorymain|category_main|mo_hinh|categorysub|category_sub|subcategory|phong_cach|style|signaturedish|signature_dish|mon_an_noi_bat|mon_noi_bat|description|desc|mo_ta|image|hero_image)_(\d+)(?:_|$)/,
+  );
+  if (!match) return undefined;
+  const index = Number(match[1]);
+  return Number.isFinite(index) && index > 0 ? index : undefined;
+}
+
+function isEntityDataBinding(slot: Slot): boolean {
+  const path = slot.bindingPath;
+  return (
+    !!path &&
+    path.startsWith("entity.") &&
+    !path.startsWith("entity.list:") &&
+    !path.startsWith("entity.compose:")
+  );
+}
+
+function canonicalEntityBindingPath(slot: Slot): string | undefined {
+  if (!isEntityDataBinding(slot)) return undefined;
+  return slot.bindingPath?.trim().toLowerCase();
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = values.slice().sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)] ?? 0;
+}
+
+function splitClusterByRepeatedEntityRows(
+  key: string,
+  slots: Slot[],
+): Array<{ key: string; slots: Slot[] }> {
+  const entitySlots = slots.filter(isEntityDataBinding);
+  if (entitySlots.length <= 1) return [{ key, slots }];
+
+  const counts = new Map<string, number>();
+  for (const slot of entitySlots) {
+    const path = canonicalEntityBindingPath(slot);
+    if (!path) continue;
+    counts.set(path, (counts.get(path) ?? 0) + 1);
+  }
+
+  const hasRepeatedField = Array.from(counts.values()).some((count) => count > 1);
+  if (!hasRepeatedField) return [{ key, slots }];
+
+  const medianHeight = median(entitySlots.map((slot) => Math.max(1, slot.height)));
+  const rowThreshold = Math.max(8, medianHeight * 0.35);
+  const sorted = slots.slice().sort((a, b) => {
+    const centerA = a.y + a.height / 2;
+    const centerB = b.y + b.height / 2;
+    return centerA - centerB || a.x - b.x;
+  });
+  const rows: Array<{ centerY: number; slots: Slot[] }> = [];
+
+  for (const slot of sorted) {
+    const centerY = slot.y + slot.height / 2;
+    const row = rows.find((item) => Math.abs(item.centerY - centerY) <= rowThreshold);
+    if (row) {
+      row.slots.push(slot);
+      row.centerY =
+        row.slots.reduce((sum, item) => sum + item.y + item.height / 2, 0) / row.slots.length;
+    } else {
+      rows.push({ centerY, slots: [slot] });
+    }
+  }
+
+  if (rows.length <= 1) return [{ key, slots }];
+
+  return rows.map((row, index) => ({
+    key: `${key}__row_${index}`,
+    slots: row.slots.sort((a, b) => a.x - b.x || a.y - b.y),
+  }));
+}
+
 /**
  * Cluster các slot CÓ bindingPath theo vị trí (Y nếu vertical, X nếu horizontal).
  * Mỗi cluster sẽ ăn 1 entity riêng.
@@ -142,7 +238,10 @@ function autoClusterSlots(
     return out;
   };
 
-  const splitSpatially = (items: Slot[], prefix: string): Array<{ key: string; slots: Slot[] }> => {
+  const splitSpatiallyByAxis = (
+    items: Slot[],
+    prefix: string,
+  ): Array<{ key: string; slots: Slot[] }> => {
     if (items.length <= 1) return [{ key: prefix, slots: items }];
     const bbox = bboxOfGroup(items, items[0]?.groupId ?? "") ?? {
       x: Math.min(...items.map((s) => s.x)),
@@ -156,6 +255,36 @@ function autoClusterSlots(
     if (vertical.length > 1 && horizontal.length <= 1) return vertical;
     if (horizontal.length > 1 && vertical.length <= 1) return horizontal;
     return bbox.h >= bbox.w ? vertical : horizontal;
+  };
+
+  const splitSpatially = (items: Slot[], prefix: string): Array<{ key: string; slots: Slot[] }> => {
+    if (items.length <= 1) return [{ key: prefix, slots: items }];
+
+    const indexed = new Map<number, Slot[]>();
+    const unindexed: Slot[] = [];
+    for (const item of items) {
+      const itemIndex = semanticItemIndexFromSlot(item);
+      if (itemIndex == null) {
+        unindexed.push(item);
+        continue;
+      }
+      const bucket = indexed.get(itemIndex) ?? [];
+      bucket.push(item);
+      indexed.set(itemIndex, bucket);
+    }
+
+    if (indexed.size > 0) {
+      const out: Array<{ key: string; slots: Slot[] }> = [];
+      for (const [itemIndex, bucket] of Array.from(indexed.entries()).sort((a, b) => a[0] - b[0])) {
+        out.push({ key: `${prefix}__item_${itemIndex}`, slots: bucket });
+      }
+      if (unindexed.length > 0) {
+        out.push(...splitSpatiallyByAxis(unindexed, `${prefix}__free`));
+      }
+      return out;
+    }
+
+    return splitSpatiallyByAxis(items, prefix);
   };
 
   const bindable = slots.filter((s) => {
@@ -202,6 +331,17 @@ function autoClusterSlots(
   }
 
   // Bước 3: sort cluster theo Y trên→dưới rồi X trái→phải
+  const entityRowClusters = new Map<string, Slot[]>();
+  for (const [key, value] of byGroup.entries()) {
+    for (const split of splitClusterByRepeatedEntityRows(key, value)) {
+      entityRowClusters.set(split.key, split.slots);
+    }
+  }
+  byGroup.clear();
+  for (const [key, value] of entityRowClusters.entries()) {
+    byGroup.set(key, value);
+  }
+
   const clusters = Array.from(byGroup.entries()).map(([key, ss]) => ({
     key,
     slots: ss,

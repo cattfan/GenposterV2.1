@@ -21,7 +21,18 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Trash2, Sparkles, Loader2, Layers, Package, X } from "lucide-react";
+import {
+  Copy,
+  Plus,
+  Trash2,
+  Sparkles,
+  Loader2,
+  Layers,
+  Package,
+  X,
+  FileDown,
+  FileUp,
+} from "lucide-react";
 import { nanoid } from "nanoid";
 import { toast } from "sonner";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -43,12 +54,46 @@ import {
   createPackTemplate,
   duplicatePageTemplate,
 } from "@/features/packs/packTemplateUtils";
+import {
+  buildPackTemplateBundle,
+  downloadJson,
+  importPortableBundle,
+  readPortableBundleFile,
+  safePortableFileName,
+} from "@/features/generate/generatePresetPortability";
 
 export const Route = createFileRoute("/templates")({
   component: TemplatesPage,
 });
 
-const UNDO_TOAST_DURATION = 10_000;
+const UNDO_TOAST_DURATION = 15_000;
+const AI_IMAGE_MAX_EDGE = 1800;
+const AI_IMAGE_REENCODE_THRESHOLD_BYTES = 1_800_000;
+const AI_IMAGE_JPEG_QUALITY = 0.92;
+
+function areIdListsEqual(left: string[], right: string[]) {
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => item === right[index]);
+}
+
+function stableOptionalJson(value: unknown) {
+  return JSON.stringify(value ?? null);
+}
+
+function packDraftHasChanges(draft: PackTemplate, persisted: PackTemplate) {
+  return (
+    draft.name !== persisted.name ||
+    (draft.description ?? "") !== (persisted.description ?? "") ||
+    (draft.goal ?? "") !== (persisted.goal ?? "") ||
+    (draft.tone ?? "") !== (persisted.tone ?? "") ||
+    (draft.cta ?? "") !== (persisted.cta ?? "") ||
+    !areIdListsEqual(draft.orderedPages, persisted.orderedPages) ||
+    !areIdListsEqual(draft.requiredPages, persisted.requiredPages) ||
+    !areIdListsEqual(draft.optionalPages, persisted.optionalPages) ||
+    stableOptionalJson(draft.captionProfile) !== stableOptionalJson(persisted.captionProfile) ||
+    stableOptionalJson(draft.exportDefaults) !== stableOptionalJson(persisted.exportDefaults)
+  );
+}
 
 function clonePackTemplate(pack: PackTemplate): PackTemplate {
   return structuredClone(pack);
@@ -60,6 +105,76 @@ function clonePageTemplate(template: PageTemplate): PageTemplate {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result));
+    r.onerror = () => rej(new Error("Đọc ảnh lỗi"));
+    r.readAsDataURL(file);
+  });
+}
+
+function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Không đọc được kích thước ảnh"));
+    img.src = dataUrl;
+  });
+}
+
+async function readOptimizedImageDataUrl(file: File): Promise<string> {
+  const raw = await readFileAsDataUrl(file);
+  if (!file.type.startsWith("image/")) return raw;
+
+  try {
+    const img = await loadImage(raw);
+    const maxEdge = Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height);
+    const scale = maxEdge > AI_IMAGE_MAX_EDGE ? AI_IMAGE_MAX_EDGE / maxEdge : 1;
+    if (scale === 1 && file.size <= AI_IMAGE_REENCODE_THRESHOLD_BYTES) return raw;
+
+    const width = Math.max(1, Math.round((img.naturalWidth || img.width) * scale));
+    const height = Math.max(1, Math.round((img.naturalHeight || img.height) * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return raw;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+    return canvas.toDataURL("image/jpeg", AI_IMAGE_JPEG_QUALITY);
+  } catch {
+    return raw;
+  }
+}
+
+async function loadAiDataColumns(): Promise<string[]> {
+  const entities = await db.entities.limit(250).toArray();
+  const columns = new Set<string>();
+  const corePairs: Array<[keyof (typeof entities)[number], string]> = [
+    ["name", "Ten_quan"],
+    ["address", "Dia_chi"],
+    ["phone", "SDT"],
+    ["openingHours", "Gio_mo_cua"],
+    ["categoryMain", "Mo_hinh"],
+    ["categorySub", "Phong_cach"],
+    ["priceRange", "Gia"],
+    ["style", "Phong_cach"],
+  ];
+
+  for (const entity of entities) {
+    for (const [key, label] of corePairs) {
+      if (entity[key] != null && String(entity[key]).trim()) columns.add(label);
+    }
+    for (const key of Object.keys(entity.metadata ?? {})) {
+      if (key.trim()) columns.add(key);
+    }
+  }
+
+  return Array.from(columns);
 }
 
 function PackPreviewThumb({
@@ -92,12 +207,16 @@ function PackSummaryCard({
   templateMap,
   active,
   onSelect,
+  onDuplicate,
+  onExport,
   onDelete,
 }: {
   pack: PackTemplate;
   templateMap: Map<string, PageTemplate>;
   active: boolean;
   onSelect: () => void;
+  onDuplicate: () => void;
+  onExport: () => void;
   onDelete: () => void;
 }) {
   const pageItems = pack.orderedPages.map((id) => ({ id, template: templateMap.get(id) }));
@@ -109,23 +228,42 @@ function PackSummaryCard({
         active ? "border-primary/60 bg-accent/20" : "hover:border-primary/40",
       )}
     >
-      <div className="flex items-start justify-between gap-3 border-b p-4">
+      <div className="flex items-center justify-between gap-3 border-b p-3">
         <button type="button" className="min-w-0 flex-1 text-left" onClick={onSelect}>
           <div className="truncate text-lg font-semibold">{pack.name}</div>
-          <div className="mt-0.5 text-xs text-muted-foreground">
-            {pack.orderedPages.length} page trong pack
-          </div>
         </button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onDelete}
-          title="Xóa pack"
-          aria-label="Xóa pack"
-          className="shrink-0 text-muted-foreground hover:text-destructive"
-        >
-          <Trash2 />
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onDuplicate}
+            title="Nhân bản pack"
+            aria-label="Nhân bản pack"
+            className="shrink-0 text-muted-foreground"
+          >
+            <Copy />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onExport}
+            title="Export pack"
+            aria-label="Export pack"
+            className="shrink-0 text-muted-foreground"
+          >
+            <FileDown />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onDelete}
+            title="Xóa pack"
+            aria-label="Xóa pack"
+            className="shrink-0 text-muted-foreground hover:text-destructive"
+          >
+            <Trash2 />
+          </Button>
+        </div>
       </div>
 
       <button type="button" className="block w-full p-4 text-left" onClick={onSelect}>
@@ -134,7 +272,7 @@ function PackSummaryCard({
             Pack chưa có page.
           </div>
         ) : (
-          <div className="-mx-1 overflow-x-auto px-1 pb-1">
+          <div className="pack-horizontal-scroll -mx-1 overflow-x-auto px-1 pb-3">
             <div className="flex min-w-full gap-3">
               {pageItems.map(({ id, template }, index) => (
                 <div
@@ -142,8 +280,8 @@ function PackSummaryCard({
                   className="w-[150px] shrink-0 rounded-lg border bg-background p-2 shadow-sm sm:w-[170px]"
                 >
                   <div className="mb-2 flex items-center gap-2">
-                    <div className="grid size-7 place-items-center rounded-md bg-primary/10 text-xs font-semibold text-primary">
-                      {index + 1}
+                    <div className="grid h-7 min-w-8 place-items-center rounded-md bg-primary/10 px-1.5 text-xs font-semibold text-primary">
+                      P{index + 1}
                     </div>
                     <div className="min-w-0 truncate text-sm font-medium">
                       {template?.name ?? "Template không tồn tại"}
@@ -173,6 +311,8 @@ function TemplatesPage() {
   );
   const fileRef = useRef<HTMLInputElement>(null);
   const comboFileRef = useRef<HTMLInputElement>(null);
+  const comboAppendFileRef = useRef<HTMLInputElement>(null);
+  const portableImportRef = useRef<HTMLInputElement>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [singleOpen, setSingleOpen] = useState(false);
   const [singleFileName, setSingleFileName] = useState("");
@@ -187,13 +327,11 @@ function TemplatesPage() {
   const [comboFiles, setComboFiles] = useState<File[]>([]);
   const [comboPreviews, setComboPreviews] = useState<string[]>([]);
   const [comboPackName, setComboPackName] = useState("");
-  const [comboFidelity, setComboFidelity] = useState<LayoutFidelity>("strict");
-  const [comboInstructions, setComboInstructions] = useState("");
-  const [comboPreferVisibleLines, setComboPreferVisibleLines] = useState(true);
   const [comboBusy, setComboBusy] = useState(false);
   const [comboStep, setComboStep] = useState("");
   const [comboProgress, setComboProgress] = useState(0);
   const [editing, setEditing] = useState<PackTemplate | null>(null);
+  const packAutosaveErrorRef = useRef(false);
 
   useEffect(() => {
     if (!packs) return;
@@ -220,6 +358,28 @@ function TemplatesPage() {
       setEditing({ ...bySearch });
     }
   }, [packs, openPackId, editing]);
+
+  useEffect(() => {
+    if (!editing || !packs) return;
+    const persisted = packs.find((pack) => pack.packTemplateId === editing.packTemplateId);
+    if (!persisted || !packDraftHasChanges(editing, persisted)) return;
+
+    const timeout = window.setTimeout(() => {
+      const nextPack = { ...editing, updatedAt: Date.now() };
+      void db.packTemplates
+        .put(nextPack)
+        .then(() => {
+          packAutosaveErrorRef.current = false;
+        })
+        .catch((error) => {
+          if (packAutosaveErrorRef.current) return;
+          packAutosaveErrorRef.current = true;
+          toast.error("Không thể tự lưu pack: " + errorMessage(error));
+        });
+    }, 400);
+
+    return () => window.clearTimeout(timeout);
+  }, [editing, packs]);
 
   if (location.pathname !== "/templates") {
     return <Outlet />;
@@ -287,20 +447,11 @@ function TemplatesPage() {
     return pack;
   };
 
-  const savePack = async () => {
-    if (!editing) return;
-    const nextPack = { ...editing, updatedAt: Date.now() };
-    await db.packTemplates.put(nextPack);
-    setEditing(nextPack);
-    toast.success("Đã lưu pack");
-  };
-
-  const duplicatePack = async () => {
-    if (!editing) return;
+  const duplicatePackTemplate = async (pack: PackTemplate) => {
     const dup: PackTemplate = {
-      ...editing,
+      ...pack,
       packTemplateId: nanoid(),
-      name: editing.name + " (copy)",
+      name: pack.name + " (copy)",
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -308,6 +459,37 @@ function TemplatesPage() {
     setEditing(dup);
     toast.success("Đã duplicate pack");
     navigate({ to: "/templates", search: { open: dup.packTemplateId } });
+  };
+
+  const duplicatePack = async () => {
+    if (!editing) return;
+    await duplicatePackTemplate(editing);
+  };
+
+  const exportPackTemplate = (pack: PackTemplate) => {
+    const pageSet = new Set(pack.orderedPages);
+    const pages = (tpls ?? []).filter((template) => pageSet.has(template.pageTemplateId));
+    const bundle = buildPackTemplateBundle(pack, pages);
+    downloadJson(`${safePortableFileName(pack.name)}-pack-template.json`, bundle);
+  };
+
+  const importPortableTemplateBundle = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const bundle = await readPortableBundleFile(file);
+      const result = await importPortableBundle(bundle);
+      if (result.packs[0]) {
+        setEditing(result.packs[0]);
+        navigate({ to: "/templates", search: { open: result.packs[0].packTemplateId } });
+      }
+      toast.success(
+        `Đã import ${result.packs.length} pack, ${result.pages.length} page, ${result.presets.length} khuôn`,
+      );
+    } catch (error) {
+      toast.error("Không thể import: " + errorMessage(error));
+    }
   };
 
   const createPageInPack = async () => {
@@ -417,14 +599,8 @@ function TemplatesPage() {
     const f = e.target.files?.[0];
     e.target.value = "";
     if (!f) return;
-    if (f.size > 6_000_000) return toast.error("Ảnh > 6MB. Resize trước nhé.");
     try {
-      const dataUrl = await new Promise<string>((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(String(r.result));
-        r.onerror = () => rej(new Error("Đọc ảnh lỗi"));
-        r.readAsDataURL(f);
-      });
+      const dataUrl = await readOptimizedImageDataUrl(f);
       setSingleFileName(f.name);
       setSinglePreview(dataUrl);
       setSingleTemplateName("AI: " + f.name.replace(/\.[^.]+$/, ""));
@@ -441,11 +617,13 @@ function TemplatesPage() {
     if (!singlePreview) return;
     setAiBusy(true);
     try {
+      const dataColumns = await loadAiDataColumns();
       const out = await aiGenerateTemplateFromImage({
         imageDataUrl: singlePreview,
         fidelity: singleFidelity,
         customInstructions: singleInstructions,
         preferVisibleLines: singlePreferVisibleLines,
+        dataColumns,
       });
       if (!out.ok) {
         toast.error(out.error);
@@ -455,6 +633,7 @@ function TemplatesPage() {
       const { template: tpl, quality } = aiLayoutToTemplateWithQuality(
         layout,
         singleTemplateName.trim() || "AI: " + singleFileName.replace(/\.[^.]+$/, ""),
+        { sourceImageDataUrl: singlePreview },
       );
       if (quality.warnings.length > 0) {
         toast.warning(`${quality.warnings.length} cảnh báo blueprint — kiểm tra validationRules.`);
@@ -483,40 +662,30 @@ function TemplatesPage() {
 
   // === AI dựng combo từ nhiều ảnh ===
   const onPickComboImages = () => comboFileRef.current?.click();
+  const onAppendComboImages = () => comboAppendFileRef.current?.click();
+
+  const readComboPreviews = (files: File[]) =>
+    Promise.all(files.map((file) => readOptimizedImageDataUrl(file)));
 
   const onComboFilesChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const list = Array.from(e.target.files ?? []);
     e.target.value = "";
     if (list.length === 0) return;
-    // Validate
-    const oversize = list.find((f) => f.size > 6_000_000);
-    if (oversize) {
-      toast.error(`Ảnh "${oversize.name}" > 6MB. Resize trước nhé.`);
-      return;
-    }
-    const totalSize = list.reduce((a, f) => a + f.size, 0);
-    if (totalSize > 25_000_000) {
-      toast.error("Tổng dung lượng > 25MB. Bớt ảnh hoặc nén.");
-      return;
-    }
-    const previews = await Promise.all(
-      list.map(
-        (f) =>
-          new Promise<string>((res, rej) => {
-            const r = new FileReader();
-            r.onload = () => res(String(r.result));
-            r.onerror = () => rej(new Error("Đọc " + f.name + " lỗi"));
-            r.readAsDataURL(f);
-          }),
-      ),
-    );
+    const previews = await readComboPreviews(list);
     setComboFiles(list);
     setComboPreviews(previews);
     setComboPackName("");
-    setComboFidelity("strict");
-    setComboInstructions("");
-    setComboPreferVisibleLines(true);
     setComboOpen(true);
+  };
+
+  const onAppendComboFilesChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const list = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (list.length === 0) return;
+    const nextFiles = [...comboFiles, ...list];
+    const previews = await readComboPreviews(list);
+    setComboFiles(nextFiles);
+    setComboPreviews((current) => [...current, ...previews]);
   };
 
   const removeComboImage = (idx: number) => {
@@ -530,12 +699,14 @@ function TemplatesPage() {
     setComboStep(`Phân loại ${comboPreviews.length} ảnh...`);
     setComboProgress(10);
     try {
+      const dataColumns = await loadAiDataColumns();
       const out = await aiGenerateComboFromImages({
         images: comboPreviews.map((dataUrl) => ({ dataUrl })),
         packNameHint: comboPackName.trim() || undefined,
-        layoutFidelity: comboFidelity,
-        customInstructions: comboInstructions.trim() || undefined,
-        preferVisibleLines: comboPreferVisibleLines,
+        layoutFidelity: "strict",
+        customInstructions: undefined,
+        preferVisibleLines: false,
+        dataColumns,
         onProgress: (step, progress) => {
           setComboStep(step);
           setComboProgress(progress);
@@ -561,8 +732,6 @@ function TemplatesPage() {
       setComboOpen(false);
       setComboFiles([]);
       setComboPreviews([]);
-      setComboInstructions("");
-      setComboPreferVisibleLines(true);
       navigate({ to: "/templates", search: { open: packId } });
     } catch (err) {
       toast.error("Lỗi: " + (err instanceof Error ? err.message : String(err)));
@@ -584,6 +753,21 @@ function TemplatesPage() {
         hidden
         onChange={onComboFilesChange}
       />
+      <input
+        ref={comboAppendFileRef}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        onChange={onAppendComboFilesChange}
+      />
+      <input
+        ref={portableImportRef}
+        type="file"
+        accept="application/json,.json"
+        hidden
+        onChange={importPortableTemplateBundle}
+      />
       <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex min-w-0 items-center gap-3">
           <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-accent text-accent-foreground">
@@ -594,6 +778,14 @@ function TemplatesPage() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 xl:shrink-0">
+          <Button variant="outline" onClick={() => portableImportRef.current?.click()}>
+            <FileUp className="size-4 mr-2" /> Import
+          </Button>
+          {editing && (
+            <Button variant="outline" onClick={() => exportPackTemplate(editing)}>
+              <FileDown className="size-4 mr-2" /> Export pack
+            </Button>
+          )}
           <Button variant="outline" onClick={onPickComboImages} disabled={aiBusy}>
             <Layers className="size-4 mr-2" /> AI Gen
           </Button>
@@ -695,7 +887,7 @@ function TemplatesPage() {
           </DialogHeader>
           <div className="space-y-3">
             <div>
-              <Label>Tên pack (để trống → AI tự đặt)</Label>
+              <Label>Tên pack</Label>
               <Input
                 value={comboPackName}
                 onChange={(e) => setComboPackName(e.target.value)}
@@ -704,48 +896,19 @@ function TemplatesPage() {
               />
             </div>
             <div>
-              <Label>Mức bám sát mẫu</Label>
-              <Select
-                value={comboFidelity}
-                onValueChange={(value) => setComboFidelity(value as LayoutFidelity)}
-              >
-                <SelectTrigger className="mt-2">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="strict">Bám sát mẫu</SelectItem>
-                  <SelectItem value="balanced">Cân bằng</SelectItem>
-                  <SelectItem value="creative">Sáng tạo nhẹ</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Ghi chú cho AI</Label>
-              <Textarea
-                value={comboInstructions}
-                onChange={(e) => setComboInstructions(e.target.value)}
-                placeholder="Ví dụ: giữ đúng kiểu poster nền tối, title vàng nổi, 3-4 ảnh bo góc floating quanh canvas, danh sách bullet chia nhiều cụm như ảnh mẫu."
-                className="mt-2 min-h-[110px]"
-                disabled={comboBusy}
-              />
-            </div>
-            <label className="flex items-start gap-3 rounded-lg border p-3">
-              <Checkbox
-                checked={comboPreferVisibleLines}
-                onCheckedChange={(checked) => setComboPreferVisibleLines(checked === true)}
-                disabled={comboBusy}
-              />
-              <div className="space-y-1">
-                <div className="text-sm font-medium">Ưu tiên số dòng thật</div>
-                <div className="text-xs text-muted-foreground">
-                  Khi bộ ảnh là poster bullet-list, AI sẽ giữ line-level rõ hơn để draft không bị
-                  rơi về item-group generic.
-                </div>
+              <div className="flex items-center justify-between gap-3">
+                <Label>Ảnh đã chọn</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onAppendComboImages}
+                  disabled={comboBusy}
+                >
+                  <Plus /> Thêm ảnh
+                </Button>
               </div>
-            </label>
-            <div>
-              <Label>Ảnh đã chọn</Label>
-              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mt-2 max-h-[300px] overflow-y-auto">
+              <div className="mt-2 grid max-h-[420px] grid-cols-3 gap-2 overflow-y-auto sm:grid-cols-4">
                 {comboPreviews.map((src, idx) => (
                   <div
                     key={idx}
@@ -753,7 +916,7 @@ function TemplatesPage() {
                   >
                     <img src={src} alt={`page-${idx + 1}`} className="w-full h-full object-cover" />
                     <div className="absolute top-1 left-1 text-[10px] bg-black/60 text-white rounded px-1">
-                      #{idx + 1}
+                      P{idx + 1}
                     </div>
                     {!comboBusy && (
                       <button
@@ -809,7 +972,6 @@ function TemplatesPage() {
                 pack={editing}
                 allTemplates={tpls ?? []}
                 onChange={setEditing}
-                onSave={savePack}
                 onDuplicate={duplicatePack}
                 onCreatePage={createPageInPack}
                 onCreateAiPage={onPickAiImage}
@@ -829,6 +991,8 @@ function TemplatesPage() {
               templateMap={templateMap}
               active={active}
               onSelect={() => selectPack(pack)}
+              onDuplicate={() => duplicatePackTemplate(pack)}
+              onExport={() => exportPackTemplate(pack)}
               onDelete={() => deletePack(pack)}
             />
           );
