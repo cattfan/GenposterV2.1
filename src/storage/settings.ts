@@ -7,6 +7,8 @@ const DEFAULTS: AppSettings = {
   exportScale: 2,
   defaultCanvas: { width: 1080, height: 1350, background: "#ffffff" },
   theme: "light",
+  driveRootFolderUrl:
+    "https://drive.google.com/drive/folders/1f_gOfPyy0QbezU4y_W6EtESpo4Z_Hz9k?hl=vi",
 };
 
 export async function getSettings(): Promise<AppSettings> {

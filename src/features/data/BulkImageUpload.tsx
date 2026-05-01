@@ -24,7 +24,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Slider } from "@/components/ui/slider";
 import {
   entityHasImageSource,
   getAssetEntityIds,
@@ -46,6 +45,7 @@ interface PendingFile {
 
 const PREVIEW_PAGE_SIZE = 80;
 const PREVIEW_INCREMENT = 80;
+const DEFAULT_FUZZY_THRESHOLD = 0.78;
 const EMPTY_ENTITIES: Entity[] = [];
 const EMPTY_ASSETS: Asset[] = [];
 
@@ -137,7 +137,6 @@ async function collectDirectoryFiles(
 async function buildPendingFiles(
   items: Array<{ file: File; relativePath?: string }>,
   entities: Entity[],
-  threshold: number,
 ): Promise<PendingFile[]> {
   const results: PendingFile[] = [];
   const chunkSize = 80;
@@ -154,7 +153,7 @@ async function buildPendingFiles(
             : undefined),
       })),
       entities,
-      { fuzzyThreshold: threshold },
+      { fuzzyThreshold: DEFAULT_FUZZY_THRESHOLD },
     );
 
     results.push(
@@ -178,7 +177,6 @@ export function BulkImageUpload() {
   const allAssets = useLiveQuery(() => db.assets.toArray(), []) ?? EMPTY_ASSETS;
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [pending, setPending] = useState<PendingFile[]>([]);
-  const [threshold, setThreshold] = useState(0.78);
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState(false);
   const [driveBusy, setDriveBusy] = useState(false);
@@ -252,7 +250,7 @@ export function BulkImageUpload() {
               ? file.webkitRelativePath || undefined
               : undefined,
         }));
-      const next = await buildPendingFiles(items, entities, threshold);
+      const next = await buildPendingFiles(items, entities);
       finishImportPrep(next);
     } finally {
       setMatching(false);
@@ -277,7 +275,7 @@ export function BulkImageUpload() {
       };
       const handle = await picker.showDirectoryPicker();
       const files = await collectDirectoryFiles(handle, handle.name);
-      const next = await buildPendingFiles(files, entities, threshold);
+      const next = await buildPendingFiles(files, entities);
       finishImportPrep(next);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
@@ -298,7 +296,9 @@ export function BulkImageUpload() {
           ? item.file.webkitRelativePath || undefined
           : undefined,
     }));
-    const matches = matchFilesToEntities(matchInputs, entities, { fuzzyThreshold: threshold });
+    const matches = matchFilesToEntities(matchInputs, entities, {
+      fuzzyThreshold: DEFAULT_FUZZY_THRESHOLD,
+    });
     setPending(
       pending.map((item, index) => ({
         ...item,
@@ -513,7 +513,7 @@ export function BulkImageUpload() {
           <CardHeader className="pb-3">
             <CardTitle>Ghép ảnh vào quán</CardTitle>
             <CardDescription>
-              Match theo tên thư mục hoặc tên file, sau đó review nhanh trước khi import.
+              Tải ảnh từ Drive theo cột Link Drive/imageRef trong sheet. Chọn file thủ công chỉ dùng khi cần.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
@@ -591,31 +591,6 @@ export function BulkImageUpload() {
               >
                 <Download /> Tải ảnh từ Drive ({driveImportCandidates.length})
               </Button>
-            </div>
-
-            <div className="rounded-lg border bg-muted/20 p-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-medium">Độ khớp tên</div>
-                  <div className="text-xs text-muted-foreground">
-                    Cao hơn thì ít match sai hơn, nhưng cần review nhiều hơn.
-                  </div>
-                </div>
-                <Badge variant="secondary">{Math.round(threshold * 100)}%</Badge>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="text-xs text-muted-foreground">Thoáng</span>
-                <div className="min-w-32 flex-1">
-                  <Slider
-                    value={[threshold * 100]}
-                    min={50}
-                    max={95}
-                    step={1}
-                    onValueChange={(value) => setThreshold(value[0] / 100)}
-                  />
-                </div>
-                <span className="text-xs text-muted-foreground">Chặt</span>
-              </div>
             </div>
 
             {matching && (
