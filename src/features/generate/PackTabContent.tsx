@@ -10,6 +10,7 @@ import {
   FileDown,
   FileUp,
   Package,
+  Copy,
   Link2,
   Link2Off,
   AlertTriangle,
@@ -50,8 +51,11 @@ import {
   IMAGE_BINDING_OPTIONS,
   ASSET_RANDOM_SCOPE_BINDING_VALUE,
   buildAssetRandomScopeBindingPath,
+  buildEntityScopedTextBindingPath,
+  getEntityScopedTextBindingBasePath,
   isAssetRandomScopeBindingPath,
   parseAssetRandomScopeBindingPath,
+  parseEntityScopedTextBindingPath,
   resolveTextBinding,
 } from "@/engines/binding/dataBinding";
 import { BindCanvas } from "@/features/generate/BindCanvas";
@@ -390,7 +394,10 @@ export function PackTabContent({
         .sort((a, b) => a.y - b.y || a.x - b.x || a.slotId.localeCompare(b.slotId)),
     [selectedImageSlots],
   );
-  const textSlotBindingValue = (slot: Slot) => slot.bindingPath ?? "_static";
+  const textSlotBindingValue = (slot: Slot) =>
+    getEntityScopedTextBindingBasePath(slot.bindingPath) || "_static";
+  const textSlotSourceValue = (slot: Slot) =>
+    parseEntityScopedTextBindingPath(slot.bindingPath)?.sheetName ?? "__current";
   const imageSlotBindingValue = (slot: Slot) =>
     isAssetRandomScopeBindingPath(slot.bindingPath)
       ? ASSET_RANDOM_SCOPE_BINDING_VALUE
@@ -408,7 +415,9 @@ export function PackTabContent({
       slot.name?.trim() ||
         slot.staticText?.trim() ||
         (slot.bindingPath
-          ? TEXT_BINDING_OPTIONS.find((option) => option.value === slot.bindingPath)?.label
+          ? TEXT_BINDING_OPTIONS.find(
+              (option) => (option.value || "_static") === textSlotBindingValue(slot),
+            )?.label
           : undefined),
       `Chữ ${index + 1}`,
     );
@@ -418,6 +427,13 @@ export function PackTabContent({
         IMAGE_BINDING_OPTIONS.find((option) => option.value === imageSlotBindingValue(slot))?.label,
       `Ảnh ${index + 1}`,
     );
+  const buildTextBindingPathForSlot = (slot: Slot, fieldPath: string) => {
+    const sourceSheet = textSlotSourceValue(slot);
+    return buildEntityScopedTextBindingPath({
+      path: fieldPath,
+      sheetName: sourceSheet === "__current" ? undefined : sourceSheet,
+    });
+  };
   const handleSelectSlot = (
     slotId: string | null,
     mode: "replace" | "toggle" | "group" | "replace-many" = "replace",
@@ -525,6 +541,50 @@ export function PackTabContent({
       next.updatedAt = Date.now();
       return { ...prev, [pageTemplateId]: next };
     });
+  };
+  const applyTextBindingSelection = (slot: Slot, value: string) => {
+    if (!activePage) return;
+    const bindingPath = value === "_static" ? undefined : buildTextBindingPathForSlot(slot, value);
+    applyBindingToSlots([slot], activePage.pageTemplateId, bindingPath);
+  };
+  const applyTextSourceSelection = (slot: Slot, sheetName: string) => {
+    if (!activePage) return;
+    const currentField = textSlotBindingValue(slot);
+    if (currentField === "_static") return;
+    const bindingPath = buildEntityScopedTextBindingPath({
+      path: currentField,
+      sheetName: sheetName === "__current" ? undefined : sheetName,
+    });
+    applyBindingToSlots([slot], activePage.pageTemplateId, bindingPath);
+  };
+  const copySelectedSlotFormat = () => {
+    if (!activePage || !effectiveActive) return;
+    const slotById = new Map(effectiveActive.slots.map((slot) => [slot.slotId, slot]));
+    const orderedSlots = selectedSlotIds
+      .map((slotId) => slotById.get(slotId))
+      .filter((slot): slot is Slot => !!slot);
+    if (orderedSlots.length < 2) {
+      toast.error("Chọn ít nhất 2 khối để copy định dạng");
+      return;
+    }
+    const [source, ...targets] = orderedSlots;
+    const targetIds = new Set(targets.map((slot) => slot.slotId));
+    const copiedStyle = source.style ? { ...source.style } : undefined;
+    setPreviewPageDrafts((prev) => {
+      const current = createWorkingTemplate(effectiveActive, undefined, effectiveActive);
+      current.slots = current.slots.map((slot) =>
+        targetIds.has(slot.slotId)
+          ? {
+              ...slot,
+              rotation: source.rotation,
+              style: copiedStyle ? { ...copiedStyle } : undefined,
+            }
+          : slot,
+      );
+      current.updatedAt = Date.now();
+      return { ...prev, [activePage.pageTemplateId]: current };
+    });
+    toast.success(`Đã copy định dạng sang ${targets.length} khối`);
   };
   const clearBindingsForSlots = (slots: Slot[], pageTemplateId: string) => {
     slots.forEach((slot) => clearBinding(pageTemplateId, slot.slotId));
@@ -892,7 +952,10 @@ export function PackTabContent({
   const getRewriteCurrentText = (slot: Slot) =>
     (slot.staticText ?? "").trim() ||
     (slot.bindingPath
-      ? resolveTextBinding(slot.bindingPath, previewEntity, "", previewEntityPool).trim()
+      ? resolveTextBinding(slot.bindingPath, previewEntity, "", previewEntityPool, {
+          entities,
+          seed: `${activePage?.pageTemplateId ?? "preview"}:${slot.slotId}:rewrite`,
+        }).trim()
       : "");
 
   const runAiRewriteSelectedText = async (sourceText?: string) => {
@@ -1379,6 +1442,7 @@ export function PackTabContent({
                           entity={previewEntity}
                           assets={assets}
                           entityPool={previewEntityPool}
+                          sourceEntities={entities}
                           slotItems={previewSlotItems}
                           seedKey={`${effectiveActive.pageTemplateId}:${activePageIdx}`}
                           showSafeFrame={showSafeFrame}
@@ -1387,7 +1451,7 @@ export function PackTabContent({
                         {surfaceMarqueeRect && (
                           <div
                             data-bind-surface-marquee="true"
-                            className="pointer-events-none absolute z-[2147483647] rounded-sm border border-primary bg-primary/10"
+                            className="pointer-events-none absolute z-[2147483647] border border-primary bg-primary/10"
                             style={{
                               left: surfaceMarqueeRect.left,
                               top: surfaceMarqueeRect.top,
@@ -1524,12 +1588,22 @@ export function PackTabContent({
                 )}
                 {selectedBindableSlots.length > 0 && activePage && (
                   <>
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                       <span>
                         {selectedBindableSlots.length} khối đang chọn · trang {activePageIdx + 1}
                         {selectedTextSlots.length > 0 && ` · ${selectedTextSlots.length} chữ`}
                         {selectedImageSlots.length > 0 && ` · ${selectedImageSlots.length} ảnh`}
                       </span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 shrink-0 px-2 text-[11px]"
+                        disabled={selectedSlotIds.length < 2}
+                        onClick={copySelectedSlotFormat}
+                      >
+                        <Copy className="mr-1 size-3" /> Copy định dạng
+                      </Button>
                     </div>
                     {sortedSelectedTextSlots.length > 0 && (
                       <div className="space-y-2">
@@ -1551,13 +1625,7 @@ export function PackTabContent({
                             </div>
                             <Select
                               value={textSlotBindingValue(slot)}
-                              onValueChange={(v) =>
-                                applyBindingToSlots(
-                                  [slot],
-                                  activePage.pageTemplateId,
-                                  v === "_static" ? undefined : v,
-                                )
-                              }
+                              onValueChange={(v) => applyTextBindingSelection(slot, v)}
                             >
                               <SelectTrigger className="h-8">
                                 <SelectValue placeholder="Chọn trường" />
@@ -1573,6 +1641,31 @@ export function PackTabContent({
                                 })}
                               </SelectContent>
                             </Select>
+                            <div>
+                              <Label className="text-xs">Nguồn dữ liệu</Label>
+                              <Select
+                                value={textSlotSourceValue(slot)}
+                                onValueChange={(sheetName) =>
+                                  applyTextSourceSelection(slot, sheetName)
+                                }
+                                disabled={textSlotBindingValue(slot) === "_static"}
+                              >
+                                <SelectTrigger
+                                  className="h-8"
+                                  disabled={textSlotBindingValue(slot) === "_static"}
+                                >
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="__current">Theo nguồn chung</SelectItem>
+                                  {sheetOptions.map((sheet) => (
+                                    <SelectItem key={sheet} value={sheet}>
+                                      {sheet}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
                           </div>
                         ))}
                       </div>

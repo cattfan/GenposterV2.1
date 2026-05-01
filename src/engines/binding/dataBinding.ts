@@ -50,6 +50,12 @@ export interface AssetRandomScopeConfig {
 
 export const ASSET_RANDOM_SCOPE_BINDING_VALUE = "asset.random_scope";
 const ASSET_RANDOM_SCOPE_BINDING_PREFIX = `${ASSET_RANDOM_SCOPE_BINDING_VALUE}:`;
+export const ENTITY_SCOPED_TEXT_BINDING_PREFIX = "entity.scoped:";
+
+export interface EntityScopedTextBindingConfig {
+  path: string;
+  sheetName?: string;
+}
 
 function cleanScopeValue(value: string | undefined): string | undefined {
   if (!value || value === "__all__") return undefined;
@@ -89,6 +95,37 @@ export function isAssetRandomScopeBindingPath(bindingPath: string | undefined): 
     bindingPath === ASSET_RANDOM_SCOPE_BINDING_VALUE ||
     !!bindingPath?.startsWith(ASSET_RANDOM_SCOPE_BINDING_PREFIX)
   );
+}
+
+export function buildEntityScopedTextBindingPath(config: EntityScopedTextBindingConfig): string {
+  const path = normalizeEntityTextPath(config.path);
+  const sheetName = cleanScopeValue(config.sheetName);
+  if (!sheetName) return path;
+  return (
+    ENTITY_SCOPED_TEXT_BINDING_PREFIX + encodeURIComponent(JSON.stringify({ path, sheetName }))
+  );
+}
+
+export function parseEntityScopedTextBindingPath(
+  bindingPath: string | undefined,
+): EntityScopedTextBindingConfig | null {
+  if (!bindingPath?.startsWith(ENTITY_SCOPED_TEXT_BINDING_PREFIX)) return null;
+  try {
+    const parsed = JSON.parse(
+      decodeURIComponent(bindingPath.slice(ENTITY_SCOPED_TEXT_BINDING_PREFIX.length)),
+    ) as Partial<EntityScopedTextBindingConfig>;
+    return {
+      path: normalizeEntityTextPath(parsed.path ?? "entity.name"),
+      sheetName: cleanScopeValue(parsed.sheetName),
+    };
+  } catch {
+    return { path: "entity.name" };
+  }
+}
+
+export function getEntityScopedTextBindingBasePath(bindingPath: string | undefined): string {
+  const scoped = parseEntityScopedTextBindingPath(bindingPath);
+  return scoped?.path ?? bindingPath ?? "";
 }
 
 function toDisplayText(value: unknown, fallback: string | undefined): string {
@@ -501,22 +538,61 @@ export function resolveEntityComposeBinding(
   return values.length ? values.join(config.separator) : (fallback ?? "");
 }
 
+export interface ResolveTextBindingOptions {
+  seed?: string;
+  entities?: Entity[];
+}
+
+function pickScopedTextEntity(
+  scoped: EntityScopedTextBindingConfig | null,
+  currentEntity: Entity | undefined,
+  entityPool: Entity[] | undefined,
+  options: ResolveTextBindingOptions | undefined,
+): Entity | undefined {
+  if (!scoped?.sheetName) return currentEntity;
+  const candidates = (options?.entities?.length ? options.entities : (entityPool ?? []))
+    .filter((item) => item.status === "active")
+    .filter((item) => item.sheetName === scoped.sheetName)
+    .sort((a, b) => a.entityId.localeCompare(b.entityId));
+  if (candidates.length === 0) return currentEntity;
+  const seed = [options?.seed, currentEntity?.entityId, scoped.sheetName, scoped.path]
+    .filter(Boolean)
+    .join(":");
+  return candidates[stableHash(seed) % candidates.length];
+}
+
 export function resolveTextBinding(
   bindingPath: string | undefined,
   entity: Entity | undefined,
   fallback: string | undefined,
   entityPool?: Entity[],
+  options?: ResolveTextBindingOptions,
 ): string {
   if (!bindingPath) return fallback ?? "";
-  if (isEntityListBindingPath(bindingPath)) {
-    const pool = entityPool && entityPool.length > 0 ? entityPool : entity ? [entity] : [];
-    return resolveEntityListBinding(bindingPath, pool, fallback);
+  const scoped = parseEntityScopedTextBindingPath(bindingPath);
+  const effectivePath = scoped?.path ?? bindingPath;
+  const scopedPool = scoped?.sheetName
+    ? (options?.entities ?? entityPool ?? []).filter(
+        (item) => item.status === "active" && item.sheetName === scoped.sheetName,
+      )
+    : entityPool;
+  const effectiveEntity = pickScopedTextEntity(scoped, entity, entityPool, options);
+  if (isEntityListBindingPath(effectivePath)) {
+    const pool =
+      scopedPool && scopedPool.length > 0
+        ? scopedPool
+        : entityPool && entityPool.length > 0
+          ? entityPool
+          : effectiveEntity
+            ? [effectiveEntity]
+            : [];
+    return resolveEntityListBinding(effectivePath, pool, fallback);
   }
-  if (isEntityComposeBindingPath(bindingPath)) {
-    return resolveEntityComposeBinding(bindingPath, entity, fallback);
+  if (isEntityComposeBindingPath(effectivePath)) {
+    return resolveEntityComposeBinding(effectivePath, effectiveEntity, fallback);
   }
-  if (!entity) return fallback ?? `{{${bindingPath}}}`;
-  const text = readEntityTextValue(entity, bindingPath);
+  if (!effectiveEntity) return fallback ?? `{{${effectivePath}}}`;
+  const text = readEntityTextValue(effectiveEntity, effectivePath);
   if (text) return text;
   return fallback ?? "";
 }

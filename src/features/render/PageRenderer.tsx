@@ -350,7 +350,10 @@ function SlotRenderer({
     const border = buildBorder(slot.style, scale);
     const isLine = slot.shapeKind === "line" || slot.shapeKind === "divider";
     const shapeText = slot.bindingPath?.startsWith("entity.")
-      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool)
+      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool, {
+          entities: allEntities,
+          seed: `${seedKey}:${slot.slotId}:shape-text`,
+        })
       : (slot.staticText ?? "");
     const hasShapeText = !!shapeText.trim();
     const textCss = buildTextStyle(slot.style, scale);
@@ -523,7 +526,10 @@ function SlotRenderer({
 
   if (slot.kind === "text") {
     const text = slot.bindingPath
-      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool)
+      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool, {
+          entities: allEntities,
+          seed: `${seedKey}:${slot.slotId}:text`,
+        })
       : (slot.staticText ?? "Văn bản");
     const textCss = buildTextStyle(slot.style, scale);
     return (

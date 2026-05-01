@@ -37,6 +37,7 @@ export function BindCanvas({
   entity,
   assets,
   entityPool,
+  sourceEntities,
   slotItems,
   seedKey,
   showSafeFrame = false,
@@ -53,6 +54,7 @@ export function BindCanvas({
   entity?: Entity;
   assets: Asset[];
   entityPool?: Entity[];
+  sourceEntities?: Entity[];
   slotItems?: RenderedItem[];
   seedKey?: string;
   showSafeFrame?: boolean;
@@ -66,7 +68,10 @@ export function BindCanvas({
     const ordered = [entity, ...(entityPool ?? [])].filter((item): item is Entity => !!item);
     return new Map(ordered.map((item) => [item.entityId, item]));
   }, [entity, entityPool]);
-  const imageResolveEntities = useMemo(() => Array.from(entityLookup.values()), [entityLookup]);
+  const imageResolveEntities = useMemo(
+    () => (sourceEntities?.length ? sourceEntities : Array.from(entityLookup.values())),
+    [entityLookup, sourceEntities],
+  );
 
   const slotEntityOverride = useMemo(() => {
     const map = new Map<string, { entityId?: string; assetId?: string }>();
@@ -252,6 +257,7 @@ export function BindCanvas({
             scale={scale}
             entity={cardEntity}
             entityPool={entityPool}
+            sourceEntities={imageResolveEntities}
             showSafeFrame={showSafeFrame}
             label={
               slot.cardIndex === 1 && isFirstSlotOfCard(slot, expanded.slots)
@@ -538,6 +544,7 @@ function GhostSlot({
   scale,
   entity,
   entityPool,
+  sourceEntities,
   showSafeFrame,
   label,
 }: {
@@ -545,6 +552,7 @@ function GhostSlot({
   scale: number;
   entity?: Entity;
   entityPool?: Entity[];
+  sourceEntities?: Entity[];
   showSafeFrame?: boolean;
   label?: string;
 }) {
@@ -565,7 +573,10 @@ function GhostSlot({
   let inner: React.ReactNode = null;
   if (slot.kind === "text") {
     const text = slot.bindingPath
-      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool)
+      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool, {
+          entities: sourceEntities,
+          seed: `ghost:${slot.slotId}`,
+        })
       : (slot.staticText ?? "");
     const textCss = buildTextStyle(slot.style, scale);
     inner = <div style={textCss}>{text}</div>;
@@ -721,7 +732,10 @@ function BindSlot({
     const border = buildBorder(slot.style, scale);
     const isLine = slot.shapeKind === "line" || slot.shapeKind === "divider";
     const shapeText = slot.bindingPath?.startsWith("entity.")
-      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool)
+      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool, {
+          entities: imageResolveEntities,
+          seed: `${seedKey ?? "bind"}:${slot.slotId}:shape-text`,
+        })
       : (slot.staticText ?? "");
     const hasShapeText = !!shapeText.trim();
     const textCss = buildTextStyle(slot.style, scale);
@@ -886,7 +900,10 @@ function BindSlot({
 
   if (slot.kind === "text") {
     const text = slot.bindingPath
-      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool)
+      ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool, {
+          entities: imageResolveEntities,
+          seed: `${seedKey ?? "bind"}:${slot.slotId}:text`,
+        })
       : (slot.staticText ?? "Văn bản");
     const textCss = buildTextStyle(slot.style, scale);
     return (

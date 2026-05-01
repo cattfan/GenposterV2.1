@@ -105,7 +105,16 @@ function materializeTemplateForEditor(
       if (slot.kind === "text" && slot.bindingPath) {
         return {
           ...slot,
-          staticText: resolveTextBinding(slot.bindingPath, slotEntity, slot.staticText, entityPool),
+          staticText: resolveTextBinding(
+            slot.bindingPath,
+            slotEntity,
+            slot.staticText,
+            entityPool,
+            {
+              entities,
+              seed: `${seedKey ?? template.pageTemplateId}:${slot.slotId}:text`,
+            },
+          ),
         };
       }
 
@@ -125,7 +134,16 @@ function materializeTemplateForEditor(
       if (slot.kind === "shape" && slot.bindingPath && !slot.bindingPath.startsWith("asset.")) {
         return {
           ...slot,
-          staticText: resolveTextBinding(slot.bindingPath, slotEntity, slot.staticText, entityPool),
+          staticText: resolveTextBinding(
+            slot.bindingPath,
+            slotEntity,
+            slot.staticText,
+            entityPool,
+            {
+              entities,
+              seed: `${seedKey ?? template.pageTemplateId}:${slot.slotId}:shape-text`,
+            },
+          ),
         };
       }
 
