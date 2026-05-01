@@ -97,6 +97,24 @@ import {
 
 type Filter = "all" | "selected" | "errors" | "partner";
 type SurfaceSelectionRect = { left: number; top: number; width: number; height: number };
+type FormatSlotMode = "text" | "image";
+
+interface SlotFormatSnapshot {
+  sourceSlotId: string;
+  sourceLabel: string;
+  bindMode: FormatSlotMode;
+  bindingKey: string;
+  rotation?: number;
+  style?: Slot["style"];
+}
+
+interface SlotFormatClipboard {
+  label: string;
+  snapshots: SlotFormatSnapshot[];
+}
+
+const cloneSlotStyle = (style: Slot["style"] | undefined): Slot["style"] | undefined =>
+  style ? { ...style } : undefined;
 
 interface Props {
   packs: PackTemplate[];
@@ -154,6 +172,7 @@ export function PackTabContent({
   const [editingPreviewOpen, setEditingPreviewOpen] = useState(false);
   const [showSafeFrame, setShowSafeFrame] = useState(false);
   const [surfaceMarqueeRect, setSurfaceMarqueeRect] = useState<SurfaceSelectionRect | null>(null);
+  const [formatClipboard, setFormatClipboard] = useState<SlotFormatClipboard | null>(null);
   const [captionBusy, setCaptionBusy] = useState(false);
   const [rewriteBusy, setRewriteBusy] = useState(false);
   const packRefs = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -301,6 +320,7 @@ export function PackTabContent({
   // Reset slot khi đổi pack/page
   useEffect(() => {
     setSelectedSlotIds([]);
+    setFormatClipboard(null);
     setActivePageIdx(0);
     setPreviewPageDrafts({});
     setEditingPageIndex(null);
@@ -380,6 +400,19 @@ export function PackTabContent({
   const selectedTextSlots = selectedSlots.filter((slot) => getSlotBindMode(slot) === "text");
   const selectedImageSlots = selectedSlots.filter((slot) => getSlotBindMode(slot) === "image");
   const selectedBindableSlots = selectedSlots.filter((slot) => getSlotBindMode(slot) !== null);
+  const selectedFormatBaseSlot = selectedBindableSlots[selectedBindableSlots.length - 1];
+  const relatedFormatTargetSlots =
+    effectiveActive && selectedFormatBaseSlot
+      ? effectiveActive.slots.filter((slot) => {
+          if (getSlotBindMode(slot) === null) return false;
+          if (selectedFormatBaseSlot.groupId)
+            return slot.groupId === selectedFormatBaseSlot.groupId;
+          if (selectedFormatBaseSlot.sectionRefId) {
+            return slot.sectionRefId === selectedFormatBaseSlot.sectionRefId;
+          }
+          return false;
+        })
+      : [];
   const sortedSelectedTextSlots = useMemo(
     () =>
       selectedTextSlots
@@ -427,6 +460,18 @@ export function PackTabContent({
         IMAGE_BINDING_OPTIONS.find((option) => option.value === imageSlotBindingValue(slot))?.label,
       `Ảnh ${index + 1}`,
     );
+  const slotFormatLabel = (slot: Slot, index: number) => {
+    const mode = getSlotBindMode(slot);
+    if (mode === "text") return textSlotLabel(slot, index);
+    if (mode === "image") return imageSlotLabel(slot, index);
+    return normalizeSlotLabel(slot.name?.trim(), `Khối ${index + 1}`);
+  };
+  const slotFormatBindingKey = (slot: Slot) => {
+    const mode = getSlotBindMode(slot);
+    if (mode === "text") return `text:${textSlotBindingValue(slot)}`;
+    if (mode === "image") return `image:${imageSlotBindingValue(slot)}`;
+    return "unknown";
+  };
   const buildTextBindingPathForSlot = (slot: Slot, fieldPath: string) => {
     const sourceSheet = textSlotSourceValue(slot);
     return buildEntityScopedTextBindingPath({
@@ -558,33 +603,109 @@ export function PackTabContent({
     applyBindingToSlots([slot], activePage.pageTemplateId, bindingPath);
   };
   const copySelectedSlotFormat = () => {
-    if (!activePage || !effectiveActive) return;
-    const slotById = new Map(effectiveActive.slots.map((slot) => [slot.slotId, slot]));
-    const orderedSlots = selectedSlotIds
-      .map((slotId) => slotById.get(slotId))
-      .filter((slot): slot is Slot => !!slot);
-    if (orderedSlots.length < 2) {
-      toast.error("Chọn ít nhất 2 khối để copy định dạng");
+    const sourceSlots = selectedBindableSlots;
+    if (sourceSlots.length === 0) {
+      toast.error("Chọn ít nhất 1 khối để copy định dạng");
       return;
     }
-    const [source, ...targets] = orderedSlots;
-    const targetIds = new Set(targets.map((slot) => slot.slotId));
-    const copiedStyle = source.style ? { ...source.style } : undefined;
+
+    const snapshots = sourceSlots
+      .map((slot, index): SlotFormatSnapshot | null => {
+        const mode = getSlotBindMode(slot);
+        if (!mode) return null;
+        return {
+          sourceSlotId: slot.slotId,
+          sourceLabel: slotFormatLabel(slot, index),
+          bindMode: mode,
+          bindingKey: slotFormatBindingKey(slot),
+          rotation: slot.rotation,
+          style: cloneSlotStyle(slot.style),
+        };
+      })
+      .filter((snapshot): snapshot is SlotFormatSnapshot => !!snapshot);
+
+    if (snapshots.length === 0) {
+      toast.error("Khối đang chọn không có định dạng để copy");
+      return;
+    }
+
+    const label = snapshots.length === 1 ? snapshots[0].sourceLabel : `${snapshots.length} khối`;
+    setFormatClipboard({ label, snapshots });
+    toast.success(`Đã copy định dạng ${label}`);
+  };
+  const buildFormatAssignments = (targets: Slot[]) => {
+    if (!formatClipboard) return new Map<string, SlotFormatSnapshot>();
+
+    const byKey = new Map<string, SlotFormatSnapshot[]>();
+    const byMode = new Map<FormatSlotMode, SlotFormatSnapshot[]>();
+    for (const snapshot of formatClipboard.snapshots) {
+      const keyGroup = byKey.get(snapshot.bindingKey) ?? [];
+      keyGroup.push(snapshot);
+      byKey.set(snapshot.bindingKey, keyGroup);
+
+      const modeGroup = byMode.get(snapshot.bindMode) ?? [];
+      modeGroup.push(snapshot);
+      byMode.set(snapshot.bindMode, modeGroup);
+    }
+
+    const keyUseCount = new Map<string, number>();
+    const modeUseCount = new Map<FormatSlotMode, number>();
+    const assignments = new Map<string, SlotFormatSnapshot>();
+
+    for (const target of targets) {
+      const mode = getSlotBindMode(target);
+      if (!mode) continue;
+
+      const bindingKey = slotFormatBindingKey(target);
+      const exactMatches = byKey.get(bindingKey) ?? [];
+      if (exactMatches.length > 0) {
+        const used = keyUseCount.get(bindingKey) ?? 0;
+        assignments.set(target.slotId, exactMatches[used % exactMatches.length]);
+        keyUseCount.set(bindingKey, used + 1);
+        continue;
+      }
+
+      const modeMatches = byMode.get(mode) ?? [];
+      if (modeMatches.length === 0) continue;
+      const used = modeUseCount.get(mode) ?? 0;
+      assignments.set(target.slotId, modeMatches[used % modeMatches.length]);
+      modeUseCount.set(mode, used + 1);
+    }
+
+    return assignments;
+  };
+  const applyCopiedSlotFormat = (targets: Slot[], scopeLabel: string) => {
+    if (!activePage || !effectiveActive) return;
+    if (!formatClipboard) {
+      toast.error("Chưa copy định dạng");
+      return;
+    }
+    if (targets.length === 0) {
+      toast.error("Chọn khối cần áp dụng định dạng");
+      return;
+    }
+
+    const assignments = buildFormatAssignments(targets);
+    if (assignments.size === 0) {
+      toast.error("Không có khối cùng loại để áp dụng định dạng");
+      return;
+    }
+
     setPreviewPageDrafts((prev) => {
       const current = createWorkingTemplate(effectiveActive, undefined, effectiveActive);
-      current.slots = current.slots.map((slot) =>
-        targetIds.has(slot.slotId)
-          ? {
-              ...slot,
-              rotation: source.rotation,
-              style: copiedStyle ? { ...copiedStyle } : undefined,
-            }
-          : slot,
-      );
+      current.slots = current.slots.map((slot) => {
+        const snapshot = assignments.get(slot.slotId);
+        if (!snapshot) return slot;
+        return {
+          ...slot,
+          rotation: snapshot.rotation,
+          style: cloneSlotStyle(snapshot.style),
+        };
+      });
       current.updatedAt = Date.now();
       return { ...prev, [activePage.pageTemplateId]: current };
     });
-    toast.success(`Đã copy định dạng sang ${targets.length} khối`);
+    toast.success(`Đã áp dụng định dạng cho ${assignments.size} khối ${scopeLabel}`);
   };
   const clearBindingsForSlots = (slots: Slot[], pageTemplateId: string) => {
     slots.forEach((slot) => clearBinding(pageTemplateId, slot.slotId));
@@ -1594,16 +1715,49 @@ export function PackTabContent({
                         {selectedTextSlots.length > 0 && ` · ${selectedTextSlots.length} chữ`}
                         {selectedImageSlots.length > 0 && ` · ${selectedImageSlots.length} ảnh`}
                       </span>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-7 shrink-0 px-2 text-[11px]"
-                        disabled={selectedSlotIds.length < 2}
-                        onClick={copySelectedSlotFormat}
-                      >
-                        <Copy className="mr-1 size-3" /> Copy định dạng
-                      </Button>
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
+                        {formatClipboard && (
+                          <Badge
+                            variant="outline"
+                            className="h-7 max-w-32 truncate px-2 text-[11px]"
+                          >
+                            Đã copy: {formatClipboard.label}
+                          </Badge>
+                        )}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 shrink-0 px-2 text-[11px]"
+                          onClick={copySelectedSlotFormat}
+                        >
+                          <Copy className="mr-1 size-3" /> Copy định dạng
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 shrink-0 px-2 text-[11px]"
+                          disabled={!formatClipboard}
+                          onClick={() => applyCopiedSlotFormat(selectedBindableSlots, "đang chọn")}
+                        >
+                          <Wand2 className="mr-1 size-3" /> Áp dụng
+                        </Button>
+                        {relatedFormatTargetSlots.length > 1 && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 shrink-0 px-2 text-[11px]"
+                            disabled={!formatClipboard}
+                            onClick={() =>
+                              applyCopiedSlotFormat(relatedFormatTargetSlots, "trong cụm")
+                            }
+                          >
+                            Áp dụng cụm
+                          </Button>
+                        )}
+                      </div>
                     </div>
                     {sortedSelectedTextSlots.length > 0 && (
                       <div className="space-y-2">
