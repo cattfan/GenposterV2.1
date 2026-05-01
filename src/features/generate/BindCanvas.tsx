@@ -222,6 +222,7 @@ export function BindCanvas({
 
   return (
     <div
+      data-bind-canvas-root="true"
       onMouseDownCapture={startMarqueeSelection}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onSelectSlot(null, "replace");

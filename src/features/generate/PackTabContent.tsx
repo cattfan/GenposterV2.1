@@ -92,6 +92,7 @@ import {
 } from "@/features/generate/generatePresetPortability";
 
 type Filter = "all" | "selected" | "errors" | "partner";
+type SurfaceSelectionRect = { left: number; top: number; width: number; height: number };
 
 interface Props {
   packs: PackTemplate[];
@@ -148,9 +149,15 @@ export function PackTabContent({
   const [previewEntityId, setPreviewEntityId] = useState<string | undefined>(undefined);
   const [editingPreviewOpen, setEditingPreviewOpen] = useState(false);
   const [showSafeFrame, setShowSafeFrame] = useState(false);
+  const [surfaceMarqueeRect, setSurfaceMarqueeRect] = useState<SurfaceSelectionRect | null>(null);
   const [captionBusy, setCaptionBusy] = useState(false);
   const [rewriteBusy, setRewriteBusy] = useState(false);
   const packRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const surfaceSelectionRef = useRef<{
+    start: { x: number; y: number };
+    active: boolean;
+    lastSignature: string;
+  } | null>(null);
   const presetImportRef = useRef<HTMLInputElement>(null);
   const presetAutosaveTimer = useRef<number | null>(null);
   const {
@@ -437,6 +444,69 @@ export function PackTabContent({
       }
       return [slotId];
     });
+  };
+  const updateSurfaceMarqueeSelection = (surface: HTMLDivElement, rect: SurfaceSelectionRect) => {
+    const ids = Array.from(surface.querySelectorAll<HTMLElement>("[data-bind-hit-target]"))
+      .filter((node) => {
+        const nodeRect = node.getBoundingClientRect();
+        const surfaceRect = surface.getBoundingClientRect();
+        const localRect: SurfaceSelectionRect = {
+          left: nodeRect.left - surfaceRect.left + surface.scrollLeft,
+          top: nodeRect.top - surfaceRect.top + surface.scrollTop,
+          width: nodeRect.width,
+          height: nodeRect.height,
+        };
+        return surfaceRectsIntersect(rect, localRect);
+      })
+      .map((node) => node.dataset.bindHitTarget)
+      .filter((slotId): slotId is string => !!slotId);
+    const signature = ids.join("|");
+    if (signature === surfaceSelectionRef.current?.lastSignature) return;
+    if (surfaceSelectionRef.current) surfaceSelectionRef.current.lastSignature = signature;
+    setSelectedSlotIds(Array.from(new Set(ids)));
+  };
+  const startSurfaceMarqueeSelection = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("[data-bind-hit-target]") || target.closest("[data-bind-canvas-root]")) {
+      return;
+    }
+
+    event.preventDefault();
+    const surface = event.currentTarget;
+    const start = getSurfacePoint(surface, event.clientX, event.clientY);
+    surfaceSelectionRef.current = { start, active: false, lastSignature: "" };
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const state = surfaceSelectionRef.current;
+      if (!state) return;
+      const current = getSurfacePoint(surface, moveEvent.clientX, moveEvent.clientY);
+      const moved = Math.hypot(current.x - state.start.x, current.y - state.start.y);
+      if (!state.active && moved < 4) return;
+      state.active = true;
+      const rect = normalizeSurfaceSelectionRect(state.start, current);
+      setSurfaceMarqueeRect(rect);
+      updateSurfaceMarqueeSelection(surface, rect);
+      moveEvent.preventDefault();
+    };
+
+    const onMouseUp = (upEvent: MouseEvent) => {
+      const state = surfaceSelectionRef.current;
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      if (state?.active) {
+        const current = getSurfacePoint(surface, upEvent.clientX, upEvent.clientY);
+        updateSurfaceMarqueeSelection(surface, normalizeSurfaceSelectionRect(state.start, current));
+        upEvent.preventDefault();
+      } else {
+        setSelectedSlotIds([]);
+      }
+      surfaceSelectionRef.current = null;
+      setSurfaceMarqueeRect(null);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
   };
   const applyBindingToSlots = (
     slots: Slot[],
@@ -1297,7 +1367,8 @@ export function PackTabContent({
 
                     {effectiveActive && (
                       <div
-                        className="grid place-items-center overflow-auto rounded-lg border bg-background p-4"
+                        onMouseDownCapture={startSurfaceMarqueeSelection}
+                        className="relative grid select-none place-items-center overflow-auto rounded-lg border bg-background p-4"
                         style={{ minHeight: 480 }}
                       >
                         <BindCanvas
@@ -1313,6 +1384,18 @@ export function PackTabContent({
                           showSafeFrame={showSafeFrame}
                           flatPreview
                         />
+                        {surfaceMarqueeRect && (
+                          <div
+                            data-bind-surface-marquee="true"
+                            className="pointer-events-none absolute z-[2147483647] rounded-sm border border-primary bg-primary/10"
+                            style={{
+                              left: surfaceMarqueeRect.left,
+                              top: surfaceMarqueeRect.top,
+                              width: surfaceMarqueeRect.width,
+                              height: surfaceMarqueeRect.height,
+                            }}
+                          />
+                        )}
                       </div>
                     )}
 
@@ -1882,4 +1965,38 @@ export function PackTabContent({
       )}
     </>
   );
+}
+
+function getSurfacePoint(
+  surface: HTMLDivElement,
+  clientX: number,
+  clientY: number,
+): { x: number; y: number } {
+  const rect = surface.getBoundingClientRect();
+  return {
+    x: clientX - rect.left + surface.scrollLeft,
+    y: clientY - rect.top + surface.scrollTop,
+  };
+}
+
+function normalizeSurfaceSelectionRect(
+  start: { x: number; y: number },
+  current: { x: number; y: number },
+): SurfaceSelectionRect {
+  const left = Math.min(start.x, current.x);
+  const top = Math.min(start.y, current.y);
+  return {
+    left,
+    top,
+    width: Math.abs(current.x - start.x),
+    height: Math.abs(current.y - start.y),
+  };
+}
+
+function surfaceRectsIntersect(a: SurfaceSelectionRect, b: SurfaceSelectionRect): boolean {
+  const aRight = a.left + a.width;
+  const aBottom = a.top + a.height;
+  const bRight = b.left + b.width;
+  const bBottom = b.top + b.height;
+  return a.left <= bRight && aRight >= b.left && a.top <= bBottom && aBottom >= b.top;
 }
