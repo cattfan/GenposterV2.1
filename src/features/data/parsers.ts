@@ -59,9 +59,9 @@ export async function parseJsonFile(file: File): Promise<ParsedTable> {
   return { headers, rows: data };
 }
 
-export async function parseXlsxFile(file: File): Promise<ParsedTable> {
+export async function parseXlsxArrayBuffer(buffer: ArrayBuffer): Promise<ParsedTable> {
   const { read, utils } = await import("xlsx");
-  const workbook = read(await file.arrayBuffer(), {
+  const workbook = read(buffer, {
     type: "array",
     cellDates: false,
   });
@@ -100,6 +100,10 @@ export async function parseXlsxFile(file: File): Promise<ParsedTable> {
   };
 }
 
+export async function parseXlsxFile(file: File): Promise<ParsedTable> {
+  return parseXlsxArrayBuffer(await file.arrayBuffer());
+}
+
 export async function parseDataFile(file: File): Promise<ParsedTable> {
   const normalizedName = file.name.toLowerCase();
 
@@ -121,6 +125,55 @@ export function sheetUrlToCsvUrl(input: string): string | null {
   const gid = gidMatch ? gidMatch[1] : "0";
 
   return `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`;
+}
+
+export function sheetUrlToXlsxUrl(input: string): string | null {
+  const match = input.match(/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (!match) return null;
+
+  return `https://docs.google.com/spreadsheets/d/${match[1]}/export?format=xlsx`;
+}
+
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return bytes.buffer;
+}
+
+function startsWithHtml(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 64));
+  for (const byte of bytes) {
+    if (byte <= 32) continue;
+    return byte === 60;
+  }
+  return false;
+}
+
+export async function fetchSheetWorkbook(input: string): Promise<ParsedTable> {
+  const url = sheetUrlToXlsxUrl(input);
+  if (!url) {
+    throw new Error("Khong nhan dien duoc link Google Sheets. Hay dan link share cua file sheet.");
+  }
+
+  try {
+    const res = await fetch(url);
+    if (res.ok) {
+      const buffer = await res.arrayBuffer();
+      if (!startsWithHtml(buffer)) return parseXlsxArrayBuffer(buffer);
+    }
+  } catch {
+    // CORS or network issue, fall back to the server function below.
+  }
+
+  const { fetchSheetXlsxServer } = await import("@/server/sheetFetch");
+  const r = await fetchSheetXlsxServer({ data: { url: input } });
+  if (!r.ok) throw new Error(r.error);
+  return parseXlsxArrayBuffer(base64ToArrayBuffer(r.base64));
 }
 
 export async function fetchSheetCsv(input: string): Promise<ParsedTable> {

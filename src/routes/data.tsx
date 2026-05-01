@@ -38,7 +38,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageContainer, PageHeader } from "@/components/PageHeader";
 import { BulkImageUpload } from "@/features/data/BulkImageUpload";
 import {
-  fetchSheetCsv,
+  fetchSheetWorkbook,
   parseDataFile,
   type ParsedTable,
   type ParsedWorkbookSheet,
@@ -643,7 +643,34 @@ function DataPage() {
   const onSheet = async () => {
     try {
       setBusy(true);
-      const nextParsed = await fetchSheetCsv(sheetUrl);
+      const nextParsed = await fetchSheetWorkbook(sheetUrl);
+
+      if (nextParsed.workbookSheets?.length) {
+        const nextMappings = Object.fromEntries(
+          nextParsed.workbookSheets.map((sheet) => [sheet.name, autoMap(sheet.headers)]),
+        );
+        setMappingsBySheet(nextMappings);
+        activateWorkbookSheet(
+          nextParsed.workbookSheets,
+          nextMappings,
+          nextParsed.sourceSheetName ?? nextParsed.workbookSheets[0].name,
+        );
+
+        if (nextParsed.workbookSheets.length === 1) {
+          if (!sheetName) {
+            setSheetName(nextParsed.sourceSheetName ?? guessSheetName(sheetUrl) ?? "Quan_an");
+          }
+          toast.success(`ÄÃ£ táº£i ${nextParsed.rows.length} dÃ²ng tá»« Google Sheets`);
+        } else {
+          setSheetName("");
+          toast.success(
+            `ÄÃ£ táº£i ${nextParsed.workbookSheets.length} sheet tá»« Google Sheets. Äang xem "${nextParsed.sourceSheetName}"`,
+          );
+        }
+
+        return;
+      }
+
       setParsed(nextParsed);
       setMappingsBySheet({});
       setMapping(autoMap(nextParsed.headers));
