@@ -2,6 +2,7 @@
 // Hỗ trợ tiếng Việt có/không dấu, slug, suffix -1 -2, ignore extension
 
 import type { Entity } from "@/models";
+import { getEntityImageReferences } from "./imageReferences";
 
 /** Bỏ dấu tiếng Việt + lowercase + chỉ giữ a-z 0-9 */
 export function slugify(input: string): string {
@@ -84,11 +85,11 @@ function pathContextSlug(relativePath?: string): string {
   return pathParts(relativePath).join(" ");
 }
 
-function exactFolderEntityMatch(relativePath: string | undefined, entity: Entity): boolean {
+function exactFolderEntityMatch(relativePath: string | undefined, entitySlugs: string[]): boolean {
   const parts = pathParts(relativePath);
   const parent = parts[parts.length - 1];
   if (!parent) return false;
-  return parent === slugify(entity.name);
+  return entitySlugs.includes(parent);
 }
 
 function exactFolderSheetMatch(relativePath: string | undefined, entity: Entity): boolean {
@@ -125,15 +126,22 @@ export function matchFilesToEntities(
   opts: MatchOptions = {},
 ): MatchResult[] {
   const threshold = opts.fuzzyThreshold ?? 0.78;
-  const entitySlugs = entities.map((e) => ({
-    entity: e,
-    slug: slugify(e.name),
-  }));
+  const entitySlugs = entities.map((e) => {
+    const slug = slugify(e.name);
+    const referenceSlugs = getEntityImageReferences(e).map(slugify).filter(Boolean);
+    return {
+      entity: e,
+      slug,
+      slugs: [...new Set([slug, ...referenceSlugs].filter(Boolean))],
+    };
+  });
   const entityBySlug = new Map<string, Array<(typeof entitySlugs)[number]>>();
   for (const item of entitySlugs) {
-    const bucket = entityBySlug.get(item.slug) ?? [];
-    bucket.push(item);
-    entityBySlug.set(item.slug, bucket);
+    for (const slug of item.slugs) {
+      const bucket = entityBySlug.get(slug) ?? [];
+      bucket.push(item);
+      entityBySlug.set(slug, bucket);
+    }
   }
 
   return fileNames.map((entry) => {
@@ -146,7 +154,7 @@ export function matchFilesToEntities(
     const folderSlug = pathParts(normalizedInput.relativePath).at(-1);
     const exactFolderCandidates = folderSlug ? entityBySlug.get(folderSlug) ?? [] : [];
     const exactFolderMatch = exactFolderCandidates.find((es) => {
-      const parentMatch = exactFolderEntityMatch(normalizedInput.relativePath, es.entity);
+      const parentMatch = exactFolderEntityMatch(normalizedInput.relativePath, es.slugs);
       const sheetMatch =
         !es.entity.sheetName || exactFolderSheetMatch(normalizedInput.relativePath, es.entity);
       return parentMatch && sheetMatch;
@@ -169,7 +177,7 @@ export function matchFilesToEntities(
       (entityBySlug.get(fileSlug) ?? []).find(
         (es) => !es.entity.sheetName || exactFolderSheetMatch(normalizedInput.relativePath, es.entity),
       ) ??
-      entitySlugs.find((es) => contextSlug && contextSlug.includes(es.slug));
+      entitySlugs.find((es) => contextSlug && es.slugs.some((slug) => contextSlug.includes(slug)));
     if (exact) {
       return {
         fileName: fn,
@@ -186,11 +194,14 @@ export function matchFilesToEntities(
     // 2. Contains (file slug chứa entity slug hoặc ngược lại)
     let bestContain: { e: typeof entitySlugs[0]; score: number } | null = null;
     for (const es of entitySlugs) {
-      if (!es.slug) continue;
-      const nameOverlap =
-        fileSlug.includes(es.slug) || es.slug.includes(fileSlug)
-          ? Math.min(fileSlug.length, es.slug.length) / Math.max(fileSlug.length, es.slug.length)
-          : 0;
+      if (es.slugs.length === 0) continue;
+      const nameOverlap = Math.max(
+        ...es.slugs.map((slug) =>
+          fileSlug.includes(slug) || slug.includes(fileSlug)
+            ? Math.min(fileSlug.length, slug.length) / Math.max(fileSlug.length, slug.length)
+            : 0,
+        ),
+      );
       const overlap = nameOverlap + entityContextScore(contextSlug, es.entity);
       if (nameOverlap > 0 || overlap > 0.12) {
         if (!bestContain || overlap > bestContain.score) {
@@ -215,10 +226,14 @@ export function matchFilesToEntities(
     // 3. Fuzzy via Levenshtein
     let bestFuzzy: { e: typeof entitySlugs[0]; sim: number } | null = null;
     for (const es of entitySlugs) {
-      if (!es.slug) continue;
-      const dist = lev(fileSlug, es.slug);
-      const sim =
-        1 - dist / Math.max(fileSlug.length, es.slug.length) + entityContextScore(contextSlug, es.entity);
+      if (es.slugs.length === 0) continue;
+      const bestSlugSim = Math.max(
+        ...es.slugs.map((slug) => {
+          const dist = lev(fileSlug, slug);
+          return 1 - dist / Math.max(fileSlug.length, slug.length);
+        }),
+      );
+      const sim = bestSlugSim + entityContextScore(contextSlug, es.entity);
       if (!bestFuzzy || sim > bestFuzzy.sim) {
         bestFuzzy = { e: es, sim };
       }

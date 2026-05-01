@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { entityHasImageSource, getAssetEntityIds } from "@/features/data/imageReferences";
 import { matchFilesToEntities, type MatchResult } from "@/features/data/imageMatcher";
 import type { Asset, Entity } from "@/models";
 import { db, saveBlob } from "@/storage/db";
@@ -315,8 +316,10 @@ export function BulkImageUpload() {
   };
 
   const matchedCount = pending.filter((item) => item.manualEntityId).length;
-  const entitiesWithoutImage = entities.filter(
-    (entity) => !allAssets.some((asset) => asset.entityId === entity.entityId),
+  const assetEntityIds = useMemo(() => getAssetEntityIds(allAssets), [allAssets]);
+  const entitiesWithoutImage = useMemo(
+    () => entities.filter((entity) => !entityHasImageSource(entity, assetEntityIds)),
+    [assetEntityIds, entities],
   );
 
   return (
@@ -430,7 +433,7 @@ export function BulkImageUpload() {
                   <AlertTriangle className="text-destructive" />
                 )}
               </div>
-              <div className="text-sm text-muted-foreground">Quán thiếu ảnh</div>
+              <div className="text-sm text-muted-foreground">Thiếu nguồn ảnh</div>
             </div>
             {pending.length > 0 ? (
               <div className="rounded-lg border p-3">
@@ -594,7 +597,7 @@ export function BulkImageUpload() {
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between gap-3">
-            <CardTitle>Quán còn thiếu ảnh</CardTitle>
+            <CardTitle>Quán thiếu nguồn ảnh</CardTitle>
             <Badge variant={entitiesWithoutImage.length === 0 ? "default" : "destructive"}>
               {entitiesWithoutImage.length}/{entities.length}
             </Badge>
@@ -602,7 +605,9 @@ export function BulkImageUpload() {
         </CardHeader>
         <CardContent>
           {entitiesWithoutImage.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Tất cả quán đã có ít nhất 1 ảnh.</p>
+            <p className="text-sm text-muted-foreground">
+              Tất cả quán đã có asset hoặc link/folder ảnh.
+            </p>
           ) : (
             <div className="grid max-h-64 grid-cols-1 gap-2 overflow-y-auto text-sm md:grid-cols-2 xl:grid-cols-3">
               {entitiesWithoutImage.map((entity) => (

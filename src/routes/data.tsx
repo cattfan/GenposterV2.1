@@ -37,6 +37,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageContainer, PageHeader } from "@/components/PageHeader";
 import { BulkImageUpload } from "@/features/data/BulkImageUpload";
+import { entityHasImageSource, getAssetEntityIds } from "@/features/data/imageReferences";
 import {
   fetchSheetWorkbook,
   parseDataFile,
@@ -604,11 +605,11 @@ function DataPage() {
     () => new Set(entities.map((entity) => entity.sheetName).filter(Boolean)).size,
     [entities],
   );
-  const entitiesWithImage = useMemo(
-    () => new Set(assets.map((asset) => asset.entityId)).size,
-    [assets],
+  const assetEntityIds = useMemo(() => getAssetEntityIds(assets), [assets]);
+  const missingImageCount = useMemo(
+    () => entities.filter((entity) => !entityHasImageSource(entity, assetEntityIds)).length,
+    [assetEntityIds, entities],
   );
-  const missingImageCount = Math.max(entities.length - entitiesWithImage, 0);
   const mappingChecks = useMemo(() => {
     if (!parsed) return [];
 
@@ -835,7 +836,7 @@ function DataPage() {
       <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <DataStat label="Quán/entity" value={entities.length} icon={<Store />} />
         <DataStat label="Ảnh đã import" value={assets.length} icon={<ImageIcon />} />
-        <DataStat label="Quán thiếu ảnh" value={missingImageCount} icon={<ImageIcon />} />
+        <DataStat label="Thiếu nguồn ảnh" value={missingImageCount} icon={<ImageIcon />} />
         <DataStat label="Sheet dữ liệu" value={sheetCount || 0} icon={<FileSpreadsheet />} />
       </div>
 
