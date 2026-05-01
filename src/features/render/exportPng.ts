@@ -5,7 +5,7 @@ import JSZip from "jszip";
 import saveAs from "file-saver";
 
 export async function nodeToPngBlob(node: HTMLElement, scale = 2): Promise<Blob> {
-  await (document as any).fonts?.ready;
+  await document.fonts?.ready;
   const dataUrl = await toPng(node, {
     pixelRatio: scale,
     cacheBust: true,

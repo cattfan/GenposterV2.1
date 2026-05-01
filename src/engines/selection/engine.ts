@@ -45,7 +45,7 @@ export function selectForSection(req: SelectionRequest): SelectionResult {
 
   // 1. Filter theo section (categoryQuery + filterRules)
   const cats = section.categoryQuery?.split(",").map((s) => s.trim()).filter(Boolean) ?? [];
-  let pool = entities.filter((e) => {
+  const pool = entities.filter((e) => {
     if (e.status !== "active") return false;
     if (exclude.has(e.entityId)) return false;
     if (cats.length > 0 && e.categoryMain && !cats.includes(e.categoryMain)) return false;
