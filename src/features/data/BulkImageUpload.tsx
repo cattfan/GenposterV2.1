@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import {
   AlertTriangle,
   CheckCircle2,
+  Download,
   FolderOpen,
   ImagePlus,
   RefreshCw,
@@ -14,6 +15,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -22,11 +25,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import { entityHasImageSource, getAssetEntityIds } from "@/features/data/imageReferences";
+import {
+  entityHasImageSource,
+  getAssetEntityIds,
+  getEntityImageReferences,
+} from "@/features/data/imageReferences";
 import { matchFilesToEntities, type MatchResult } from "@/features/data/imageMatcher";
 import type { Asset, Entity } from "@/models";
 import { db, saveBlob } from "@/storage/db";
 import { makeIdbSrc } from "@/storage/imageSrc";
+import { getSettings, saveSettings } from "@/storage/settings";
 
 interface PendingFile {
   file: File;
@@ -53,6 +61,50 @@ function isImageFile(file: File): boolean {
 
 async function yieldToBrowser(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function base64ToBlob(base64: string, mimeType: string) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new Blob([bytes], { type: mimeType });
+}
+
+function looksLikeDriveLink(value: string) {
+  return (
+    /drive\.google\.com|docs\.google\.com\/uc|googleusercontent\.com/i.test(value) ||
+    /^[a-zA-Z0-9_-]{20,}$/.test(value.trim())
+  );
+}
+
+function DriveImportToast({
+  done,
+  total,
+  current,
+}: {
+  done: number;
+  total: number;
+  current?: string;
+}) {
+  const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  return (
+    <div className="min-w-64 space-y-2">
+      <div className="flex items-center justify-between gap-3 text-sm font-medium">
+        <span>Tải ảnh Drive</span>
+        <span>{percent}%</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-muted">
+        <div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
+      </div>
+      <div className="truncate text-xs text-muted-foreground">
+        {done}/{total}
+        {current ? ` - ${current}` : ""}
+      </div>
+    </div>
+  );
 }
 
 async function collectDirectoryFiles(
@@ -129,9 +181,15 @@ export function BulkImageUpload() {
   const [threshold, setThreshold] = useState(0.78);
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState(false);
+  const [driveBusy, setDriveBusy] = useState(false);
+  const [driveRootUrl, setDriveRootUrl] = useState("");
   const [visibleCount, setVisibleCount] = useState(PREVIEW_PAGE_SIZE);
   const [, setPreviewVersion] = useState(0);
   const previewUrlsRef = useRef(new Map<string, string>());
+
+  useEffect(() => {
+    getSettings().then((settings) => setDriveRootUrl(settings.driveRootFolderUrl ?? ""));
+  }, []);
 
   useEffect(() => {
     const previewUrls = previewUrlsRef.current;
@@ -321,6 +379,132 @@ export function BulkImageUpload() {
     () => entities.filter((entity) => !entityHasImageSource(entity, assetEntityIds)),
     [assetEntityIds, entities],
   );
+  const driveImportCandidates = useMemo(
+    () =>
+      entities.filter(
+        (entity) => !assetEntityIds.has(entity.entityId) && getEntityImageReferences(entity).length > 0,
+      ),
+    [assetEntityIds, entities],
+  );
+
+  const saveDriveRoot = async () => {
+    const settings = await getSettings();
+    await saveSettings({ ...settings, driveRootFolderUrl: driveRootUrl.trim() || undefined });
+    toast.success("Đã lưu root folder Drive");
+  };
+
+  const importDriveImages = async () => {
+    if (entities.length === 0) {
+      toast.error("Chưa có quán nào. Hãy import dữ liệu trước.");
+      return;
+    }
+    if (driveImportCandidates.length === 0) {
+      toast.success("Không có quán thiếu asset có Link Drive để tải.");
+      return;
+    }
+
+    const rootUrl = driveRootUrl.trim();
+    const hasNameOnlyRef = driveImportCandidates.some((entity) =>
+      getEntityImageReferences(entity).some((reference) => !looksLikeDriveLink(reference)),
+    );
+    if (hasNameOnlyRef && !rootUrl) {
+      toast.error("Có cột Link Drive dạng tên folder. Dán root folder Drive public trước.");
+      return;
+    }
+
+    setDriveBusy(true);
+    const toastId = "drive-image-import";
+    const total = driveImportCandidates.length;
+    let done = 0;
+    let imported = 0;
+    const failed: string[] = [];
+    const coverCount: Record<string, number> = {};
+
+    for (const asset of allAssets) {
+      if (asset.isCover) coverCount[asset.entityId] = (coverCount[asset.entityId] ?? 0) + 1;
+    }
+
+    toast.loading(<DriveImportToast done={0} total={total} />, {
+      id: toastId,
+      duration: Infinity,
+    });
+
+    try {
+      const { fetchDriveImagesServer } = await import("@/server/driveFetch");
+      if (rootUrl) {
+        const settings = await getSettings();
+        await saveSettings({ ...settings, driveRootFolderUrl: rootUrl });
+      }
+
+      for (const entity of driveImportCandidates) {
+        toast.loading(<DriveImportToast done={done} total={total} current={entity.name} />, {
+          id: toastId,
+          duration: Infinity,
+        });
+
+        const entityAssets: Asset[] = [];
+        for (const reference of getEntityImageReferences(entity)) {
+          const result = await fetchDriveImagesServer({
+            data: { reference, rootFolderUrl: rootUrl || undefined, maxFiles: 20 },
+          });
+
+          if (!result.ok) {
+            failed.push(`${entity.name}: ${result.error}`);
+            continue;
+          }
+
+          for (const file of result.files) {
+            const blob = base64ToBlob(file.base64, file.mimeType);
+            const blobKey = await saveBlob(blob);
+            const isCover = (coverCount[entity.entityId] ?? 0) === 0 && entityAssets.length === 0;
+            if (isCover) coverCount[entity.entityId] = 1;
+
+            entityAssets.push({
+              assetId: nanoid(),
+              entityId: entity.entityId,
+              sourceType: "local",
+              sourceValue: makeIdbSrc(blobKey),
+              blobKey,
+              role: isCover ? "cover" : "generic",
+              isCover,
+              qualityScore: 80,
+              status: "ok",
+            });
+          }
+        }
+
+        if (entityAssets.length) {
+          await db.assets.bulkPut(entityAssets);
+          imported += entityAssets.length;
+        }
+
+        done += 1;
+        toast.loading(<DriveImportToast done={done} total={total} current={entity.name} />, {
+          id: toastId,
+          duration: Infinity,
+        });
+        await yieldToBrowser();
+      }
+
+      if (imported > 0) {
+        toast.success(
+          `Đã tải ${imported} ảnh Drive cho ${total - failed.length}/${total} quán${
+            failed.length ? `. Lỗi ${failed.length} quán.` : "."
+          }`,
+          { id: toastId, duration: 8000 },
+        );
+      } else {
+        toast.error(failed[0] ?? "Không tải được ảnh Drive.", { id: toastId, duration: 8000 });
+      }
+    } catch (error) {
+      toast.error("Lỗi tải Drive: " + (error instanceof Error ? error.message : String(error)), {
+        id: toastId,
+        duration: 8000,
+      });
+    } finally {
+      setDriveBusy(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -378,6 +562,34 @@ export function BulkImageUpload() {
                 disabled={pending.length === 0 || matching}
               >
                 <RefreshCw /> Match lại
+              </Button>
+            </div>
+
+            <div className="rounded-lg border bg-muted/20 p-4">
+              <div className="mb-3 flex flex-col gap-1">
+                <Label>Root folder Google Drive public</Label>
+                <p className="text-xs text-muted-foreground">
+                  Nếu cột Link Drive là URL file/folder thì không cần root. Nếu là tên folder, app sẽ
+                  tìm trong root này.
+                </p>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Input
+                  value={driveRootUrl}
+                  onChange={(event) => setDriveRootUrl(event.target.value)}
+                  placeholder="https://drive.google.com/drive/folders/..."
+                />
+                <Button type="button" variant="outline" onClick={() => void saveDriveRoot()}>
+                  Lưu
+                </Button>
+              </div>
+              <Button
+                type="button"
+                className="mt-3"
+                onClick={() => void importDriveImages()}
+                disabled={driveBusy || matching || busy || driveImportCandidates.length === 0}
+              >
+                <Download /> Tải ảnh từ Drive ({driveImportCandidates.length})
               </Button>
             </div>
 

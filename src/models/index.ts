@@ -654,6 +654,7 @@ export interface AppSettings {
   defaultCanvas: CanvasSize;
   theme?: "light" | "dark";
   ai?: AiProviderConfig;
+  driveRootFolderUrl?: string;
 }
 
 export type AnalysisMode = "quick" | "deep_draft" | "draft_only";
