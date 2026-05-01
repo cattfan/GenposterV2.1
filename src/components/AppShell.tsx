@@ -78,16 +78,11 @@ function NavLinks({
     <nav
       className={cn(
         "flex-1 overflow-y-auto",
-        collapsed ? "px-2 py-4 space-y-1" : "px-3 py-4 space-y-5",
+        collapsed ? "px-2 py-4 space-y-1" : "px-3 py-4 space-y-1",
       )}
     >
       {NAV_SECTIONS.map((section) => (
         <div key={section.label} className={collapsed ? "space-y-1" : "space-y-1"}>
-          {!collapsed && (
-            <div className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-              {section.label}
-            </div>
-          )}
           {section.items.map((item) => {
             const active = isActive(pathname, item.to);
             const Icon = item.icon;

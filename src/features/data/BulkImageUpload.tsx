@@ -28,6 +28,7 @@ import {
   entityHasImageSource,
   getAssetEntityIds,
   getEntityImageReferences,
+  looksLikeDriveReference,
 } from "@/features/data/imageReferences";
 import { matchFilesToEntities, type MatchResult } from "@/features/data/imageMatcher";
 import type { Asset, Entity } from "@/models";
@@ -70,13 +71,6 @@ function base64ToBlob(base64: string, mimeType: string) {
     bytes[index] = binary.charCodeAt(index);
   }
   return new Blob([bytes], { type: mimeType });
-}
-
-function looksLikeDriveLink(value: string) {
-  return (
-    /drive\.google\.com|docs\.google\.com\/uc|googleusercontent\.com/i.test(value) ||
-    /^[a-zA-Z0-9_-]{20,}$/.test(value.trim())
-  );
 }
 
 function DriveImportToast({
@@ -405,7 +399,7 @@ export function BulkImageUpload() {
 
     const rootUrl = driveRootUrl.trim();
     const hasNameOnlyRef = driveImportCandidates.some((entity) =>
-      getEntityImageReferences(entity).some((reference) => !looksLikeDriveLink(reference)),
+      getEntityImageReferences(entity).some((reference) => !looksLikeDriveReference(reference)),
     );
     if (hasNameOnlyRef && !rootUrl) {
       toast.error("Có cột Link Drive dạng tên folder. Dán root folder Drive public trước.");

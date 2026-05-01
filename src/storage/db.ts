@@ -101,5 +101,6 @@ export async function clearAll(): Promise<void> {
     db.blobs.clear(),
     db.generatePresets.clear(),
     db.analyses.clear(),
+    db.settings.clear(),
   ]);
 }

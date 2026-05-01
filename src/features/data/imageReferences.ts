@@ -22,6 +22,25 @@ function valueParts(value: unknown): string[] {
     .filter(Boolean);
 }
 
+export function looksLikeDriveReference(value: string) {
+  const trimmed = value.trim();
+  return (
+    /drive\.google\.com|docs\.google\.com\/uc|googleusercontent\.com/i.test(trimmed) ||
+    /^[a-zA-Z0-9_-]{20,}$/.test(trimmed)
+  );
+}
+
+export function looksLikeDirectImageReference(value: string) {
+  const trimmed = value.trim();
+  return /^(https?:\/\/|\/|\.\/|\.\.\/).+\.(png|jpe?g|webp|gif|bmp|avif)([?#].*)?$/i.test(
+    trimmed,
+  );
+}
+
+export function looksLikeImageReference(value: string) {
+  return looksLikeDriveReference(value) || looksLikeDirectImageReference(value);
+}
+
 function isImageReferenceKey(key: string) {
   const normalized = normalizeReferenceKey(key);
   if (!normalized) return false;
@@ -36,8 +55,10 @@ export function getEntityImageReferences(entity: Entity): string[] {
   const references = new Set<string>();
 
   for (const [key, value] of Object.entries(entity.metadata ?? {})) {
-    if (!isImageReferenceKey(key)) continue;
-    for (const part of valueParts(value)) references.add(part);
+    const imageKey = isImageReferenceKey(key);
+    for (const part of valueParts(value)) {
+      if (imageKey || looksLikeImageReference(part)) references.add(part);
+    }
   }
 
   return [...references];

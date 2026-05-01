@@ -10,9 +10,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useEffect, useState } from "react";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { useEffect, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { getSettings, saveSettings } from "@/storage/settings";
+import {
+  createSystemBackupZip,
+  getSystemBackupFileName,
+  importSystemBackupFile,
+  type SystemBackupImportMode,
+} from "@/storage/systemBackup";
 import { db } from "@/storage/db";
 import type {
   AiProviderConfig,
@@ -23,6 +38,7 @@ import type {
   Entity,
 } from "@/models";
 import { toast } from "sonner";
+import saveAs from "file-saver";
 import { AI_PRESETS, defaultAiConfig, testAiConfig } from "@/features/ai/aiClient";
 import {
   Loader2,
@@ -31,6 +47,9 @@ import {
   Settings as SettingsIcon,
   Image,
   Database,
+  Archive,
+  Download,
+  Upload,
 } from "lucide-react";
 import { PageContainer, PageHeader } from "@/components/PageHeader";
 
@@ -39,6 +58,10 @@ export const Route = createFileRoute("/settings")({
 });
 
 const UNDO_TOAST_DURATION = 15_000;
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function uniqueAssetBlobKeys(assets: Asset[]) {
   return Array.from(
@@ -73,6 +96,10 @@ function SettingsPage() {
   const [s, setS] = useState<AppSettings | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<null | { ok: boolean; msg: string }>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
+  const backupInputRef = useRef<HTMLInputElement>(null);
   const entities = useLiveQuery(() => db.entities.toArray(), []) ?? [];
   const assets = useLiveQuery(() => db.assets.toArray(), []) ?? [];
   const localImageCount = assets.filter((asset) => asset.blobKey).length;
@@ -116,6 +143,41 @@ function SettingsPage() {
       }
     } finally {
       setTesting(false);
+    }
+  };
+
+  const exportBackup = async () => {
+    setBackupBusy(true);
+    try {
+      const blob = await createSystemBackupZip();
+      saveAs(blob, getSystemBackupFileName());
+      toast.success("Đã tải backup toàn hệ thống.");
+    } catch (error) {
+      toast.error(`Lỗi backup: ${errorMessage(error)}`);
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const chooseImportFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (file) setPendingImportFile(file);
+  };
+
+  const runBackupImport = async (mode: SystemBackupImportMode) => {
+    if (!pendingImportFile) return;
+    setImportBusy(true);
+    try {
+      const result = await importSystemBackupFile(pendingImportFile, mode);
+      if (result.warning) toast.warning(result.warning, { duration: 8000 });
+      toast.success(result.message);
+      setPendingImportFile(null);
+      window.setTimeout(() => window.location.reload(), 700);
+    } catch (error) {
+      toast.error(`Lỗi import backup: ${errorMessage(error)}`);
+    } finally {
+      setImportBusy(false);
     }
   };
 
@@ -182,6 +244,99 @@ function SettingsPage() {
         title="Cài đặt"
         description="Cấu hình AI provider và quản lý dữ liệu local."
       />
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Archive className="size-5" />
+            Sao lưu & khôi phục
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Backup dạng ZIP chứa dữ liệu, template, lịch sử và ảnh local trong IndexedDB. API key
+            không nằm trong file backup.
+          </p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-lg border p-4">
+              <div className="font-medium">Tải backup</div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Xuất file genposter-backup kèm ảnh local.
+              </p>
+              <Button
+                className="mt-4 w-full"
+                onClick={() => void exportBackup()}
+                disabled={backupBusy}
+              >
+                {backupBusy ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Download className="size-4" />
+                )}
+                Tải backup
+              </Button>
+            </div>
+
+            <div className="rounded-lg border p-4">
+              <div className="font-medium">Import backup</div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Nhận file .zip mới hoặc JSON cũ. JSON cũ không có ảnh local.
+              </p>
+              <Button
+                variant="outline"
+                className="mt-4 w-full"
+                onClick={() => backupInputRef.current?.click()}
+                disabled={importBusy}
+              >
+                <Upload className="size-4" />
+                Chọn file backup
+              </Button>
+              <input
+                ref={backupInputRef}
+                type="file"
+                accept=".zip,.json,application/zip,application/json"
+                className="hidden"
+                onChange={chooseImportFile}
+              />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <AlertDialog
+        open={Boolean(pendingImportFile)}
+        onOpenChange={(open) => {
+          if (!open && !importBusy) setPendingImportFile(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Chọn cách import backup</AlertDialogTitle>
+            <AlertDialogDescription>
+              File: {pendingImportFile?.name}. Nhập thêm sẽ upsert theo ID. Khôi phục ghi đè sẽ xoá
+              toàn bộ dữ liệu local hiện tại rồi restore từ backup.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={importBusy}>Huỷ</AlertDialogCancel>
+            <Button
+              variant="outline"
+              onClick={() => void runBackupImport("merge")}
+              disabled={importBusy}
+            >
+              {importBusy ? <Loader2 className="size-4 animate-spin" /> : null}
+              Nhập thêm
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void runBackupImport("replace")}
+              disabled={importBusy}
+            >
+              Khôi phục ghi đè
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Card>
         <CardHeader>

@@ -1,23 +1,22 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/storage/db";
+import { getSettings } from "@/storage/settings";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import {
-  Package,
+  AlertTriangle,
+  CheckCircle2,
+  Clock3,
   Database,
-  Sparkles,
   FileText,
-  Download,
-  Upload,
-  ArrowRight,
   Image as ImageIcon,
+  Package,
+  Sparkles,
+  UploadCloud,
 } from "lucide-react";
-import { exportProjectJSON, importProjectJSON } from "@/storage/projectIO";
-import { downloadJSON } from "@/features/render/exportPng";
-import { toast } from "sonner";
-import { useRef } from "react";
 import { PageContainer } from "@/components/PageHeader";
 import { cn } from "@/lib/utils";
 
@@ -25,182 +24,366 @@ export const Route = createFileRoute("/")({
   component: Dashboard,
 });
 
-type StatColor = "violet" | "blue" | "teal" | "amber" | "rose" | "slate";
+type StatColor = "blue" | "teal" | "amber" | "rose" | "slate";
+type StatusTone = "good" | "warning" | "danger" | "neutral";
+
+interface DashboardIssue {
+  label: string;
+  detail: string;
+  to: string;
+  tone: StatusTone;
+}
 
 function Dashboard() {
-  const project = useLiveQuery(() => db.projects.toCollection().first(), []);
-  const counts = useLiveQuery(async () => {
-    const [pack, ent, asset, job] = await Promise.all([
-      db.packTemplates.count(),
-      db.entities.count(),
-      db.assets.count(),
-      db.jobs.count(),
+  const dashboard = useLiveQuery(async () => {
+    const [
+      packTemplates,
+      pageTemplates,
+      entities,
+      assets,
+      jobs,
+      blobCount,
+      presetCount,
+      analysisCount,
+      settings,
+    ] = await Promise.all([
+      db.packTemplates.toArray(),
+      db.pageTemplates.toArray(),
+      db.entities.toArray(),
+      db.assets.toArray(),
+      db.jobs.orderBy("createdAt").reverse().toArray(),
+      db.blobs.count(),
+      db.generatePresets.count(),
+      db.analyses.count(),
+      getSettings(),
     ]);
-    return { pack, ent, asset, job };
+
+    const sheetNames = Array.from(
+      new Set(
+        entities
+          .map((entity) => entity.sheetName)
+          .filter((sheetName): sheetName is string => Boolean(sheetName)),
+      ),
+    );
+    const activeEntities = entities.filter((entity) => entity.status === "active").length;
+    const partnerEntities = entities.filter((entity) => entity.partnerFlag).length;
+    const localAssets = assets.filter((asset) => asset.blobKey).length;
+    const linkAssets = assets.filter((asset) => !asset.blobKey && asset.sourceValue).length;
+    const brokenAssets = assets.filter((asset) => asset.status === "broken").length;
+    const missingAssets = assets.filter((asset) => asset.status === "missing" || !asset.sourceValue)
+      .length;
+    const assetEntityIds = new Set(assets.map((asset) => asset.entityId).filter(Boolean));
+    const entitiesWithoutAssets = entities.filter((entity) => !assetEntityIds.has(entity.entityId))
+      .length;
+    const latestJob = jobs[0] ?? null;
+    const renderedPages = jobs.reduce((sum, job) => sum + job.pages.length, 0);
+    const exportedJobs = jobs.filter((job) => job.status === "exported").length;
+    const latestJobWarnings =
+      latestJob?.pages.reduce((sum, page) => sum + page.warnings.length, 0) ?? 0;
+    const totalSlots = pageTemplates.reduce((sum, template) => sum + template.slots.length, 0);
+    const mappedSlots = pageTemplates.reduce(
+      (sum, template) =>
+        sum +
+        template.slots.filter(
+          (slot) =>
+            Boolean(slot.bindingPath) ||
+            slot.fieldParts?.some((part) => part.kind === "field" && part.bindingPath),
+        ).length,
+      0,
+    );
+    const aiConfigured = Boolean(settings.ai?.baseUrl && settings.ai.model);
+
+    const readinessChecks = [
+      entities.length > 0,
+      packTemplates.length > 0 && pageTemplates.length > 0,
+      assets.length > 0 && (localAssets > 0 || linkAssets > 0),
+      aiConfigured,
+    ];
+    const readiness = Math.round(
+      (readinessChecks.filter(Boolean).length / readinessChecks.length) * 100,
+    );
+
+    const issues: DashboardIssue[] = [];
+    if (entities.length === 0) {
+      issues.push({
+        label: "Chưa có dữ liệu",
+        detail: "Nhập XLSX/CSV hoặc Google Sheet trước khi tạo nội dung.",
+        to: "/data",
+        tone: "danger",
+      });
+    }
+    if (packTemplates.length === 0 || pageTemplates.length === 0) {
+      issues.push({
+        label: "Chưa có template",
+        detail: "Cần pack template và page template để generate.",
+        to: "/templates",
+        tone: "danger",
+      });
+    }
+    if (assets.length === 0) {
+      issues.push({
+        label: "Chưa có ảnh",
+        detail: "Dữ liệu có thể đã nhập nhưng chưa có asset ảnh.",
+        to: "/data",
+        tone: "warning",
+      });
+    } else if (linkAssets > 0) {
+      issues.push({
+        label: "Ảnh link chưa tải local",
+        detail: `${linkAssets} ảnh đang là link, nên tải về để backup đủ ảnh.`,
+        to: "/data",
+        tone: "warning",
+      });
+    }
+    if (entitiesWithoutAssets > 0) {
+      issues.push({
+        label: "Quán thiếu ảnh",
+        detail: `${entitiesWithoutAssets} quán chưa có asset gắn trực tiếp.`,
+        to: "/data",
+        tone: "warning",
+      });
+    }
+    if (brokenAssets > 0 || missingAssets > 0) {
+      issues.push({
+        label: "Ảnh lỗi",
+        detail: `${brokenAssets + missingAssets} asset đang lỗi hoặc thiếu nguồn.`,
+        to: "/data",
+        tone: "danger",
+      });
+    }
+    if (!aiConfigured) {
+      issues.push({
+        label: "AI chưa cấu hình",
+        detail: "Thiết lập base URL và model để dùng các tính năng AI.",
+        to: "/settings",
+        tone: "warning",
+      });
+    }
+    if (latestJobWarnings > 0) {
+      issues.push({
+        label: "Job gần nhất có cảnh báo",
+        detail: `${latestJobWarnings} cảnh báo trong lần tạo gần nhất.`,
+        to: "/history",
+        tone: "warning",
+      });
+    }
+
+    return {
+      packTemplates: packTemplates.length,
+      pageTemplates: pageTemplates.length,
+      entities: entities.length,
+      activeEntities,
+      partnerEntities,
+      sheetCount: sheetNames.length,
+      sheetNames,
+      assets: assets.length,
+      localAssets,
+      linkAssets,
+      blobCount,
+      brokenAssets,
+      missingAssets,
+      entitiesWithoutAssets,
+      jobs: jobs.length,
+      renderedPages,
+      exportedJobs,
+      latestJobWarnings,
+      presetCount,
+      analysisCount,
+      totalSlots,
+      mappedSlots,
+      aiConfigured,
+      readiness,
+      issues,
+    };
   }, []);
-  const fileRef = useRef<HTMLInputElement>(null);
+
+  const readiness = dashboard?.readiness ?? 0;
+  const issues = dashboard?.issues ?? [];
 
   return (
-    <PageContainer>
-      <section className="relative mb-8 overflow-hidden rounded-2xl bg-brand-gradient p-6 text-[color:var(--color-brand-ink)] shadow-sm md:p-8">
-        <div
-          className="pointer-events-none absolute -right-10 -top-10 hidden h-56 w-56 rounded-full bg-white/10 blur-2xl md:block"
-          aria-hidden
-        />
-        <div
-          className="pointer-events-none absolute -bottom-16 -left-10 hidden h-48 w-48 rounded-full bg-white/10 blur-3xl md:block"
-          aria-hidden
-        />
-        <div className="relative flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
-          <div className="max-w-xl">
-            <Badge
-              variant="outline"
-              className="mb-3 border-white/30 bg-white/10 text-[color:var(--color-brand-ink)] backdrop-blur"
-            >
-              <Sparkles className="mr-1 size-3" /> Content pack studio
-            </Badge>
-            <h1 className="text-3xl font-bold leading-tight md:text-4xl">
-              Chào mừng tới GenPoster
-            </h1>
-            <p className="mt-2 text-sm text-[color:var(--color-brand-ink)]/80 md:text-base">
-              Project hiện tại:{" "}
-              <span className="font-semibold">{project?.name ?? "(chưa có)"}</span>. Tạo design,
-              ghép pack, và xuất bộ ảnh social chỉ trong vài bước.
-            </p>
-            <div className="mt-5 flex flex-wrap gap-2">
-              <Button
-                asChild
-                size="lg"
-                className="bg-white text-[color:var(--primary)] hover:bg-white/90"
-              >
-                <Link to="/generate">
-                  <Sparkles className="mr-2 size-4" /> Tạo content pack
-                </Link>
-              </Button>
-              <Button
-                asChild
-                size="lg"
-                variant="outline"
-                className="border-white/40 bg-white/10 text-[color:var(--color-brand-ink)] hover:bg-white/20"
-              >
-                <Link to="/templates">
-                  <Package className="mr-2 size-4" /> Mở packs
-                </Link>
-              </Button>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2 md:justify-end">
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-white/40 bg-white/10 text-[color:var(--color-brand-ink)] hover:bg-white/20"
-              onClick={async () => {
-                const data = await exportProjectJSON();
-                downloadJSON(data, `project-${Date.now()}.json`);
-                toast.success("Đã export project JSON");
-              }}
-            >
-              <Download className="mr-2 size-4" />
-              Export JSON
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-white/40 bg-white/10 text-[color:var(--color-brand-ink)] hover:bg-white/20"
-              onClick={() => fileRef.current?.click()}
-            >
-              <Upload className="mr-2 size-4" />
-              Import JSON
-            </Button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="application/json"
-              className="hidden"
-              onChange={async (e) => {
-                const f = e.target.files?.[0];
-                if (!f) return;
-                try {
-                  const data = JSON.parse(await f.text());
-                  await importProjectJSON(data);
-                  toast.success("Đã import project");
-                  window.location.reload();
-                } catch (err) {
-                  toast.error("Lỗi import: " + (err as Error).message);
-                }
-              }}
-            />
-          </div>
+    <PageContainer className="space-y-5">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Trạng thái dữ liệu, ảnh, template và lịch sử tạo nội dung.
+          </p>
         </div>
-      </section>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link to="/data">
+              <UploadCloud className="size-4" />
+              Nhập dữ liệu
+            </Link>
+          </Button>
+          <Button asChild size="sm">
+            <Link to="/generate">
+              <Sparkles className="size-4" />
+              Tạo nội dung
+            </Link>
+          </Button>
+        </div>
+      </div>
 
-      <div className="mb-8 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+      <Card className="border-border/70">
+        <CardContent className="flex flex-col gap-4 p-4 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="text-sm font-medium">Mức sẵn sàng</div>
+              <StatusBadge tone={readiness >= 75 ? "good" : readiness >= 50 ? "warning" : "danger"}>
+                {readiness}%
+              </StatusBadge>
+            </div>
+            <Progress value={readiness} className="mt-3 max-w-xl" />
+            <p className="mt-2 text-sm text-muted-foreground">
+              Đủ dữ liệu, template, ảnh và AI thì có thể generate ổn định hơn.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-sm md:min-w-72">
+            <ReadinessChip active={(dashboard?.entities ?? 0) > 0} label="Dữ liệu" />
+            <ReadinessChip
+              active={(dashboard?.packTemplates ?? 0) > 0 && (dashboard?.pageTemplates ?? 0) > 0}
+              label="Template"
+            />
+            <ReadinessChip active={(dashboard?.assets ?? 0) > 0} label="Ảnh" />
+            <ReadinessChip active={Boolean(dashboard?.aiConfigured)} label="AI" />
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label="Pack Templates"
-          value={counts?.pack ?? 0}
+          value={dashboard?.packTemplates ?? 0}
+          detail={`${dashboard?.pageTemplates ?? 0} page template`}
           icon={Package}
           color="teal"
           to="/templates"
         />
         <StatCard
           label="Entities"
-          value={counts?.ent ?? 0}
+          value={dashboard?.entities ?? 0}
+          detail={`${dashboard?.sheetCount ?? 0} sheet, ${dashboard?.activeEntities ?? 0} active`}
           icon={Database}
           color="amber"
           to="/data"
         />
         <StatCard
           label="Assets"
-          value={counts?.asset ?? 0}
+          value={dashboard?.assets ?? 0}
+          detail={`${dashboard?.localAssets ?? 0} local, ${dashboard?.linkAssets ?? 0} link`}
           icon={ImageIcon}
           color="rose"
           to="/data"
         />
         <StatCard
           label="Jobs đã tạo"
-          value={counts?.job ?? 0}
+          value={dashboard?.jobs ?? 0}
+          detail={`${dashboard?.renderedPages ?? 0} trang, ${dashboard?.exportedJobs ?? 0} đã export`}
           icon={FileText}
           color="slate"
           to="/history"
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-4">
-        <Card className="border-border/70 transition-shadow hover:shadow-md">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <span className="grid size-8 place-items-center rounded-lg bg-accent text-primary">
-                <Sparkles className="size-4" />
-              </span>
-              Bắt đầu nhanh
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              App đã có sẵn pack demo Đà Lạt. Bạn có thể chạy generate thử ngay.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button asChild>
-                <Link to="/generate">
-                  Tạo content pack <ArrowRight className="ml-1 size-3.5" />
-                </Link>
-              </Button>
-              <Button variant="outline" asChild>
-                <Link to="/templates">Mở packs</Link>
-              </Button>
-              <Button variant="outline" asChild>
-                <Link to="/data">Quản lý dữ liệu</Link>
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+      <div className="grid gap-4 xl:grid-cols-4">
+        <StatusCard
+          title="Dữ liệu"
+          icon={Database}
+          tone={(dashboard?.entities ?? 0) > 0 ? "good" : "danger"}
+          rows={[
+            ["Tổng entity", dashboard?.entities ?? 0],
+            ["Đang active", dashboard?.activeEntities ?? 0],
+            ["Partner", dashboard?.partnerEntities ?? 0],
+            ["Sheet", dashboard?.sheetCount ?? 0],
+          ]}
+          actionTo="/data"
+          actionLabel="Mở dữ liệu"
+        />
+        <StatusCard
+          title="Ảnh"
+          icon={ImageIcon}
+          tone={
+            (dashboard?.assets ?? 0) === 0
+              ? "warning"
+              : (dashboard?.brokenAssets ?? 0) + (dashboard?.missingAssets ?? 0) > 0
+                ? "danger"
+                : "good"
+          }
+          rows={[
+            ["Asset", dashboard?.assets ?? 0],
+            ["Blob local", dashboard?.blobCount ?? 0],
+            ["Link chưa tải", dashboard?.linkAssets ?? 0],
+            ["Quán thiếu ảnh", dashboard?.entitiesWithoutAssets ?? 0],
+          ]}
+          actionTo="/data"
+          actionLabel="Kiểm ảnh"
+        />
+        <StatusCard
+          title="Template"
+          icon={Package}
+          tone={(dashboard?.packTemplates ?? 0) > 0 ? "good" : "danger"}
+          rows={[
+            ["Pack", dashboard?.packTemplates ?? 0],
+            ["Page", dashboard?.pageTemplates ?? 0],
+            ["Slot đã map", `${dashboard?.mappedSlots ?? 0}/${dashboard?.totalSlots ?? 0}`],
+            ["Preset", dashboard?.presetCount ?? 0],
+          ]}
+          actionTo="/templates"
+          actionLabel="Mở template"
+        />
+        <StatusCard
+          title="Tạo nội dung"
+          icon={Sparkles}
+          tone={(dashboard?.latestJobWarnings ?? 0) > 0 ? "warning" : "neutral"}
+          rows={[
+            ["Job", dashboard?.jobs ?? 0],
+            ["Trang render", dashboard?.renderedPages ?? 0],
+            ["Cảnh báo job mới", dashboard?.latestJobWarnings ?? 0],
+            ["Phân tích AI", dashboard?.analysisCount ?? 0],
+          ]}
+          actionTo="/generate"
+          actionLabel="Tạo nội dung"
+        />
       </div>
+
+      <Card className="border-border/70">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <AlertTriangle className="size-4" />
+            Cần xử lý
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {issues.length === 0 ? (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">
+              Không có cảnh báo lớn. Có thể bắt đầu tạo nội dung.
+            </div>
+          ) : (
+            issues.slice(0, 6).map((issue) => (
+              <Link
+                key={`${issue.label}-${issue.to}`}
+                to={issue.to}
+                className="flex items-start justify-between gap-3 rounded-lg border p-3 transition-colors hover:bg-accent"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusDot tone={issue.tone} />
+                    <div className="font-medium">{issue.label}</div>
+                  </div>
+                  <div className="mt-1 text-sm text-muted-foreground">{issue.detail}</div>
+                </div>
+                <span className="text-xs font-medium text-primary">Mở</span>
+              </Link>
+            ))
+          )}
+        </CardContent>
+      </Card>
     </PageContainer>
   );
 }
 
 const STAT_COLORS: Record<StatColor, string> = {
-  violet: "bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300",
   blue: "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300",
   teal: "bg-teal-100 text-teal-700 dark:bg-teal-500/15 dark:text-teal-300",
   amber: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
@@ -208,15 +391,34 @@ const STAT_COLORS: Record<StatColor, string> = {
   slate: "bg-slate-100 text-slate-700 dark:bg-slate-500/15 dark:text-slate-300",
 };
 
+const STATUS_TONE_CLASSES: Record<StatusTone, string> = {
+  good: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200",
+  warning:
+    "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200",
+  danger:
+    "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-200",
+  neutral:
+    "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-500/20 dark:bg-slate-500/10 dark:text-slate-200",
+};
+
+const STATUS_DOT_CLASSES: Record<StatusTone, string> = {
+  good: "bg-emerald-500",
+  warning: "bg-amber-500",
+  danger: "bg-rose-500",
+  neutral: "bg-slate-400",
+};
+
 function StatCard({
   label,
   value,
+  detail,
   icon: Icon,
   color,
   to,
 }: {
   label: string;
   value: number;
+  detail: string;
   icon: React.ComponentType<{ className?: string }>;
   color: StatColor;
   to: string;
@@ -224,14 +426,86 @@ function StatCard({
   return (
     <Link to={to} aria-label={`${label}: ${value}`}>
       <Card className="h-full border-border/70 transition-all hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md">
-        <CardContent className="flex flex-col gap-2 p-4">
+        <CardContent className="flex h-full flex-col gap-2 p-4">
           <span className={cn("grid size-9 place-items-center rounded-lg", STAT_COLORS[color])}>
             <Icon className="size-4" />
           </span>
           <div className="text-2xl font-bold leading-none tabular-nums">{value}</div>
-          <div className="text-xs text-muted-foreground">{label}</div>
+          <div>
+            <div className="text-xs text-muted-foreground">{label}</div>
+            <div className="mt-1 text-xs text-muted-foreground/80">{detail}</div>
+          </div>
         </CardContent>
       </Card>
     </Link>
+  );
+}
+
+function StatusCard({
+  title,
+  icon: Icon,
+  tone,
+  rows,
+  actionTo,
+  actionLabel,
+}: {
+  title: string;
+  icon: React.ComponentType<{ className?: string }>;
+  tone: StatusTone;
+  rows: Array<[string, string | number]>;
+  actionTo: string;
+  actionLabel: string;
+}) {
+  return (
+    <Card className="border-border/70">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center justify-between gap-2 text-base">
+          <span className="flex items-center gap-2">
+            <Icon className="size-4" />
+            {title}
+          </span>
+          <StatusDot tone={tone} />
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="space-y-2">
+          {rows.map(([label, value]) => (
+            <div key={label} className="flex items-center justify-between gap-3 text-sm">
+              <span className="text-muted-foreground">{label}</span>
+              <span className="font-medium tabular-nums">{value}</span>
+            </div>
+          ))}
+        </div>
+        <Button asChild variant="outline" size="sm" className="w-full">
+          <Link to={actionTo}>{actionLabel}</Link>
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function StatusBadge({ tone, children }: { tone: StatusTone; children: React.ReactNode }) {
+  return (
+    <Badge variant="outline" className={cn("border px-2 py-0.5", STATUS_TONE_CLASSES[tone])}>
+      {children}
+    </Badge>
+  );
+}
+
+function StatusDot({ tone }: { tone: StatusTone }) {
+  return <span className={cn("size-2.5 shrink-0 rounded-full", STATUS_DOT_CLASSES[tone])} />;
+}
+
+function ReadinessChip({ active, label }: { active: boolean; label: string }) {
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2 rounded-lg border px-3 py-2",
+        active ? STATUS_TONE_CLASSES.good : STATUS_TONE_CLASSES.neutral,
+      )}
+    >
+      {active ? <CheckCircle2 className="size-4" /> : <Clock3 className="size-4" />}
+      <span className="font-medium">{label}</span>
+    </div>
   );
 }

@@ -36,7 +36,13 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageContainer, PageHeader } from "@/components/PageHeader";
 import { BulkImageUpload } from "@/features/data/BulkImageUpload";
-import { entityHasImageSource, getAssetEntityIds } from "@/features/data/imageReferences";
+import {
+  entityHasImageSource,
+  getAssetEntityIds,
+  getEntityImageReferences,
+  looksLikeDirectImageReference,
+  looksLikeDriveReference,
+} from "@/features/data/imageReferences";
 import {
   fetchSheetWorkbook,
   parseDataFile,
@@ -184,15 +190,14 @@ function ratio(values: string[], predicate: (value: string, normalized: string) 
 function inferFieldFromSamples(values: string[]): MappingFieldGuess | null {
   if (values.length === 0) return null;
 
-  const imageRatio = ratio(
-    values,
-    (value, normalized) =>
-      /^https?:\/\//i.test(value) ||
-      normalized.includes("drive.google") ||
-      /\.(png|jpe?g|webp|gif)(\?|$)/i.test(value),
-  );
-  if (imageRatio >= 0.45) {
-    return { field: "image", confidence: 0.82, reason: "giá trị giống link ảnh" };
+  const driveRatio = ratio(values, (value) => looksLikeDriveReference(value));
+  if (driveRatio >= 0.35) {
+    return { field: "imageRef", confidence: 0.86, reason: "giá trị giống link Drive ảnh" };
+  }
+
+  const directImageRatio = ratio(values, (value) => looksLikeDirectImageReference(value));
+  if (directImageRatio >= 0.35) {
+    return { field: "image", confidence: 0.82, reason: "giá trị giống link ảnh trực tiếp" };
   }
 
   const hourRatio = ratio(
@@ -293,6 +298,24 @@ function autoMapWorkbook(
     workbook.map((sheet) => [
       sheet.name,
       autoMapImportSource(sheet.headers, sheet.rows, previousMappings[sheet.name]),
+    ]),
+  );
+}
+
+function sheetHasUsableNameMapping(sheet: ParsedWorkbookSheet, mapping: FieldMapping) {
+  return sheet.headers.some(
+    (header) => (mapping[header] ?? "__ignore__") === "name" && collectSamples(sheet.rows, header).length > 0,
+  );
+}
+
+function defaultIncludedSheets(
+  workbook: ParsedWorkbookSheet[],
+  mappings: Record<string, FieldMapping>,
+) {
+  return Object.fromEntries(
+    workbook.map((sheet) => [
+      sheet.name,
+      sheetHasUsableNameMapping(sheet, mappings[sheet.name] ?? {}) || workbook.length === 1,
     ]),
   );
 }
@@ -571,9 +594,11 @@ function DataPage() {
   const [parsed, setParsed] = useState<ParsedTable | null>(null);
   const [mapping, setMapping] = useState<FieldMapping>({});
   const [mappingsBySheet, setMappingsBySheet] = useState<Record<string, FieldMapping>>({});
+  const [includedSheets, setIncludedSheets] = useState<Record<string, boolean>>({});
   const [sheetUrl, setSheetUrl] = useState("");
   const [sheetName, setSheetName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [activeTab, setActiveTab] = useState("import");
 
   const workbookSheets = parsed?.workbookSheets ?? [];
   const isMultiSheetWorkbook = workbookSheets.length > 1;
@@ -609,12 +634,24 @@ function DataPage() {
     () => entities.filter((entity) => !entityHasImageSource(entity, assetEntityIds)).length,
     [assetEntityIds, entities],
   );
+  const imageReferenceEntityCount = useMemo(
+    () => entities.filter((entity) => getEntityImageReferences(entity).length > 0).length,
+    [entities],
+  );
+  const driveDownloadCandidateCount = useMemo(
+    () =>
+      entities.filter(
+        (entity) => !assetEntityIds.has(entity.entityId) && getEntityImageReferences(entity).length > 0,
+      ).length,
+    [assetEntityIds, entities],
+  );
   const mappingChecks = useMemo(() => {
     if (!parsed) return [];
 
     if (parsed.workbookSheets?.length) {
       return parsed.workbookSheets.map((sheet) => ({
         sheetName: sheet.name,
+        included: includedSheets[sheet.name] ?? true,
         ...validateMapping(
           sheet.headers,
           sheet.rows,
@@ -626,13 +663,21 @@ function DataPage() {
     return [
       {
         sheetName: sheetName.trim() || parsed.sourceSheetName || "default",
+        included: true,
         ...validateMapping(parsed.headers, parsed.rows, mapping),
       },
     ];
-  }, [mapping, mappingsBySheet, parsed, sheetName]);
+  }, [includedSheets, mapping, mappingsBySheet, parsed, sheetName]);
   const activeMappingCheck =
     mappingChecks.find((check) => check.sheetName === parsed?.sourceSheetName) ?? mappingChecks[0];
-  const blockingMappingIssues = mappingChecks.flatMap((check) =>
+  const includedMappingChecks = mappingChecks.filter((check) => check.included);
+  const includedSheetCount = parsed?.workbookSheets?.length
+    ? parsed.workbookSheets.filter((sheet) => includedSheets[sheet.name] ?? true).length
+    : 1;
+  const activeSheetIncluded = parsed?.sourceSheetName
+    ? (includedSheets[parsed.sourceSheetName] ?? true)
+    : true;
+  const blockingMappingIssues = includedMappingChecks.flatMap((check) =>
     check.blockingIssues.map((issue) =>
       mappingChecks.length > 1 ? `${check.sheetName}: ${issue}` : issue,
     ),
@@ -663,6 +708,7 @@ function DataPage() {
       if (nextParsed.workbookSheets?.length) {
         const nextMappings = autoMapWorkbook(nextParsed.workbookSheets, mappingsBySheet);
         setMappingsBySheet(nextMappings);
+        setIncludedSheets(defaultIncludedSheets(nextParsed.workbookSheets, nextMappings));
         activateWorkbookSheet(
           nextParsed.workbookSheets,
           nextMappings,
@@ -684,6 +730,7 @@ function DataPage() {
 
       setParsed(nextParsed);
       setMappingsBySheet({});
+      setIncludedSheets({});
       setMapping(autoMapImportSource(nextParsed.headers, nextParsed.rows, mapping));
       if (!sheetName) setSheetName(stripImportExtension(file.name));
       toast.success(`Đã đọc ${nextParsed.rows.length} dòng`);
@@ -702,6 +749,7 @@ function DataPage() {
       if (nextParsed.workbookSheets?.length) {
         const nextMappings = autoMapWorkbook(nextParsed.workbookSheets, mappingsBySheet);
         setMappingsBySheet(nextMappings);
+        setIncludedSheets(defaultIncludedSheets(nextParsed.workbookSheets, nextMappings));
         activateWorkbookSheet(
           nextParsed.workbookSheets,
           nextMappings,
@@ -712,11 +760,11 @@ function DataPage() {
           if (!sheetName) {
             setSheetName(nextParsed.sourceSheetName ?? guessSheetName(sheetUrl) ?? "Quan_an");
           }
-          toast.success(`ÄÃ£ táº£i ${nextParsed.rows.length} dÃ²ng tá»« Google Sheets`);
+          toast.success(`Đã tải ${nextParsed.rows.length} dòng từ Google Sheets`);
         } else {
           setSheetName("");
           toast.success(
-            `ÄÃ£ táº£i ${nextParsed.workbookSheets.length} sheet tá»« Google Sheets. Äang xem "${nextParsed.sourceSheetName}"`,
+            `Đã tải ${nextParsed.workbookSheets.length} sheet từ Google Sheets. Đang xem "${nextParsed.sourceSheetName}"`,
           );
         }
 
@@ -725,6 +773,7 @@ function DataPage() {
 
       setParsed(nextParsed);
       setMappingsBySheet({});
+      setIncludedSheets({});
       setMapping(autoMapImportSource(nextParsed.headers, nextParsed.rows, mapping));
       if (!sheetName) setSheetName(guessSheetName(sheetUrl) || "Quan_an");
       toast.success(`Đã tải ${nextParsed.rows.length} dòng từ Google Sheets`);
@@ -743,9 +792,24 @@ function DataPage() {
           ...prevMappings,
           [parsed.sourceSheetName!]: next,
         }));
+        if (value === "name") {
+          setIncludedSheets((prevIncluded) => ({
+            ...prevIncluded,
+            [parsed.sourceSheetName!]: true,
+          }));
+        }
       }
       return next;
     });
+  };
+
+  const toggleCurrentSheetIncluded = () => {
+    if (!parsed?.sourceSheetName) return;
+    const sheet = parsed.sourceSheetName;
+    setIncludedSheets((prev) => ({
+      ...prev,
+      [sheet]: !(prev[sheet] ?? true),
+    }));
   };
 
   const importNow = async () => {
@@ -756,7 +820,7 @@ function DataPage() {
     }
 
     const importSources = parsed.workbookSheets?.length
-      ? parsed.workbookSheets
+      ? parsed.workbookSheets.filter((sheet) => includedSheets[sheet.name] ?? true)
       : [
           {
             name: sheetName.trim() || parsed.sourceSheetName || "default",
@@ -764,6 +828,10 @@ function DataPage() {
             rows: parsed.rows,
           },
         ];
+    if (importSources.length === 0) {
+      toast.error("Chưa chọn sheet nào để import.");
+      return;
+    }
 
     const plans = importSources.map((source) => {
       const finalSheet =
@@ -801,20 +869,40 @@ function DataPage() {
 
     const totalEntities = plans.reduce((sum, plan) => sum + plan.entities.length, 0);
     const totalWarnings = plans.reduce((sum, plan) => sum + plan.warnings.length, 0);
+    const totalAssets = plans.reduce((sum, plan) => sum + plan.assets.length, 0);
+    const totalImageReferenceEntities = plans.reduce(
+      (sum, plan) =>
+        sum + plan.entities.filter((entity) => getEntityImageReferences(entity).length > 0).length,
+      0,
+    );
+    const imageHint =
+      totalAssets > 0
+        ? ` Đã tạo ${totalAssets} asset ảnh.`
+        : totalImageReferenceEntities > 0
+          ? ` Có ${totalImageReferenceEntities} quán có link ảnh; mở tab Ghép ảnh để tải Drive.`
+          : "";
     setLastActiveSheet(parsed.sourceSheetName ?? plans[0]?.finalSheet);
 
     if (plans.length > 1) {
       toast.success(
-        `Đã import ${totalEntities} entity từ ${plans.length} sheet Excel. ${totalWarnings} cảnh báo.`,
+        `Đã import ${totalEntities} entity từ ${plans.length} sheet Excel. ${totalWarnings} cảnh báo.${imageHint}`,
       );
     } else {
       toast.success(
-        `Đã import ${totalEntities} entity vào sheet "${plans[0].finalSheet}". ${totalWarnings} cảnh báo.`,
+        `Đã import ${totalEntities} entity vào sheet "${plans[0].finalSheet}". ${totalWarnings} cảnh báo.${imageHint}`,
       );
     }
 
     setParsed(null);
     setMappingsBySheet({});
+    setIncludedSheets({});
+    if (totalAssets > 0) {
+      setActiveTab("assets");
+    } else if (totalImageReferenceEntities > 0) {
+      setActiveTab("images");
+    } else {
+      setActiveTab("entities");
+    }
   };
 
   return (
@@ -827,15 +915,15 @@ function DataPage() {
 
       <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <DataStat label="Quán/entity" value={entities.length} icon={<Store />} />
-        <DataStat label="Ảnh đã import" value={assets.length} icon={<ImageIcon />} />
-        <DataStat label="Thiếu nguồn ảnh" value={missingImageCount} icon={<ImageIcon />} />
+        <DataStat label="Nguồn ảnh trong sheet" value={imageReferenceEntityCount} icon={<LinkIcon />} />
+        <DataStat label="Asset ảnh đã tải" value={assets.length} icon={<ImageIcon />} />
         <DataStat label="Sheet dữ liệu" value={sheetCount || 0} icon={<FileSpreadsheet />} />
       </div>
 
-      <Tabs defaultValue="import" className="flex flex-col gap-4">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col gap-4">
         <TabsList className="w-fit">
           <TabsTrigger value="import">Import</TabsTrigger>
-          <TabsTrigger value="images">Ghép ảnh</TabsTrigger>
+          <TabsTrigger value="images">Ghép ảnh ({driveDownloadCandidateCount})</TabsTrigger>
           <TabsTrigger value="entities">Quán ({entities.length})</TabsTrigger>
           <TabsTrigger value="assets">Ảnh ({assets.length})</TabsTrigger>
         </TabsList>
@@ -911,17 +999,21 @@ function DataPage() {
                       <div className="flex flex-wrap gap-2">
                         {workbookSheets.map((sheet) => {
                           const active = sheet.name === parsed.sourceSheetName;
+                          const included = includedSheets[sheet.name] ?? true;
+                          const check = mappingChecks.find((item) => item.sheetName === sheet.name);
                           return (
                             <Button
                               key={sheet.name}
                               type="button"
                               size="sm"
-                              variant={active ? "default" : "outline"}
+                              variant={active ? "default" : included ? "outline" : "secondary"}
+                              className={!included ? "opacity-70" : undefined}
                               onClick={() =>
                                 activateWorkbookSheet(workbookSheets, mappingsBySheet, sheet.name)
                               }
                             >
                               {sheet.name} ({sheet.rows.length})
+                              {!included ? " - bỏ qua" : check?.level === "error" ? " - cần map" : ""}
                             </Button>
                           );
                         })}
@@ -929,9 +1021,24 @@ function DataPage() {
                     )}
 
                     {parsed.sourceSheetName && (
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                         Sheet đang xem:
                         <Badge variant="outline">{parsed.sourceSheetName}</Badge>
+                        {isMultiSheetWorkbook && (
+                          <>
+                            <Badge variant={activeSheetIncluded ? "secondary" : "outline"}>
+                              {activeSheetIncluded ? "Sẽ import" : "Đang bỏ qua"}
+                            </Badge>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={toggleCurrentSheetIncluded}
+                            >
+                              {activeSheetIncluded ? "Bỏ qua sheet này" : "Import sheet này"}
+                            </Button>
+                          </>
+                        )}
                       </div>
                     )}
 
@@ -939,8 +1046,13 @@ function DataPage() {
                       {JSON.stringify(parsed.rows.slice(0, 5), null, 2)}
                     </pre>
 
-                    <Button onClick={importNow} disabled={blockingMappingIssues.length > 0}>
-                      {isMultiSheetWorkbook ? "Import toàn bộ workbook" : "Import vào project"}
+                    <Button
+                      onClick={importNow}
+                      disabled={blockingMappingIssues.length > 0 || includedSheetCount === 0}
+                    >
+                      {isMultiSheetWorkbook
+                        ? `Import ${includedSheetCount}/${workbookSheets.length} sheet`
+                        : "Import vào project"}
                     </Button>
                     {blockingMappingIssues.length > 0 && (
                       <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
