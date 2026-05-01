@@ -1266,6 +1266,8 @@ export function PackTabContent({
           ) : (
             <div className="flex flex-col gap-4">
               {matchingPresets.map((preset) => {
+                const { pages } = getPresetPackPages(preset);
+
                 return (
                   <div key={preset.presetId} className="rounded-xl border bg-card shadow-sm">
                     <div className="flex items-center justify-between gap-3 border-b p-4">
