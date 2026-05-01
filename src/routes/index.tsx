@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   Clock3,
   Database,
+  Download,
   FileText,
   Image as ImageIcon,
   Package,
@@ -18,6 +19,7 @@ import {
   UploadCloud,
 } from "lucide-react";
 import { PageContainer } from "@/components/PageHeader";
+import { getEntityImageReferences } from "@/features/data/imageReferences";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({
@@ -31,6 +33,7 @@ interface DashboardIssue {
   label: string;
   detail: string;
   to: string;
+  search?: { tab: "images" };
   tone: StatusTone;
 }
 
@@ -69,12 +72,16 @@ function Dashboard() {
     const partnerEntities = entities.filter((entity) => entity.partnerFlag).length;
     const localAssets = assets.filter((asset) => asset.blobKey).length;
     const linkAssets = assets.filter((asset) => !asset.blobKey && asset.sourceValue).length;
+    const hasUsableAssets = localAssets > 0 || linkAssets > 0;
     const brokenAssets = assets.filter((asset) => asset.status === "broken").length;
     const missingAssets = assets.filter((asset) => asset.status === "missing" || !asset.sourceValue)
       .length;
     const assetEntityIds = new Set(assets.map((asset) => asset.entityId).filter(Boolean));
     const entitiesWithoutAssets = entities.filter((entity) => !assetEntityIds.has(entity.entityId))
       .length;
+    const driveDownloadCandidateCount = entities.filter(
+      (entity) => !assetEntityIds.has(entity.entityId) && getEntityImageReferences(entity).length > 0,
+    ).length;
     const latestJob = jobs[0] ?? null;
     const renderedPages = jobs.reduce((sum, job) => sum + job.pages.length, 0);
     const exportedJobs = jobs.filter((job) => job.status === "exported").length;
@@ -96,12 +103,14 @@ function Dashboard() {
     const readinessChecks = [
       entities.length > 0,
       packTemplates.length > 0 && pageTemplates.length > 0,
-      assets.length > 0 && (localAssets > 0 || linkAssets > 0),
+      hasUsableAssets,
       aiConfigured,
     ];
-    const readiness = Math.round(
+    const rawReadiness = Math.round(
       (readinessChecks.filter(Boolean).length / readinessChecks.length) * 100,
     );
+    const readiness =
+      entities.length > 0 && !hasUsableAssets ? Math.min(rawReadiness, 49) : rawReadiness;
 
     const issues: DashboardIssue[] = [];
     if (entities.length === 0) {
@@ -123,9 +132,13 @@ function Dashboard() {
     if (assets.length === 0) {
       issues.push({
         label: "Chưa có ảnh",
-        detail: "Dữ liệu có thể đã nhập nhưng chưa có asset ảnh.",
+        detail:
+          driveDownloadCandidateCount > 0
+            ? `Có ${driveDownloadCandidateCount} quán có link ảnh trong sheet, cần tải ảnh Drive.`
+            : "Dữ liệu có thể đã nhập nhưng chưa có asset ảnh.",
         to: "/data",
-        tone: "warning",
+        search: driveDownloadCandidateCount > 0 ? { tab: "images" } : undefined,
+        tone: "danger",
       });
     } else if (linkAssets > 0) {
       issues.push({
@@ -140,7 +153,8 @@ function Dashboard() {
         label: "Quán thiếu ảnh",
         detail: `${entitiesWithoutAssets} quán chưa có asset gắn trực tiếp.`,
         to: "/data",
-        tone: "warning",
+        search: driveDownloadCandidateCount > 0 ? { tab: "images" } : undefined,
+        tone: assets.length === 0 ? "danger" : "warning",
       });
     }
     if (brokenAssets > 0 || missingAssets > 0) {
@@ -179,6 +193,7 @@ function Dashboard() {
       assets: assets.length,
       localAssets,
       linkAssets,
+      driveDownloadCandidateCount,
       blobCount,
       brokenAssets,
       missingAssets,
@@ -216,6 +231,14 @@ function Dashboard() {
               Nhập dữ liệu
             </Link>
           </Button>
+          {(dashboard?.driveDownloadCandidateCount ?? 0) > 0 && (
+            <Button asChild variant="outline" size="sm">
+              <Link to="/data" search={{ tab: "images" }}>
+                <Download className="size-4" />
+                Tải ảnh Drive
+              </Link>
+            </Button>
+          )}
           <Button asChild size="sm">
             <Link to="/generate">
               <Sparkles className="size-4" />
@@ -245,7 +268,10 @@ function Dashboard() {
               active={(dashboard?.packTemplates ?? 0) > 0 && (dashboard?.pageTemplates ?? 0) > 0}
               label="Template"
             />
-            <ReadinessChip active={(dashboard?.assets ?? 0) > 0} label="Ảnh" />
+            <ReadinessChip
+              active={(dashboard?.localAssets ?? 0) > 0 || (dashboard?.linkAssets ?? 0) > 0}
+              label="Ảnh"
+            />
             <ReadinessChip active={Boolean(dashboard?.aiConfigured)} label="AI" />
           </div>
         </CardContent>
@@ -305,7 +331,7 @@ function Dashboard() {
           icon={ImageIcon}
           tone={
             (dashboard?.assets ?? 0) === 0
-              ? "warning"
+              ? "danger"
               : (dashboard?.brokenAssets ?? 0) + (dashboard?.missingAssets ?? 0) > 0
                 ? "danger"
                 : "good"
@@ -317,7 +343,10 @@ function Dashboard() {
             ["Quán thiếu ảnh", dashboard?.entitiesWithoutAssets ?? 0],
           ]}
           actionTo="/data"
-          actionLabel="Kiểm ảnh"
+          actionSearch={{ tab: "images" }}
+          actionLabel={
+            (dashboard?.driveDownloadCandidateCount ?? 0) > 0 ? "Tải ảnh Drive" : "Kiểm ảnh"
+          }
         />
         <StatusCard
           title="Template"
@@ -364,6 +393,7 @@ function Dashboard() {
               <Link
                 key={`${issue.label}-${issue.to}`}
                 to={issue.to}
+                search={issue.search}
                 className="flex items-start justify-between gap-3 rounded-lg border p-3 transition-colors hover:bg-accent"
               >
                 <div className="min-w-0">
@@ -447,6 +477,7 @@ function StatusCard({
   tone,
   rows,
   actionTo,
+  actionSearch,
   actionLabel,
 }: {
   title: string;
@@ -454,6 +485,7 @@ function StatusCard({
   tone: StatusTone;
   rows: Array<[string, string | number]>;
   actionTo: string;
+  actionSearch?: { tab: "images" };
   actionLabel: string;
 }) {
   return (
@@ -477,7 +509,9 @@ function StatusCard({
           ))}
         </div>
         <Button asChild variant="outline" size="sm" className="w-full">
-          <Link to={actionTo}>{actionLabel}</Link>
+          <Link to={actionTo} search={actionSearch}>
+            {actionLabel}
+          </Link>
         </Button>
       </CardContent>
     </Card>

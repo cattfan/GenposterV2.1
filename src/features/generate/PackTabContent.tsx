@@ -1118,7 +1118,7 @@ export function PackTabContent({
     }
   };
 
-  const onGenerate = () => {
+  const onGenerate = async () => {
     if (!selectedPack) return toast.error("Chưa chọn bộ mẫu");
     if (filteredEntities.length === 0) return toast.error("Không có dữ liệu phù hợp");
     const pageTemplatesForGenerate = tpls.map(
@@ -1151,7 +1151,15 @@ export function PackTabContent({
       job = applyFontVariationToGeneratedJob(job, selectedPack, pageTemplatesForGenerate);
     }
     setJob(job);
-    toast.success(`Đã tạo ${job.pages.length} trang`);
+    try {
+      await db.jobs.put(job);
+      toast.success(`Đã tạo ${job.pages.length} trang và lưu vào lịch sử`);
+    } catch (error) {
+      toast.error(
+        "Đã tạo trang nhưng không lưu được lịch sử: " +
+          (error instanceof Error ? error.message : String(error)),
+      );
+    }
   };
 
   const filteredPages = currentJob?.pages.filter((p) => {

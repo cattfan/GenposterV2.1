@@ -35,6 +35,7 @@ import type { Asset, Entity } from "@/models";
 import { db, saveBlob } from "@/storage/db";
 import { makeIdbSrc } from "@/storage/imageSrc";
 import { getSettings, saveSettings } from "@/storage/settings";
+import { cn } from "@/lib/utils";
 
 interface PendingFile {
   file: File;
@@ -431,6 +432,8 @@ export function BulkImageUpload() {
       ),
     [assetEntityIds, entities],
   );
+  const shouldHighlightDriveDownload =
+    driveImportCandidates.length > 0 && !driveBusy && !matching && !busy;
   const driveFailureCounts = useMemo(() => {
     const counts: Record<DriveFailureFilter, number> = {
       all: driveFailures.length,
@@ -672,12 +675,22 @@ export function BulkImageUpload() {
               </div>
               <Button
                 type="button"
-                className="mt-3"
+                className={cn(
+                  "mt-3",
+                  shouldHighlightDriveDownload &&
+                    "shadow-md ring-2 ring-primary/40 ring-offset-2 ring-offset-background",
+                )}
                 onClick={() => void importDriveImages()}
                 disabled={driveBusy || matching || busy || driveImportCandidates.length === 0}
               >
                 <Download /> Tải ảnh từ Drive ({driveImportCandidates.length})
               </Button>
+              {shouldHighlightDriveDownload && (
+                <div className="mt-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-primary">
+                  Có {driveImportCandidates.length} quán có link ảnh trong sheet. Bấm nút này để tải
+                  ảnh về local.
+                </div>
+              )}
             </div>
 
             {matching && (

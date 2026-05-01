@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useLocation } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -67,6 +67,11 @@ export const Route = createFileRoute("/data")({
 
 const EMPTY_ENTITIES: Entity[] = [];
 const EMPTY_ASSETS: Asset[] = [];
+type DataTab = "import" | "images" | "entities" | "assets";
+
+function normalizeDataTab(value: unknown): DataTab {
+  return value === "images" || value === "entities" || value === "assets" ? value : "import";
+}
 
 function stripImportExtension(fileName: string) {
   return fileName.replace(/\.(csv|json|xlsx)$/i, "");
@@ -732,6 +737,9 @@ function AssetCard({ asset, entity, index }: { asset: Asset; entity?: Entity; in
 }
 
 function DataPage() {
+  const location = useLocation();
+  const routeSearch = location.search as { tab?: unknown };
+  const requestedTab = normalizeDataTab(routeSearch.tab);
   const entities = useLiveQuery(() => db.entities.toArray(), []) ?? EMPTY_ENTITIES;
   const assets = useLiveQuery(() => db.assets.toArray(), []) ?? EMPTY_ASSETS;
   const [parsed, setParsed] = useState<ParsedTable | null>(null);
@@ -741,7 +749,7 @@ function DataPage() {
   const [sheetUrl, setSheetUrl] = useState("");
   const [sheetName, setSheetName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [activeTab, setActiveTab] = useState("import");
+  const [activeTab, setActiveTab] = useState<DataTab>(requestedTab);
   const [driveCheckBusy, setDriveCheckBusy] = useState(false);
   const [driveCheckDone, setDriveCheckDone] = useState(0);
   const [driveCheckTotal, setDriveCheckTotal] = useState(0);
@@ -838,6 +846,10 @@ function DataPage() {
       mappingChecks.length > 1 ? `${check.sheetName}: ${issue}` : issue,
     ),
   );
+
+  useEffect(() => {
+    setActiveTab(requestedTab);
+  }, [requestedTab]);
 
   const activateWorkbookSheet = (
     workbook: ParsedWorkbookSheet[],
@@ -1190,10 +1202,13 @@ function DataPage() {
     setParsed(null);
     setMappingsBySheet({});
     setIncludedSheets({});
-    if (totalAssets > 0) {
-      setActiveTab("assets");
-    } else if (totalImageReferenceEntities > 0) {
+    if (totalImageReferenceEntities > 0) {
       setActiveTab("images");
+      toast.info("Đã chuyển sang Ghép ảnh. Bấm Tải ảnh từ Drive để tải ảnh về local.", {
+        duration: 7000,
+      });
+    } else if (totalAssets > 0) {
+      setActiveTab("assets");
     } else {
       setActiveTab("entities");
     }
@@ -1214,7 +1229,11 @@ function DataPage() {
         <DataStat label="Sheet dữ liệu" value={sheetCount || 0} icon={<FileSpreadsheet />} />
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col gap-4">
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(normalizeDataTab(value))}
+        className="flex flex-col gap-4"
+      >
         <TabsList className="w-fit">
           <TabsTrigger value="import">Import</TabsTrigger>
           <TabsTrigger value="images">Ghép ảnh ({driveDownloadCandidateCount})</TabsTrigger>
