@@ -40,13 +40,17 @@ export function looksLikeDriveReference(value: string) {
 
 export function looksLikeDirectImageReference(value: string) {
   const trimmed = cleanImageReferenceValue(value);
-  return /^(https?:\/\/|\/|\.\/|\.\.\/).+\.(png|jpe?g|webp|gif|bmp|avif)([?#].*)?$/i.test(
+  return /^(https?:\/\/|\/|\.\/|\.\.\/).+\.(png|jpe?g|jfif|webp|gif|bmp|avif)([?#].*)?$/i.test(
     trimmed,
   );
 }
 
+export function looksLikeHttpReference(value: string) {
+  return /^https?:\/\//i.test(cleanImageReferenceValue(value));
+}
+
 export function looksLikeImageReference(value: string) {
-  return looksLikeDriveReference(value) || looksLikeDirectImageReference(value);
+  return looksLikeDriveReference(value) || looksLikeDirectImageReference(value) || looksLikeHttpReference(value);
 }
 
 function isImageReferenceKey(key: string) {
@@ -64,7 +68,15 @@ export function getEntityImageReferences(entity: Entity): string[] {
 
   for (const [key, value] of Object.entries(entity.metadata ?? {})) {
     const imageKey = isImageReferenceKey(key);
-    for (const part of valueParts(value)) {
+    const parts = valueParts(value);
+    const linkedParts = parts.filter(looksLikeImageReference);
+
+    if (imageKey && linkedParts.length > 0) {
+      for (const part of linkedParts) references.add(part);
+      continue;
+    }
+
+    for (const part of parts) {
       if (imageKey || looksLikeImageReference(part)) references.add(part);
     }
   }
@@ -85,7 +97,8 @@ export function isUsableImageAsset(asset: Asset | undefined): asset is Asset {
     asset.blobKey ||
     source.startsWith("idb://") ||
     source.startsWith("blob:") ||
-    source.startsWith("data:image/")
+    source.startsWith("data:image/") ||
+    source.startsWith("/data-images/")
   ) {
     return true;
   }
@@ -110,6 +123,17 @@ export function getEntityImageReferencesWithAssets(entity: Entity, assets: Asset
 
 export function getAssetEntityIds(assets: Asset[]) {
   return new Set(assets.filter(isUsableImageAsset).map((asset) => asset.entityId));
+}
+
+export function getImageReferenceEntityIds(entities: Entity[], assets: Asset[] = []) {
+  const ids = new Set<string>();
+  for (const entity of entities) {
+    if (entityHasImageReference(entity)) ids.add(entity.entityId);
+  }
+  for (const asset of assets) {
+    if (isImageReferenceAsset(asset)) ids.add(asset.entityId);
+  }
+  return ids;
 }
 
 export function entityHasUsableImageAsset(entity: Entity, assetEntityIds: Set<string>) {

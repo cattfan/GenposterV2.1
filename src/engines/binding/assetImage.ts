@@ -7,7 +7,10 @@ function isDirectImageSource(src: string): boolean {
     src.startsWith("data:image/") ||
     src.startsWith("http://") ||
     src.startsWith("https://") ||
-    src.startsWith("blob:")
+    src.startsWith("blob:") ||
+    src.startsWith("/") ||
+    src.startsWith("./") ||
+    src.startsWith("../")
   );
 }
 

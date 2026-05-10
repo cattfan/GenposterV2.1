@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { Asset, Entity, PageTemplate, RenderedItem } from "@/models";
 import { resolveImageBinding, resolveTextBinding } from "@/engines/binding/dataBinding";
 import { getAssetImageSource } from "@/engines/binding/assetImage";
+import { isDataGroupMarkerSlot } from "@/engines/binding/slotMarkers";
 import { DesignWorkspace } from "@/features/editor/DesignWorkspace";
 import {
   designDocumentToPageTemplate,
@@ -102,6 +103,17 @@ function materializeTemplateForEditor(
       const planned = itemBySlotId.get(slot.slotId);
       const slotEntity = planned?.entityId ? entityById.get(planned.entityId) : entity;
       const plannedAsset = planned?.assetId ? assetById.get(planned.assetId) : undefined;
+
+      if (isDataGroupMarkerSlot(slot)) {
+        return {
+          ...slot,
+          staticText: "",
+          style: {
+            ...slot.style,
+            opacity: 0,
+          },
+        };
+      }
 
       if (slot.kind === "text" && slot.bindingPath) {
         return {

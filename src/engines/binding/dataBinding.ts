@@ -38,8 +38,8 @@ export const TEXT_BINDING_OPTIONS: BindingFieldOption[] = [
 
 export const IMAGE_BINDING_OPTIONS: BindingFieldOption[] = [
   { value: "", label: "Cố định", group: "Cố định" },
-  { value: "asset.cover", label: "Ảnh theo quán", group: "Ảnh" },
   { value: "asset.random", label: "Ảnh ngẫu nhiên quán", group: "Ảnh" },
+  { value: "asset.random_global", label: "Ảnh ngẫu nhiên toàn hệ thống", group: "Ảnh" },
   { value: "asset.random_scope", label: "Ảnh ngẫu nhiên chỉ định", group: "Ảnh" },
 ];
 

@@ -30,6 +30,73 @@ function collectHeaders(rows: Record<string, unknown>[]): string[] {
   return headers;
 }
 
+type XlsxCellLike = {
+  w?: string;
+  v?: unknown;
+  l?: { Target?: string };
+};
+
+function normalizeHeaderValue(value: unknown, fallback: string) {
+  const text = String(value ?? "").trim();
+  return text || fallback;
+}
+
+function cellDisplayValue(cell: XlsxCellLike | undefined) {
+  if (!cell) return "";
+  const display = String(cell.w ?? "").trim();
+  if (display) return display;
+  return String(cell.v ?? "").trim();
+}
+
+function cellHyperlinkTarget(cell: XlsxCellLike | undefined) {
+  return String(cell?.l?.Target ?? "").trim();
+}
+
+function resolveCellValue(cell: XlsxCellLike | undefined) {
+  const display = cellDisplayValue(cell);
+  const hyperlink = cellHyperlinkTarget(cell);
+  if (!hyperlink) return display;
+  if (!display || display === hyperlink) return hyperlink;
+  return `${display} | ${hyperlink}`;
+}
+
+function worksheetToRowsWithHyperlinks(
+  worksheet: Record<string, XlsxCellLike | string | undefined>,
+  utils: typeof import("xlsx").utils,
+): Record<string, unknown>[] {
+  const rangeRef = worksheet["!ref"];
+  if (typeof rangeRef !== "string") return [];
+
+  const range = utils.decode_range(rangeRef);
+  const headers: string[] = [];
+  for (let column = range.s.c; column <= range.e.c; column += 1) {
+    const address = utils.encode_cell({ r: range.s.r, c: column });
+    const cell = worksheet[address] as XlsxCellLike | undefined;
+    headers.push(normalizeHeaderValue(cellDisplayValue(cell), `__empty_${column + 1}`));
+  }
+
+  const rows: Record<string, unknown>[] = [];
+  for (let rowIndex = range.s.r + 1; rowIndex <= range.e.r; rowIndex += 1) {
+    const row: Record<string, unknown> = {};
+    let hasValue = false;
+
+    for (let column = range.s.c; column <= range.e.c; column += 1) {
+      const header = headers[column - range.s.c];
+      if (!header) continue;
+
+      const address = utils.encode_cell({ r: rowIndex, c: column });
+      const cell = worksheet[address] as XlsxCellLike | undefined;
+      const value = resolveCellValue(cell);
+      row[header] = value;
+      if (value !== "") hasValue = true;
+    }
+
+    if (hasValue) rows.push(row);
+  }
+
+  return rows;
+}
+
 export function parseCsvText(text: string): ParsedTable {
   const res = Papa.parse<Record<string, unknown>>(text, {
     header: true,
@@ -72,11 +139,10 @@ export async function parseXlsxArrayBuffer(buffer: ArrayBuffer): Promise<ParsedT
     const worksheet = workbook.Sheets[name];
     if (!worksheet?.["!ref"]) continue;
 
-    const rows = utils.sheet_to_json<Record<string, unknown>>(worksheet, {
-      defval: "",
-      raw: false,
-      blankrows: false,
-    });
+    const rows = worksheetToRowsWithHyperlinks(
+      worksheet as Record<string, XlsxCellLike | string | undefined>,
+      utils,
+    );
 
     if (rows.length === 0) continue;
 

@@ -1,10 +1,6 @@
 import { nanoid } from "nanoid";
 import type { Asset, Entity } from "@/models";
-import {
-  cleanImageReferenceValue,
-  looksLikeDirectImageReference,
-  looksLikeDriveReference,
-} from "@/features/data/imageReferences";
+import { cleanImageReferenceValue, getEntityImageReferences } from "@/features/data/imageReferences";
 import { FIELD_ALIASES, FIELD_LABELS_VI, METADATA_FIELDS, normalizeKey, parseBool, parseList, parseNumber } from "./aliases";
 
 export interface RawRow {
@@ -66,12 +62,7 @@ export function normalizeRows(rows: RawRow[], mapping: FieldMapping, sheetName?:
     const imageRaw = cleanImageReferenceValue(std.image);
     const imagesRaw = parseList(std.images).map(cleanImageReferenceValue).filter(Boolean);
     const allImageRefs = [imageRaw, ...imagesRaw].filter(Boolean);
-    const downloadableImageRefs = allImageRefs.filter(
-      (url) => looksLikeDriveReference(url) || !looksLikeDirectImageReference(url),
-    );
-    const directImageUrls = allImageRefs.filter(
-      (url) => !looksLikeDriveReference(url) && looksLikeDirectImageReference(url),
-    );
+    const downloadableImageRefs = allImageRefs;
 
     // Gom các trường tuỳ ý (day, description, signatureDish, hoặc bất kỳ key chưa nhận diện) vào metadata
     const metadata: Record<string, string | number> = {};
@@ -117,20 +108,7 @@ export function normalizeRows(rows: RawRow[], mapping: FieldMapping, sheetName?:
     entities.push(entity);
 
     // Xử lý ảnh
-    directImageUrls.forEach((url, i) => {
-      assets.push({
-        assetId: nanoid(),
-        entityId,
-        sourceType: url.startsWith("http") ? "url" : "local",
-        sourceValue: url,
-        role: i === 0 ? "cover" : "generic",
-        isCover: i === 0,
-        qualityScore: 70,
-        status: "ok",
-      });
-    });
-
-    if (allImageRefs.length === 0) {
+    if (getEntityImageReferences(entity).length === 0) {
       warnings.push(`Dòng ${idx + 1} (${name}): không có ảnh`);
     }
   });

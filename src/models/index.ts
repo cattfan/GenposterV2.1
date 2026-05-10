@@ -661,6 +661,19 @@ export interface AiProviderConfig {
   visionModel?: string; // optional override cho ảnh; nếu trống dùng model
 }
 
+export interface DriveDownloadCheckpoint {
+  updatedAt: number;
+  status: "running" | "done" | "error";
+  totalEntities: number;
+  completedEntities: number;
+  importedAssets: number;
+  skippedFiles: number;
+  downloadedBytes: number;
+  failedEntities: number;
+  entityLimit: number;
+  imageLimit: "all" | number;
+}
+
 export interface AppSettings {
   language: "vi";
   captionProvider: "local" | "openai";
@@ -670,6 +683,7 @@ export interface AppSettings {
   theme?: "light" | "dark";
   ai?: AiProviderConfig;
   driveRootFolderUrl?: string;
+  driveDownloadCheckpoint?: DriveDownloadCheckpoint;
 }
 
 export type AnalysisMode = "quick" | "deep_draft" | "draft_only";

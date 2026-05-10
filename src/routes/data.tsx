@@ -7,7 +7,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Database,
-  FileSpreadsheet,
   ImagePlus,
   Image as ImageIcon,
   Link as LinkIcon,
@@ -55,6 +54,7 @@ import {
   getAssetEntityIds,
   getEntityImageReferences,
   getEntityImageReferencesWithAssets,
+  getImageReferenceEntityIds,
   isUsableImageAsset,
   looksLikeDirectImageReference,
   looksLikeDriveReference,
@@ -136,15 +136,6 @@ interface DriveLinkCandidate {
 interface DriveLinkIssue extends DriveLinkCandidate {
   type: DriveLinkIssueType;
   error: string;
-}
-
-type DataGuideStatus = "done" | "active" | "idle" | "warn";
-
-interface DataGuideStep {
-  step: number;
-  title: string;
-  description: string;
-  status: DataGuideStatus;
 }
 
 interface ImportReviewRename {
@@ -781,6 +772,32 @@ function mappingRowClass(level?: MappingCheckLevel) {
   return "";
 }
 
+function summarizeNormalizeWarnings(warnings: string[]) {
+  const missingNameRows = warnings
+    .map((warning) => warning.match(/Dòng\s+(\d+):\s*thiếu tên/i)?.[1])
+    .filter((row): row is string => Boolean(row));
+  const missingImageRows = warnings
+    .map((warning) => warning.match(/Dòng\s+(\d+)\s+\((.+?)\):\s*không có ảnh/i))
+    .filter((match): match is RegExpMatchArray => Boolean(match))
+    .slice(0, 3)
+    .map((match) => `${match[1]} (${match[2]})`);
+
+  const messages: string[] = [];
+  if (missingNameRows.length) {
+    const shownRows = missingNameRows.slice(0, 5).join(", ");
+    const moreCount = missingNameRows.length - 5;
+    messages.push(
+      `Không nhập ${missingNameRows.length} dòng vì thiếu cột Tên: dòng ${shownRows}${
+        moreCount > 0 ? ` và ${moreCount} dòng khác` : ""
+      }.`,
+    );
+  }
+  if (missingImageRows.length) {
+    messages.push(`Thiếu link/tên folder ảnh ở dòng ${missingImageRows.join(", ")}.`);
+  }
+  return messages;
+}
+
 function DataStat({
   label,
   value,
@@ -800,48 +817,6 @@ function DataStat({
           <div className="text-2xl font-semibold leading-none">{value}</div>
           <div className="mt-1 text-sm text-muted-foreground">{label}</div>
         </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function DataGuide({ steps }: { steps: DataGuideStep[] }) {
-  return (
-    <Card className="shadow-sm">
-      <CardContent className="grid gap-2 p-3 md:grid-cols-4">
-        {steps.map((item) => (
-          <div
-            key={item.step}
-            className={cn(
-              "rounded-lg border p-3 text-sm",
-              item.status === "active" && "border-primary/50 bg-primary/5",
-              item.status === "done" && "border-emerald-200 bg-emerald-50/70",
-              item.status === "warn" && "border-amber-200 bg-amber-50/70",
-              item.status === "idle" && "bg-muted/20",
-            )}
-          >
-            <div className="flex items-center gap-2">
-              <span
-                className={cn(
-                  "grid size-6 shrink-0 place-items-center rounded-full text-xs font-semibold",
-                  item.status === "done"
-                    ? "bg-emerald-600 text-white"
-                    : item.status === "active"
-                      ? "bg-primary text-primary-foreground"
-                      : item.status === "warn"
-                        ? "bg-amber-500 text-white"
-                        : "bg-muted text-muted-foreground",
-                )}
-              >
-                {item.status === "done" ? <CheckCircle2 className="size-3.5" /> : item.step}
-              </span>
-              <div className="font-medium">{item.title}</div>
-            </div>
-            <div className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              {item.description}
-            </div>
-          </div>
-        ))}
       </CardContent>
     </Card>
   );
@@ -911,7 +886,7 @@ function looksLikeDirectImageSrc(src: string | undefined | null) {
 
 function isImageFile(file: File) {
   if (file.type.startsWith("image/")) return true;
-  return /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(file.name);
+  return /\.(png|jpe?g|jfif|webp|gif|bmp|avif)$/i.test(file.name);
 }
 
 function getDirectAssetImageSrc(sourceValue: string | undefined, sourceType: Asset["sourceType"]) {
@@ -949,14 +924,6 @@ async function removeAssetAndUnusedBlob(asset: Asset) {
       if (!stillUsed) await db.blobs.delete(blobKey);
     }
 
-    if (asset.isCover) {
-      const remainingForEntity = remainingAssets.filter((item) => item.entityId === asset.entityId);
-      const hasCover = remainingForEntity.some((item) => item.isCover);
-      const nextCover = remainingForEntity[0];
-      if (!hasCover && nextCover) {
-        await db.assets.update(nextCover.assetId, { isCover: true, role: "cover" });
-      }
-    }
   });
 }
 
@@ -1044,14 +1011,6 @@ function AssetCard({
         >
           <Trash2 className="size-3.5" />
         </Button>
-        {asset.isCover ? (
-          <Badge
-            variant="secondary"
-            className="absolute bottom-2 left-2 z-10 rounded-md px-1.5 py-0 text-[11px]"
-          >
-            cover
-          </Badge>
-        ) : null}
         {src && !failed ? (
           <img
             src={src}
@@ -1123,11 +1082,22 @@ function DataPage() {
       (a.entity?.name ?? "Không rõ quán").localeCompare(b.entity?.name ?? "Không rõ quán", "vi"),
     );
   }, [assets, entityMap]);
-  const sheetCount = useMemo(
-    () => new Set(entities.map((entity) => entity.sheetName).filter(Boolean)).size,
-    [entities],
-  );
   const assetEntityIds = useMemo(() => getAssetEntityIds(assets), [assets]);
+  const imageReferenceEntityIds = useMemo(
+    () => getImageReferenceEntityIds(entities, assets),
+    [assets, entities],
+  );
+  const entitiesWithoutRenderableImage = useMemo(
+    () => entities.filter((entity) => !entityHasUsableImageAsset(entity, assetEntityIds)),
+    [assetEntityIds, entities],
+  );
+  const entitiesWithReferenceOnly = useMemo(
+    () =>
+      entitiesWithoutRenderableImage.filter((entity) =>
+        imageReferenceEntityIds.has(entity.entityId),
+      ),
+    [entitiesWithoutRenderableImage, imageReferenceEntityIds],
+  );
   const assetsByEntityId = useMemo(() => {
     const map = new Map<string, Asset[]>();
     for (const asset of assets) {
@@ -1137,13 +1107,9 @@ function DataPage() {
     }
     return map;
   }, [assets]);
-  const missingImageCount = useMemo(
-    () => entities.filter((entity) => !entityHasUsableImageAsset(entity, assetEntityIds)).length,
-    [assetEntityIds, entities],
-  );
   const imageReferenceEntityCount = useMemo(
-    () => entities.filter((entity) => getEntityImageReferences(entity).length > 0).length,
-    [entities],
+    () => imageReferenceEntityIds.size,
+    [imageReferenceEntityIds],
   );
   const driveDownloadCandidateCount = useMemo(
     () =>
@@ -1225,6 +1191,7 @@ function DataPage() {
         rows: source.rows.length,
         importedEntities: normalized.entities.length,
         skippedRows: normalized.warnings.filter((warning) => /thiếu tên/i.test(warning)).length,
+        warningMessages: summarizeNormalizeWarnings(normalized.warnings),
         imageReferenceRows,
         localFolderRows,
         driveRows,
@@ -1293,66 +1260,6 @@ function DataPage() {
       mappingChecks.length > 1 ? `${check.sheetName}: ${issue}` : issue,
     ),
   );
-  const dataGuideSteps = useMemo<DataGuideStep[]>(
-    () => [
-      {
-        step: 1,
-        title: "Dán link hoặc chọn file",
-        description: parsed ? "Đã đọc dữ liệu mẫu." : "Dán Google Sheet hoặc chọn Excel/CSV từ máy.",
-        status: parsed ? "done" : "active",
-      },
-      {
-        step: 2,
-        title: "Kiểm tra dữ liệu",
-        description: parsed
-          ? blockingMappingIssues.length
-            ? "Cần sửa cột tên trước khi nhập."
-            : "Cột chính đã sẵn sàng để nhập."
-          : "App sẽ tự nhận diện cột tên, địa chỉ, ảnh.",
-        status: !parsed ? "idle" : blockingMappingIssues.length ? "warn" : "active",
-      },
-      {
-        step: 3,
-        title: "Ghép ảnh",
-        description:
-          driveDownloadCandidateCount > 0
-            ? "Có tên folder/link ảnh, có thể chọn ảnh từ máy hoặc tải Drive."
-            : missingImageCount > 0
-              ? "Sau khi nhập, chọn thư mục ảnh từ máy để ghép."
-              : "Ảnh đã đủ cho dữ liệu hiện tại.",
-        status:
-          missingImageCount === 0 && entities.length > 0
-            ? "done"
-            : driveDownloadCandidateCount > 0 || activeTab === "images"
-              ? "active"
-              : "idle",
-      },
-      {
-        step: 4,
-        title: "Tạo bộ ảnh",
-        description:
-          entities.length === 0
-            ? "Nhập dữ liệu trước khi tạo bộ ảnh."
-            : missingImageCount > 0
-              ? "Vẫn còn quán thiếu ảnh, generate sẽ báo rõ."
-              : "Dữ liệu và ảnh đã sẵn sàng.",
-        status:
-          entities.length > 0 && missingImageCount === 0
-            ? "done"
-            : entities.length > 0
-              ? "warn"
-              : "idle",
-      },
-    ],
-    [
-      activeTab,
-      blockingMappingIssues.length,
-      driveDownloadCandidateCount,
-      entities.length,
-      missingImageCount,
-      parsed,
-    ],
-  );
 
   useEffect(() => {
     setActiveTab(requestedTab);
@@ -1398,22 +1305,18 @@ function DataPage() {
 
     setAssetActionBusy(true);
     try {
-      const existing = await db.assets.where("entityId").equals(entityId).toArray();
-      let hasCover = existing.some((asset) => asset.isCover || asset.role === "cover");
       const newAssets: Asset[] = [];
 
       for (const file of files) {
         const blobKey = await saveBlob(file);
-        const isCover = !hasCover;
-        if (isCover) hasCover = true;
         newAssets.push({
           assetId: nanoid(),
           entityId,
           sourceType: "local",
           sourceValue: makeIdbSrc(blobKey),
           blobKey,
-          role: isCover ? "cover" : "generic",
-          isCover,
+          role: "generic",
+          isCover: false,
           qualityScore: 80,
           status: "ok",
         });
@@ -1684,9 +1587,7 @@ function DataPage() {
     });
   };
 
-  const toggleCurrentSheetIncluded = () => {
-    if (!parsed?.sourceSheetName) return;
-    const sheet = parsed.sourceSheetName;
+  const toggleSheetIncluded = (sheet: string) => {
     setIncludedSheets((prev) => ({
       ...prev,
       [sheet]: !(prev[sheet] ?? true),
@@ -1765,10 +1666,8 @@ function DataPage() {
               ...asset,
               entityId,
               sourceValue: cleanSource || asset.sourceValue,
-              isCover:
-                asset.isCover &&
-                !existingAssets.some((item) => item.isCover || item.role === "cover") &&
-                !assetsToPut.some((item) => item.entityId === entityId && item.isCover),
+              role: asset.role === "cover" ? "generic" : asset.role,
+              isCover: false,
             });
           }
         }
@@ -1790,7 +1689,7 @@ function DataPage() {
       totalAssets > 0
         ? ` Đã nhận ${totalAssets} ảnh URL trực tiếp. Ảnh đã ghép từ máy vẫn được giữ.`
         : totalImageReferenceEntities > 0
-          ? ` Có ${totalImageReferenceEntities} quán có tên folder/link ảnh; có thể chọn ảnh từ máy hoặc tải Drive nếu có thư mục Drive gốc.`
+          ? ` Có ${totalImageReferenceEntities} quán có tên folder/link ảnh; có thể tải ảnh từ link trong sheet về data/images.`
           : "";
     setLastActiveSheet(parsed.sourceSheetName ?? plans[0]?.finalSheet);
 
@@ -1817,7 +1716,7 @@ function DataPage() {
     if (totalImageReferenceEntities > 0) {
       setActiveTab("images");
       toast.info(
-        "Đã chuyển sang Ghép ảnh. Hãy chọn thư mục ảnh từ máy, hoặc tải Drive nếu có thư mục Drive public.",
+        "Đã chuyển sang Tải ảnh. Hãy tải ảnh từ link trong sheet, hoặc chọn thư mục ảnh từ máy nếu cần dự phòng.",
         {
           duration: 7000,
         },
@@ -1834,16 +1733,14 @@ function DataPage() {
       <PageHeader
         icon={<Database />}
         title="Dữ liệu"
-        description="Nhập dữ liệu từ Google Sheet hoặc file máy, ghép ảnh, rồi dùng để tạo bộ ảnh."
       />
 
       <div className="mb-4 flex flex-col gap-4">
-        <DataGuide steps={dataGuideSteps} />
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <DataStat label="Dòng dữ liệu" value={entities.length} icon={<Store />} />
-        <DataStat label="Có tên folder/link ảnh" value={imageReferenceEntityCount} icon={<LinkIcon />} />
-        <DataStat label="Ảnh đọc được" value={assets.filter(isUsableImageAsset).length} icon={<ImageIcon />} />
-        <DataStat label="Nguồn dữ liệu" value={sheetCount || 0} icon={<FileSpreadsheet />} />
+          <DataStat label="Dòng dữ liệu" value={entities.length} icon={<Store />} />
+          <DataStat label="Có tên folder/link ảnh" value={imageReferenceEntityCount} icon={<LinkIcon />} />
+          <DataStat label="Chờ ghép/tải ảnh" value={entitiesWithReferenceOnly.length} icon={<ImagePlus />} />
+          <DataStat label="Ảnh đọc được" value={assets.filter(isUsableImageAsset).length} icon={<ImageIcon />} />
         </div>
       </div>
 
@@ -1854,7 +1751,7 @@ function DataPage() {
       >
         <TabsList className="w-fit">
           <TabsTrigger value="import">Nhập dữ liệu</TabsTrigger>
-          <TabsTrigger value="images">Ghép ảnh ({driveDownloadCandidateCount})</TabsTrigger>
+          <TabsTrigger value="images">Tải ảnh ({driveDownloadCandidateCount})</TabsTrigger>
           <TabsTrigger value="entities">Dữ liệu ({entities.length})</TabsTrigger>
           <TabsTrigger value="assets">Ảnh ({assets.filter(isUsableImageAsset).length})</TabsTrigger>
         </TabsList>
@@ -1867,19 +1764,6 @@ function DataPage() {
                 <CardDescription>Dán link Google Sheet hoặc chọn file Excel/CSV từ máy.</CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-4">
-                <div className="flex flex-col gap-2">
-                  <Label>Tên nguồn dữ liệu</Label>
-                  <Input
-                    value={isMultiSheetWorkbook ? "Mỗi tab là một nguồn riêng" : sheetName}
-                    onChange={(event) => setSheetName(event.target.value)}
-                    placeholder="Quan_an"
-                    disabled={isMultiSheetWorkbook}
-                  />
-                  <div className="text-xs text-muted-foreground">
-                    Nếu file có nhiều tab, app tự tách mỗi tab thành một nguồn dữ liệu riêng.
-                  </div>
-                </div>
-
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="relative inline-flex">
                     <Button type="button" disabled={busy}>
@@ -1898,7 +1782,6 @@ function DataPage() {
                       }}
                     />
                   </div>
-                  <Badge variant="secondary">CSV / JSON / XLSX</Badge>
                 </div>
 
                 <div className="flex flex-col gap-2">
@@ -1912,9 +1795,6 @@ function DataPage() {
                     <Button onClick={onSheet} disabled={!sheetUrl || busy} variant="outline">
                       <LinkIcon /> Đọc dữ liệu
                     </Button>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    Sheet cần mở quyền xem bằng link. App sẽ đọc tất cả tab trong file.
                   </div>
                 </div>
               </CardContent>
@@ -1933,27 +1813,55 @@ function DataPage() {
                 {parsed ? (
                   <>
                     {isMultiSheetWorkbook && (
-                      <div className="flex flex-wrap gap-2">
-                        {workbookSheets.map((sheet) => {
-                          const active = sheet.name === parsed.sourceSheetName;
-                          const included = includedSheets[sheet.name] ?? true;
-                          const check = mappingChecks.find((item) => item.sheetName === sheet.name);
-          return (
-            <Button
-              key={sheet.name}
-                              type="button"
-                              size="sm"
-                              variant={active ? "default" : included ? "outline" : "secondary"}
-                              className={!included ? "opacity-70" : undefined}
-                              onClick={() =>
-                                activateWorkbookSheet(workbookSheets, mappingsBySheet, sheet.name)
-                              }
-            >
-              {sheet.name} ({sheet.rows.length})
-              {!included ? " - bỏ qua" : check?.level === "error" ? " - cần sửa cột" : ""}
-            </Button>
-          );
-                        })}
+                      <div className="space-y-2">
+                        <div className="text-xs text-muted-foreground">
+                          Bật/tắt từng tab cần nhập. Tab nào chưa nhận diện được cột tên sẽ báo cần
+                          sửa cột trước khi nhập.
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                          {workbookSheets.map((sheet) => {
+                            const active = sheet.name === parsed.sourceSheetName;
+                            const included = includedSheets[sheet.name] ?? true;
+                            const check = mappingChecks.find((item) => item.sheetName === sheet.name);
+
+                            return (
+                              <div
+                                key={sheet.name}
+                                className={cn(
+                                  "rounded-lg border bg-muted/20 p-2",
+                                  active && "border-primary bg-primary/5",
+                                  !included && "opacity-75",
+                                )}
+                              >
+                                <div className="flex items-start gap-2">
+                                  <button
+                                    type="button"
+                                    className="min-w-0 flex-1 text-left"
+                                    onClick={() =>
+                                      activateWorkbookSheet(workbookSheets, mappingsBySheet, sheet.name)
+                                    }
+                                  >
+                                    <div className="truncate text-sm font-medium">{sheet.name}</div>
+                                    <div className="text-xs text-muted-foreground">
+                                      {sheet.rows.length} dòng
+                                      {check?.level === "error" ? " · cần sửa cột" : ""}
+                                    </div>
+                                  </button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant={included ? "default" : "outline"}
+                                    className="size-8 shrink-0 p-0 text-lg leading-none"
+                                    aria-label={included ? `Bỏ qua ${sheet.name}` : `Nhập ${sheet.name}`}
+                                    onClick={() => toggleSheetIncluded(sheet.name)}
+                                  >
+                                    {included ? "-" : "+"}
+                                  </Button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
                     )}
 
@@ -1966,14 +1874,6 @@ function DataPage() {
                             <Badge variant={activeSheetIncluded ? "secondary" : "outline"}>
                               {activeSheetIncluded ? "Sẽ nhập" : "Đang bỏ qua"}
                             </Badge>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              onClick={toggleCurrentSheetIncluded}
-                            >
-                              {activeSheetIncluded ? "Bỏ qua nguồn này" : "Nhập nguồn này"}
-                            </Button>
                           </>
                         )}
                       </div>
@@ -2028,7 +1928,8 @@ function DataPage() {
                             <div className="min-w-0">
                               <div className="truncate font-medium">{summary.sheetName}</div>
                               <div className="text-xs text-muted-foreground">
-                                {summary.rows} dòng gốc, {summary.importedEntities} dòng sẽ nhập
+                                {summary.rows} dòng gốc,{" "}
+                                {summary.included ? `${summary.importedEntities} dòng sẽ nhập` : "đang bỏ qua"}
                               </div>
                             </div>
                             <Badge variant={summary.included ? "secondary" : "outline"}>
@@ -2049,9 +1950,11 @@ function DataPage() {
                               <div className="text-muted-foreground">Có URL ảnh</div>
                             </div>
                           </div>
-                          {summary.skippedRows > 0 ? (
-                            <div className="mt-2 text-xs text-amber-700">
-                              {summary.skippedRows} dòng thiếu tên nên sẽ bị bỏ qua.
+                          {summary.warningMessages.length > 0 ? (
+                            <div className="mt-2 space-y-1 text-xs text-amber-700">
+                              {summary.warningMessages.map((message) => (
+                                <div key={message}>{message}</div>
+                              ))}
                             </div>
                           ) : null}
                         </div>

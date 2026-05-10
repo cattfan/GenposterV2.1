@@ -77,6 +77,8 @@ import { generatePackJob } from "@/engines/selection/generate";
 import { allocateEntityBindingsForTemplate } from "@/engines/selection/entityBindAllocator";
 import { buildEntityBindingTargets, expandPageWithCardGroups } from "@/engines/binding/cardRepeater";
 import { filterRenderableAssets } from "@/engines/binding/assetImage";
+import { isDataGroupMarkerSlot } from "@/engines/binding/slotMarkers";
+import { getImageReferenceEntityIds } from "@/features/data/imageReferences";
 import { usePackBindOverrides } from "@/features/generate/usePackBindOverrides";
 import {
   nodeToPngBlob,
@@ -110,13 +112,13 @@ type Filter = "all" | "selected" | "errors" | "partner";
 type SurfaceSelectionRect = { left: number; top: number; width: number; height: number };
 type FormatSlotMode = "text" | "image";
 type PreviewPageDrafts = Record<string, PageTemplate>;
-type FormatBounds = { left: number; top: number; right: number; bottom: number };
 
 interface BundleImageIssue {
   entityId: string;
   entityName: string;
   pageNames: string[];
   partnerFlag: boolean;
+  hasImageReference: boolean;
 }
 
 interface SlotFormatSnapshot {
@@ -124,20 +126,10 @@ interface SlotFormatSnapshot {
   sourceLabel: string;
   bindMode: FormatSlotMode;
   bindingKey: string;
-  sourceX: number;
-  sourceY: number;
-  sourceWidth: number;
-  sourceHeight: number;
-  sourceZIndex?: number;
-  rotation?: number;
-  style?: Slot["style"];
-  crop?: Slot["crop"];
   bindingPath?: string;
   fieldParts?: Slot["fieldParts"];
   allowedAssetRoles?: Slot["allowedAssetRoles"];
   dataGroupKey?: string;
-  visibilityRule?: Slot["visibilityRule"];
-  overflowRule?: Slot["overflowRule"];
 }
 
 interface SlotFormatClipboard {
@@ -147,7 +139,6 @@ interface SlotFormatClipboard {
 
 interface SlotFormatAssignment {
   snapshot: SlotFormatSnapshot;
-  layoutBounds?: FormatBounds;
   dataGroupId?: string;
 }
 
@@ -155,12 +146,6 @@ interface GenerateReadiness {
   canGenerate: boolean;
   reason: string;
 }
-
-const cloneSlotStyle = (style: Slot["style"] | undefined): Slot["style"] | undefined =>
-  style ? { ...style } : undefined;
-
-const cloneSlotCrop = (crop: Slot["crop"] | undefined): Slot["crop"] | undefined =>
-  crop ? { ...crop } : undefined;
 
 const cloneJsonValue = <T,>(value: T | undefined): T | undefined =>
   value == null ? undefined : (JSON.parse(JSON.stringify(value)) as T);
@@ -180,24 +165,6 @@ function sortSlotsForFormat(slots: Slot[]) {
   return slots
     .slice()
     .sort((a, b) => a.y - b.y || a.x - b.x || a.slotId.localeCompare(b.slotId));
-}
-
-function buildSlotBounds(slots: Slot[]): FormatBounds | null {
-  if (slots.length === 0) return null;
-  const left = Math.min(...slots.map((slot) => slot.x));
-  const top = Math.min(...slots.map((slot) => slot.y));
-  const right = Math.max(...slots.map((slot) => slot.x + slot.width));
-  const bottom = Math.max(...slots.map((slot) => slot.y + slot.height));
-  return { left, top, right, bottom };
-}
-
-function buildSnapshotBounds(snapshots: SlotFormatSnapshot[]): FormatBounds | null {
-  if (snapshots.length === 0) return null;
-  const left = Math.min(...snapshots.map((slot) => slot.sourceX));
-  const top = Math.min(...snapshots.map((slot) => slot.sourceY));
-  const right = Math.max(...snapshots.map((slot) => slot.sourceX + slot.sourceWidth));
-  const bottom = Math.max(...snapshots.map((slot) => slot.sourceY + slot.sourceHeight));
-  return { left, top, right, bottom };
 }
 
 function stringifyFormatValue(value: unknown) {
@@ -294,7 +261,7 @@ function slotNeedsEntityImage(slot: Slot): boolean {
   const bindingPath = slot.bindingPath ?? "";
   return (
     bindingPath === "asset.random" ||
-    bindingPath === "asset.cover" ||
+    bindingPath === "asset.random_global" ||
     bindingPath.startsWith("asset.byRole:")
   );
 }
@@ -306,8 +273,9 @@ function textBindingOptionLabel(value: string, label: string): string {
 
 function imageBindingOptionLabel(value: string): string {
   if (value === "_static") return "Giữ ảnh hiện tại";
-  if (value === "asset.cover") return "Ảnh cover của quán";
+  if (value === "asset.cover") return "Ảnh ngẫu nhiên của quán";
   if (value === "asset.random") return "Ảnh ngẫu nhiên của quán";
+  if (value === "asset.random_global") return "Ảnh ngẫu nhiên toàn hệ thống";
   if (value === ASSET_RANDOM_SCOPE_BINDING_VALUE) return "Ảnh ngẫu nhiên theo nguồn/thư mục";
   return value;
 }
@@ -878,14 +846,60 @@ export function PackTabContent({
     activeTargetCount,
   ]);
   const getSlotBindMode = (slot: Slot): "text" | "image" | null => {
+    if (isDataGroupMarkerSlot(slot)) return null;
     if (slot.kind === "text") return "text";
     if (slot.kind === "image") return "image";
     if (slot.kind === "shape") return slot.staticText?.trim() ? "text" : "image";
     return null;
   };
-  const selectedTextSlots = selectedSlots.filter((slot) => getSlotBindMode(slot) === "text");
-  const selectedImageSlots = selectedSlots.filter((slot) => getSlotBindMode(slot) === "image");
-  const selectedBindableSlots = selectedSlots.filter((slot) => getSlotBindMode(slot) !== null);
+  const selectedBindableSlots = useMemo(() => {
+    if (!effectiveActive) return [];
+
+    const addBindable = (slot: Slot | undefined, target: Map<string, Slot>) => {
+      if (slot && getSlotBindMode(slot) !== null) target.set(slot.slotId, slot);
+    };
+    const slotCenterInside = (container: Slot, item: Slot) => {
+      const centerX = item.x + item.width / 2;
+      const centerY = item.y + item.height / 2;
+      return (
+        centerX >= container.x &&
+        centerX <= container.x + container.width &&
+        centerY >= container.y &&
+        centerY <= container.y + container.height
+      );
+    };
+    const resolved = new Map<string, Slot>();
+
+    for (const slot of selectedSlots) {
+      if (getSlotBindMode(slot) !== null) {
+        addBindable(slot, resolved);
+        continue;
+      }
+
+      for (const item of effectiveActive.slots) {
+        if (item.slotId === slot.slotId) continue;
+        const sameDataGroup = slot.dataGroupId && item.dataGroupId === slot.dataGroupId;
+        const sameGroup =
+          (slot.kind === "group" && item.groupId === slot.slotId) ||
+          (slot.groupId && item.groupId === slot.groupId);
+        const sameSection =
+          (slot.kind === "section" && !!slot.sectionRefId && item.sectionRefId === slot.sectionRefId) ||
+          (slot.sectionRefId && item.sectionRefId === slot.sectionRefId);
+        const insideSelectedContainer =
+          (slot.kind === "section" || slot.kind === "group") &&
+          getSlotBindMode(item) !== null &&
+          !isDataGroupMarkerSlot(item) &&
+          slotCenterInside(slot, item);
+        if (sameDataGroup || sameGroup || sameSection || insideSelectedContainer) {
+          addBindable(item, resolved);
+        }
+      }
+    }
+
+    return Array.from(resolved.values());
+  }, [effectiveActive, selectedSlots]);
+  const selectedTextSlots = selectedBindableSlots.filter((slot) => getSlotBindMode(slot) === "text");
+  const selectedImageSlots = selectedBindableSlots.filter((slot) => getSlotBindMode(slot) === "image");
   const selectedDataGroupIds = Array.from(
     new Set(
       selectedBindableSlots
@@ -934,7 +948,9 @@ export function PackTabContent({
   const imageSlotBindingValue = (slot: Slot) =>
     isAssetRandomScopeBindingPath(slot.bindingPath)
       ? ASSET_RANDOM_SCOPE_BINDING_VALUE
-      : (slot.bindingPath ?? "_static");
+      : slot.bindingPath === "asset.cover"
+        ? "asset.random"
+        : (slot.bindingPath ?? "_static");
   const normalizeSlotLabel = (label: string | undefined, fallback: string) => {
     const value = label?.trim();
     if (!value) return fallback;
@@ -1174,7 +1190,7 @@ export function PackTabContent({
   const copySelectedSlotFormat = () => {
     const sourceSlots = sortSlotsForFormat(selectedBindableSlots);
     if (sourceSlots.length === 0) {
-      toast.error("Chọn ít nhất 1 khối để sao chép kiểu & liên kết");
+      toast.error("Chọn ít nhất 1 khối để sao chép liên kết dữ liệu");
       return;
     }
 
@@ -1197,32 +1213,22 @@ export function PackTabContent({
           sourceLabel: slotFormatLabel(slot, index),
           bindMode: mode,
           bindingKey: slotFormatBindingKey(slot),
-          sourceX: slot.x,
-          sourceY: slot.y,
-          sourceWidth: slot.width,
-          sourceHeight: slot.height,
-          sourceZIndex: slot.zIndex,
-          rotation: slot.rotation,
-          style: cloneSlotStyle(slot.style),
-          crop: cloneSlotCrop(slot.crop),
           bindingPath: slot.bindingPath,
           fieldParts: cloneJsonValue(slot.fieldParts),
           allowedAssetRoles: cloneJsonValue(slot.allowedAssetRoles),
           dataGroupKey,
-          visibilityRule: slot.visibilityRule,
-          overflowRule: slot.overflowRule,
         };
       })
       .filter((snapshot): snapshot is SlotFormatSnapshot => !!snapshot);
 
     if (snapshots.length === 0) {
-      toast.error("Khối đang chọn không có kiểu hoặc liên kết để sao chép");
+      toast.error("Khối đang chọn không có liên kết dữ liệu để sao chép");
       return;
     }
 
     const label = snapshots.length === 1 ? snapshots[0].sourceLabel : `${snapshots.length} khối`;
     setFormatClipboard({ label, snapshots });
-    toast.success(`Đã sao chép kiểu & liên kết của ${label}`);
+    toast.success(`Đã sao chép liên kết dữ liệu của ${label}`);
   };
   const buildFormatAssignments = (targets: Slot[]) => {
     if (!formatClipboard) return new Map<string, SlotFormatAssignment>();
@@ -1249,7 +1255,6 @@ export function PackTabContent({
       const chunkSize = formatClipboard.snapshots.length;
       for (let start = 0; start < sortedTargets.length; start += chunkSize) {
         const chunk = sortedTargets.slice(start, start + chunkSize);
-        const bounds = buildSlotBounds(chunk) ?? undefined;
         const chunkDataGroupIds = new Map<string, string>();
         const chunkMatches = chunk.every((target, index) => {
           const snapshot = formatClipboard.snapshots[index];
@@ -1271,7 +1276,6 @@ export function PackTabContent({
           }
           chunkedAssignments.set(target.slotId, {
             snapshot,
-            layoutBounds: bounds,
             dataGroupId,
           });
         });
@@ -1281,7 +1285,6 @@ export function PackTabContent({
 
     if (sortedTargets.length === formatClipboard.snapshots.length) {
       const orderedAssignments = new Map<string, SlotFormatAssignment>();
-      const bounds = buildSlotBounds(sortedTargets) ?? undefined;
       const dataGroupIds = new Map<string, string>();
       sortedTargets.forEach((target, index) => {
         const snapshot = formatClipboard.snapshots[index];
@@ -1294,7 +1297,7 @@ export function PackTabContent({
               dataGroupIds.set(snapshot.dataGroupKey, dataGroupId);
             }
           }
-          orderedAssignments.set(target.slotId, { snapshot, layoutBounds: bounds, dataGroupId });
+          orderedAssignments.set(target.slotId, { snapshot, dataGroupId });
         }
       });
       if (orderedAssignments.size === sortedTargets.length) return orderedAssignments;
@@ -1302,7 +1305,6 @@ export function PackTabContent({
 
     if (formatClipboard.snapshots.length > 1) {
       const partialOrderedAssignments = new Map<string, SlotFormatAssignment>();
-      const bounds = buildSlotBounds(sortedTargets) ?? undefined;
       const dataGroupIds = new Map<string, string>();
       sortedTargets.forEach((target, index) => {
         const snapshot = formatClipboard.snapshots[index];
@@ -1317,7 +1319,6 @@ export function PackTabContent({
         }
         partialOrderedAssignments.set(target.slotId, {
           snapshot,
-          layoutBounds: bounds,
           dataGroupId,
         });
       });
@@ -1384,25 +1385,21 @@ export function PackTabContent({
   const applyCopiedSlotFormat = (targets: Slot[], scopeLabel: string) => {
     if (!activePage || !effectiveActive) return;
     if (!formatClipboard) {
-      toast.error("Chưa sao chép kiểu & liên kết");
+      toast.error("Chưa sao chép liên kết dữ liệu");
       return;
     }
     if (targets.length === 0) {
-      toast.error("Chọn khối cần dán kiểu & liên kết");
+      toast.error("Chọn khối cần dán liên kết dữ liệu");
       return;
     }
 
     const assignments = buildFormatAssignments(targets);
     if (assignments.size === 0) {
-      toast.error("Không có khối cùng loại để dán kiểu & liên kết");
+      toast.error("Không có khối cùng loại để dán liên kết dữ liệu");
       return;
     }
 
-    const shouldApplyGroupLayout = formatClipboard.snapshots.length > 1 && assignments.size > 1;
     const shouldApplyDataGroups = formatClipboard.snapshots.some((snapshot) => snapshot.dataGroupKey);
-    const sourceBounds = shouldApplyGroupLayout
-      ? buildSnapshotBounds(formatClipboard.snapshots)
-      : null;
     let changed = false;
 
     commitPreviewPageDrafts((prev) => {
@@ -1412,52 +1409,24 @@ export function PackTabContent({
         if (!assignment) return slot;
         const { snapshot } = assignment;
 
-        const nextStyle = cloneSlotStyle(snapshot.style);
-        const nextCrop = cloneSlotCrop(snapshot.crop);
         const nextFieldParts = cloneJsonValue(snapshot.fieldParts);
         const nextAllowedAssetRoles = cloneJsonValue(snapshot.allowedAssetRoles);
         const shouldClearStaticImage = snapshot.bindMode === "image" && !!snapshot.bindingPath;
         const nextDataGroupId = shouldApplyDataGroups ? assignment.dataGroupId : slot.dataGroupId;
-        const layoutPatch =
-          sourceBounds && assignment.layoutBounds
-            ? {
-                x: assignment.layoutBounds.left + (snapshot.sourceX - sourceBounds.left),
-                y: assignment.layoutBounds.top + (snapshot.sourceY - sourceBounds.top),
-                width: snapshot.sourceWidth,
-                height: snapshot.sourceHeight,
-                zIndex: snapshot.sourceZIndex,
-              }
-            : {};
         const nextSlot = {
           ...slot,
-          ...layoutPatch,
-          rotation: snapshot.rotation,
-          style: nextStyle,
-          crop: nextCrop,
           bindingPath: snapshot.bindingPath,
           fieldParts: nextFieldParts,
           allowedAssetRoles: nextAllowedAssetRoles,
           dataGroupId: nextDataGroupId,
-          visibilityRule: snapshot.visibilityRule,
-          overflowRule: snapshot.overflowRule,
           staticImage: shouldClearStaticImage ? undefined : slot.staticImage,
         };
         if (
-          slot.x !== nextSlot.x ||
-          slot.y !== nextSlot.y ||
-          slot.width !== nextSlot.width ||
-          slot.height !== nextSlot.height ||
-          slot.zIndex !== nextSlot.zIndex ||
-          slot.rotation !== nextSlot.rotation ||
-          stringifyFormatValue(slot.style) !== stringifyFormatValue(nextSlot.style) ||
-          stringifyFormatValue(slot.crop) !== stringifyFormatValue(nextSlot.crop) ||
           slot.bindingPath !== nextSlot.bindingPath ||
           stringifyFormatValue(slot.fieldParts) !== stringifyFormatValue(nextSlot.fieldParts) ||
           stringifyFormatValue(slot.allowedAssetRoles) !==
             stringifyFormatValue(nextSlot.allowedAssetRoles) ||
           slot.dataGroupId !== nextSlot.dataGroupId ||
-          slot.visibilityRule !== nextSlot.visibilityRule ||
-          slot.overflowRule !== nextSlot.overflowRule ||
           slot.staticImage !== nextSlot.staticImage
         ) {
           changed = true;
@@ -1469,10 +1438,10 @@ export function PackTabContent({
       return { ...prev, [activePage.pageTemplateId]: current };
     });
     if (!changed) {
-      toast.info("Các khối đang chọn đã giống kiểu & liên kết đã sao chép");
+      toast.info("Các khối đang chọn đã có cùng liên kết dữ liệu đã sao chép");
       return;
     }
-    toast.success(`Đã dán kiểu & liên kết cho ${assignments.size} khối ${scopeLabel}`, {
+    toast.success(`Đã dán liên kết dữ liệu cho ${assignments.size} khối ${scopeLabel}`, {
       action: {
         label: "Hoàn tác",
         onClick: undoPreviewPageDrafts,
@@ -2052,6 +2021,7 @@ export function PackTabContent({
     for (const asset of renderableAssets) {
       assetCountByEntity.set(asset.entityId, (assetCountByEntity.get(asset.entityId) ?? 0) + 1);
     }
+    const imageReferenceEntityIds = getImageReferenceEntityIds(entities, assets);
 
     const entityById = new Map(entities.map((entity) => [entity.entityId, entity]));
     const issuesByBundle = new Map<number, BundleImageIssue[]>();
@@ -2096,6 +2066,7 @@ export function PackTabContent({
             entityName: entity.name,
             pageNames: [],
             partnerFlag: entity.partnerFlag,
+            hasImageReference: imageReferenceEntityIds.has(entityId),
           };
           if (!issue.pageNames.includes(pageName)) issue.pageNames.push(pageName);
           issues.set(entityId, issue);
@@ -2899,9 +2870,9 @@ export function PackTabContent({
                           size="sm"
                           className="h-8 justify-start px-2 text-[11px]"
                           onClick={copySelectedSlotFormat}
-                          title="Sao chép cả kiểu hiển thị và cách gắn dữ liệu của khối đang chọn"
+                          title="Chỉ sao chép trường dữ liệu và cách nhóm dữ liệu, không sao chép font hoặc định dạng"
                         >
-                          <Copy className="mr-1 size-3" /> Sao chép kiểu & liên kết
+                          <Copy className="mr-1 size-3" /> Sao chép liên kết dữ liệu
                         </Button>
                         <Button
                           type="button"
@@ -2912,11 +2883,11 @@ export function PackTabContent({
                           onClick={() => applyCopiedSlotFormat(selectedBindableSlots, "đang chọn")}
                           title={
                             formatClipboard
-                              ? "Dán kiểu và liên kết vào khối đang chọn"
-                              : "Chưa sao chép kiểu & liên kết"
+                              ? "Dán trường dữ liệu vào khối đang chọn, giữ nguyên định dạng hiện tại"
+                              : "Chưa sao chép liên kết dữ liệu"
                           }
                         >
-                          <Wand2 className="mr-1 size-3" /> Dán vào khối đang chọn
+                          <Wand2 className="mr-1 size-3" /> Dán dữ liệu vào khối đang chọn
                         </Button>
                         {selectedBindableSlots.length > 1 && (
                           <Button
@@ -2951,7 +2922,7 @@ export function PackTabContent({
                             applyCopiedSlotFormat(relatedFormatTargetSlots, "trong cụm")
                           }
                         >
-                            Dán vào cụm
+                            Dán dữ liệu vào cụm
                           </Button>
                         )}
                       </div>
@@ -3289,11 +3260,23 @@ export function PackTabContent({
                       if (imageIssues.length === 0) return null;
                       const visibleIssues = imageIssues.slice(0, 8);
                       const hiddenCount = imageIssues.length - visibleIssues.length;
+                      const referenceOnlyCount = imageIssues.filter(
+                        (issue) => issue.hasImageReference,
+                      ).length;
+                      const missingSourceCount = imageIssues.length - referenceOnlyCount;
                       return (
                         <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-950">
                           <div className="flex items-center gap-2 text-sm font-medium">
                             <AlertTriangle className="size-4 shrink-0" />
-                            Thiếu ảnh riêng trong {bundle.bundleLabel}
+                            Chưa có ảnh đọc được trong {bundle.bundleLabel}
+                          </div>
+                          <div className="mt-1 text-xs text-amber-800">
+                            {referenceOnlyCount > 0
+                              ? `${referenceOnlyCount} dòng đã có tên folder/link trong sheet nhưng chưa ghép/tải ảnh.`
+                              : ""}
+                            {missingSourceCount > 0
+                              ? ` ${missingSourceCount} dòng chưa có nguồn ảnh trong sheet.`
+                              : ""}
                           </div>
                           <div className="mt-2 flex flex-wrap gap-2 text-xs">
                             {visibleIssues.map((issue) => (
@@ -3308,6 +3291,11 @@ export function PackTabContent({
                                 {issue.partnerFlag && (
                                   <span className="rounded-full bg-amber-200 px-1.5 py-0.5 text-[10px] font-medium">
                                     Đối tác
+                                  </span>
+                                )}
+                                {issue.hasImageReference && (
+                                  <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
+                                    Có folder/link
                                   </span>
                                 )}
                                 <span className="text-amber-700">

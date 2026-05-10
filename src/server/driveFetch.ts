@@ -1,9 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getExistingDataImageFile, saveDataImageStream } from "./dataImageStorage";
 
 interface DriveFetchInput {
   reference: string;
   rootFolderUrl?: string;
   searchContext?: string;
+  entityName?: string;
   maxFiles?: number;
 }
 
@@ -15,7 +17,15 @@ interface DriveEntry {
 }
 
 type ResolvedDriveReference = { id: string; kind: "file" | "folder"; name?: string };
-type DriveFetchErrorCode = "invalid" | "private" | "not_found" | "not_image" | "too_large" | "unknown";
+type DriveFetchErrorCode =
+  | "invalid"
+  | "private"
+  | "not_found"
+  | "not_image"
+  | "too_large"
+  | "network"
+  | "throttle"
+  | "unknown";
 interface CachedFolderList {
   promise: Promise<DriveEntry[]>;
   expiresAt: number;
@@ -37,10 +47,12 @@ class DriveFetchError extends Error {
   }
 }
 
-const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|avif)$/i;
-const MAX_FILE_BYTES = 25 * 1024 * 1024;
+const IMAGE_EXT_RE = /\.(png|jpe?g|jfif|webp|gif|bmp|avif)$/i;
+const LARGE_FILE_BYTES = 25 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 20;
 const DRIVE_FILE_CONCURRENCY = 4;
+const STREAM_FILE_CONCURRENCY = 1;
+const MAX_STREAM_FILES_PER_REFERENCE = 1000;
 const MAX_FOLDER_SEARCH_DEPTH = 4;
 const MAX_NESTED_IMAGE_DEPTH = 2;
 const FOLDER_LIST_CACHE_TTL_MS = 2 * 60 * 1000;
@@ -81,6 +93,9 @@ function validateDriveInput(input: DriveFetchInput) {
   if (input.searchContext && input.searchContext.length > 300) {
     throw new DriveFetchError("Drive search context quá dài.", "invalid");
   }
+  if (input.entityName && input.entityName.length > 300) {
+    throw new DriveFetchError("Ten quan qua dai.", "invalid");
+  }
   return input;
 }
 
@@ -114,6 +129,34 @@ function decodeBufferSnippet(buffer: ArrayBuffer) {
   return new TextDecoder("utf-8", { fatal: false }).decode(buffer.slice(0, 4096));
 }
 
+function contentLengthFromResponse(res: Response) {
+  const value = Number(res.headers.get("content-length") ?? 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function classifyNetworkError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/quota|rate|too many|throttle|429/i.test(message)) {
+    return new DriveFetchError("Google Drive đang giới hạn tốc độ. Bấm Tải tiếp sau vài phút.", "throttle");
+  }
+  if (/fetch failed|network|socket|econn|etimedout|timeout|reset/i.test(message)) {
+    return new DriveFetchError("Lỗi mạng khi tải ảnh. Bấm Tải lại lỗi để thử lại.", "network");
+  }
+  return error instanceof DriveFetchError ? error : new DriveFetchError(message);
+}
+
 function classifyDriveHtml(html: string): DriveFetchError | null {
   const text = stripTags(html).toLowerCase();
   if (
@@ -125,6 +168,9 @@ function classifyDriveHtml(html: string): DriveFetchError | null {
   }
   if (/\b404\b|not found|file does not exist|folder does not exist|không tìm thấy|khong tim thay/.test(text)) {
     return new DriveFetchError("Không tìm thấy file/folder Drive.", "not_found");
+  }
+  if (/download quota exceeded|too many users|rate limit|quota exceeded|429|throttle/.test(text)) {
+    return new DriveFetchError("Google Drive đang giới hạn tốc độ tải file này.", "throttle");
   }
   return null;
 }
@@ -156,6 +202,14 @@ function extractId(input: string, kind?: "file" | "folder"): { id: string; kind:
   }
 
   return null;
+}
+
+function looksLikeDirectImageUrl(input: string) {
+  return /^https?:\/\/.+\.(png|jpe?g|jfif|webp|gif|bmp|avif)([?#].*)?$/i.test(input.trim());
+}
+
+function looksLikeHttpUrl(input: string) {
+  return /^https?:\/\//i.test(input.trim());
 }
 
 function isImageEntry(entry: DriveEntry) {
@@ -273,6 +327,32 @@ function fileNameFromDisposition(disposition: string | null) {
   return plainMatch ? decodeURIComponent(plainMatch[1]) : "";
 }
 
+function ensureImageResponse(res: Response, fallbackName: string) {
+  const contentType = res.headers.get("content-type") ?? "application/octet-stream";
+  const contentLength = contentLengthFromResponse(res);
+  const name = fileNameFromDisposition(res.headers.get("content-disposition")) || fallbackName;
+  const looksImage = contentType.startsWith("image/") || contentType === "application/octet-stream" || IMAGE_EXT_RE.test(name);
+  return {
+    contentType,
+    contentLength,
+    name,
+    looksImage,
+  };
+}
+
+function directImageNameFromUrl(url: string, fallbackName: string) {
+  try {
+    return decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() || "") || fallbackName;
+  } catch {
+    return fallbackName;
+  }
+}
+
+async function htmlResponseProblem(res: Response, fallback: DriveFetchError) {
+  const snippet = await readResponseSnippet(res);
+  return classifyDriveHtml(snippet) ?? fallback;
+}
+
 async function downloadFile(id: string, fallbackName: string) {
   const url = `https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}`;
   const res = await fetch(url, {
@@ -288,15 +368,7 @@ async function downloadFile(id: string, fallbackName: string) {
   if (!res.ok) throw new DriveFetchError(`Google Drive file ${id} trả về ${res.status}.`, "unknown");
 
   const contentType = res.headers.get("content-type") ?? "application/octet-stream";
-  const contentLength = Number(res.headers.get("content-length") ?? 0);
-  if (contentLength > MAX_FILE_BYTES) {
-    throw new DriveFetchError(`${fallbackName} lớn hơn 25MB.`, "too_large");
-  }
-
   const buffer = await res.arrayBuffer();
-  if (buffer.byteLength > MAX_FILE_BYTES) {
-    throw new DriveFetchError(`${fallbackName} lớn hơn 25MB.`, "too_large");
-  }
   if (contentType.includes("text/html")) {
     const htmlProblem = classifyDriveHtml(decodeBufferSnippet(buffer));
     throw (
@@ -318,6 +390,238 @@ async function downloadFile(id: string, fallbackName: string) {
     mimeType: contentType.startsWith("image/") ? contentType : "image/jpeg",
     base64: arrayBufferToBase64(buffer),
     size: buffer.byteLength,
+  };
+}
+
+async function downloadDirectImageUrl(url: string, fallbackName: string) {
+  const res = await fetch(url, {
+    headers: { Accept: "image/*,*/*" },
+    redirect: "follow",
+  });
+
+  if (res.status === 401 || res.status === 403) {
+    throw new DriveFetchError("Link anh can quyen truy cap hoac dang private.", "private");
+  }
+  if (res.status === 404) {
+    throw new DriveFetchError("Khong tim thay anh tu link trong sheet.", "not_found");
+  }
+  if (!res.ok) throw new DriveFetchError(`Link anh tra ve ${res.status}.`, "unknown");
+
+  const contentType = res.headers.get("content-type") ?? "application/octet-stream";
+  const buffer = await res.arrayBuffer();
+  if (contentType.includes("text/html")) {
+    throw new DriveFetchError("Link trong sheet tra ve HTML thay vi file anh.", "not_image");
+  }
+
+  const nameFromUrl = decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() || "");
+  const name = fileNameFromDisposition(res.headers.get("content-disposition")) || nameFromUrl || fallbackName;
+  const looksImage = contentType.startsWith("image/") || IMAGE_EXT_RE.test(name);
+  if (!looksImage) throw new DriveFetchError(`${name} khong phai file anh.`, "not_image");
+
+  return {
+    id: url,
+    name,
+    mimeType: contentType.startsWith("image/") ? contentType : "image/jpeg",
+    base64: arrayBufferToBase64(buffer),
+    size: buffer.byteLength,
+  };
+}
+
+async function downloadDriveFileToData(input: {
+  file: DriveEntry;
+  sheetName?: string;
+  entityName?: string;
+}) {
+  const existing = await getExistingDataImageFile({
+    sheetName: input.sheetName,
+    entityName: input.entityName,
+    sourceId: input.file.id,
+    fileName: input.file.name,
+    mimeType: input.file.mimeType,
+  });
+  if (existing) {
+    return {
+      id: input.file.id,
+      name: input.file.name,
+      mimeType: input.file.mimeType ?? "image/jpeg",
+      size: existing.size,
+      url: existing.url,
+      relativePath: existing.relativePath,
+      skipped: true,
+      warnings: [] as string[],
+    };
+  }
+
+  const url = `https://drive.google.com/uc?export=download&id=${encodeURIComponent(input.file.id)}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { Accept: "image/*,*/*" },
+      redirect: "follow",
+    });
+  } catch (error) {
+    throw classifyNetworkError(error);
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    await cancelBody(res);
+    throw new DriveFetchError("File Drive đang private hoặc cần quyền truy cập.", "private");
+  }
+  if (res.status === 404) {
+    await cancelBody(res);
+    throw new DriveFetchError("Không tìm thấy file Drive.", "not_found");
+  }
+  if (res.status === 429) {
+    await cancelBody(res);
+    throw new DriveFetchError("Google Drive đang giới hạn tốc độ tải file này.", "throttle");
+  }
+  if (!res.ok) {
+    await cancelBody(res);
+    throw new DriveFetchError(`Google Drive file ${input.file.id} trả về ${res.status}.`, "unknown");
+  }
+
+  const responseInfo = ensureImageResponse(res, input.file.name || input.file.id);
+  if (responseInfo.contentType.includes("text/html")) {
+    throw await htmlResponseProblem(
+      res,
+      new DriveFetchError(
+        "Drive trả về trang HTML thay vì ảnh. Kiểm tra lại quyền public của file.",
+        "private",
+      ),
+    );
+  }
+  if (!responseInfo.looksImage) {
+    await cancelBody(res);
+    throw new DriveFetchError(`${responseInfo.name} không phải file ảnh.`, "not_image");
+  }
+  if (!res.body) {
+    throw new DriveFetchError(`${responseInfo.name} không có nội dung để tải.`, "unknown");
+  }
+
+  const saved = await saveDataImageStream({
+    sheetName: input.sheetName,
+    entityName: input.entityName,
+    sourceId: input.file.id,
+    fileName: responseInfo.name,
+    mimeType: responseInfo.contentType.startsWith("image/")
+      ? responseInfo.contentType
+      : input.file.mimeType,
+    expectedSize: responseInfo.contentLength,
+    stream: res.body,
+    skipIfExists: true,
+  });
+  const size = saved.size || responseInfo.contentLength;
+  const warnings =
+    size > LARGE_FILE_BYTES
+      ? [`${responseInfo.name} lớn ${formatBytes(size)}, tải có thể lâu.`]
+      : [];
+
+  return {
+    id: input.file.id,
+    name: responseInfo.name,
+    mimeType: responseInfo.contentType.startsWith("image/") ? responseInfo.contentType : "image/jpeg",
+    size,
+    url: saved.url,
+    relativePath: saved.relativePath,
+    skipped: saved.skipped,
+    warnings,
+  };
+}
+
+async function downloadDirectImageUrlToData(input: {
+  url: string;
+  fallbackName: string;
+  sheetName?: string;
+  entityName?: string;
+}) {
+  const fallbackFileName = directImageNameFromUrl(input.url, input.fallbackName);
+  const existing = await getExistingDataImageFile({
+    sheetName: input.sheetName,
+    entityName: input.entityName,
+    sourceId: input.url,
+    fileName: fallbackFileName,
+    mimeType: "image/jpeg",
+  });
+  if (existing) {
+    return {
+      id: input.url,
+      name: fallbackFileName,
+      mimeType: "image/jpeg",
+      size: existing.size,
+      url: existing.url,
+      relativePath: existing.relativePath,
+      skipped: true,
+      warnings: [] as string[],
+    };
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(input.url, {
+      headers: { Accept: "image/*,*/*" },
+      redirect: "follow",
+    });
+  } catch (error) {
+    throw classifyNetworkError(error);
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    await cancelBody(res);
+    throw new DriveFetchError("Link ảnh cần quyền truy cập hoặc đang private.", "private");
+  }
+  if (res.status === 404) {
+    await cancelBody(res);
+    throw new DriveFetchError("Không tìm thấy ảnh từ link trong sheet.", "not_found");
+  }
+  if (res.status === 429) {
+    await cancelBody(res);
+    throw new DriveFetchError("Nguồn ảnh đang giới hạn tốc độ tải.", "throttle");
+  }
+  if (!res.ok) {
+    await cancelBody(res);
+    throw new DriveFetchError(`Link ảnh trả về ${res.status}.`, "unknown");
+  }
+
+  const responseInfo = ensureImageResponse(res, fallbackFileName);
+  if (responseInfo.contentType.includes("text/html")) {
+    throw await htmlResponseProblem(
+      res,
+      new DriveFetchError("Link trong sheet trả về HTML thay vì file ảnh.", "not_image"),
+    );
+  }
+  if (!responseInfo.looksImage) {
+    await cancelBody(res);
+    throw new DriveFetchError(`${responseInfo.name} không phải file ảnh.`, "not_image");
+  }
+  if (!res.body) {
+    throw new DriveFetchError(`${responseInfo.name} không có nội dung để tải.`, "unknown");
+  }
+
+  const saved = await saveDataImageStream({
+    sheetName: input.sheetName,
+    entityName: input.entityName,
+    sourceId: input.url,
+    fileName: responseInfo.name,
+    mimeType: responseInfo.contentType.startsWith("image/") ? responseInfo.contentType : "image/jpeg",
+    expectedSize: responseInfo.contentLength,
+    stream: res.body,
+    skipIfExists: true,
+  });
+  const size = saved.size || responseInfo.contentLength;
+  const warnings =
+    size > LARGE_FILE_BYTES
+      ? [`${responseInfo.name} lớn ${formatBytes(size)}, tải có thể lâu.`]
+      : [];
+
+  return {
+    id: input.url,
+    name: responseInfo.name,
+    mimeType: responseInfo.contentType.startsWith("image/") ? responseInfo.contentType : "image/jpeg",
+    size,
+    url: saved.url,
+    relativePath: saved.relativePath,
+    skipped: saved.skipped,
+    warnings,
   };
 }
 
@@ -377,13 +681,7 @@ async function probeFile(id: string, fallbackName: string) {
   }
 
   const contentType = res.headers.get("content-type") ?? "application/octet-stream";
-  const contentLength = Number(res.headers.get("content-length") ?? 0);
   const name = fileNameFromDisposition(res.headers.get("content-disposition")) || fallbackName || id;
-
-  if (contentLength > MAX_FILE_BYTES) {
-    await cancelBody(res);
-    throw new DriveFetchError(`${fallbackName} lớn hơn 25MB.`, "too_large");
-  }
 
   if (contentType.includes("text/html")) {
     const htmlProblem = classifyDriveHtml(await readResponseSnippet(res));
@@ -402,6 +700,37 @@ async function probeFile(id: string, fallbackName: string) {
     IMAGE_EXT_RE.test(name);
   await cancelBody(res);
   if (!looksImage) throw new DriveFetchError(`${name} không phải file ảnh.`, "not_image");
+
+  return { ok: true as const, kind: "file" as const };
+}
+
+async function probeDirectImageUrl(url: string) {
+  const res = await fetch(url, {
+    headers: { Accept: "image/*,*/*", Range: "bytes=0-4095" },
+    redirect: "follow",
+  });
+
+  if (res.status === 401 || res.status === 403) {
+    await cancelBody(res);
+    throw new DriveFetchError("Link anh can quyen truy cap hoac dang private.", "private");
+  }
+  if (res.status === 404) {
+    await cancelBody(res);
+    throw new DriveFetchError("Khong tim thay anh tu link trong sheet.", "not_found");
+  }
+  if (!res.ok && res.status !== 206) {
+    await cancelBody(res);
+    throw new DriveFetchError(`Link anh tra ve ${res.status}.`, "unknown");
+  }
+
+  const contentType = res.headers.get("content-type") ?? "application/octet-stream";
+  const name = decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() || "image");
+  const looksImage =
+    contentType.startsWith("image/") ||
+    contentType === "application/octet-stream" ||
+    IMAGE_EXT_RE.test(name);
+  await cancelBody(res);
+  if (!looksImage) throw new DriveFetchError(`${name} khong phai file anh.`, "not_image");
 
   return { ok: true as const, kind: "file" as const };
 }
@@ -439,7 +768,7 @@ function sortDriveMatches(matches: DriveSearchMatch[]) {
 
 async function collectImageFilesFromFolder(
   folderId: string,
-  maxFiles: number,
+  maxFiles: number = Number.POSITIVE_INFINITY,
   remainingDepth: number,
   visited = new Set<string>(),
 ): Promise<DriveEntry[]> {
@@ -554,8 +883,16 @@ async function resolveReference(
   rootFolderUrl?: string,
   searchContext?: string,
 ): Promise<ResolvedDriveReference | null> {
+  if (looksLikeDirectImageUrl(reference)) {
+    return { id: reference, kind: "file", name: reference.split("/").pop() };
+  }
+
   const direct = extractId(reference);
   if (direct) return direct;
+
+  if (looksLikeHttpUrl(reference)) {
+    return { id: reference, kind: "file", name: reference.split("/").filter(Boolean).pop() };
+  }
 
   const root = rootFolderUrl ? extractId(rootFolderUrl, "folder") : null;
   if (!root || root.kind !== "folder") return null;
@@ -592,6 +929,10 @@ export const checkDriveReferenceServer = createServerFn({ method: "POST" })
         };
       }
 
+      if (looksLikeHttpUrl(resolved.id)) {
+        return await probeDirectImageUrl(resolved.id);
+      }
+
       if (resolved.kind === "folder") {
         const files = await collectImageFilesFromFolder(resolved.id, 1, MAX_NESTED_IMAGE_DEPTH);
         if (files.length === 0) {
@@ -604,7 +945,7 @@ export const checkDriveReferenceServer = createServerFn({ method: "POST" })
         return { ok: true as const, kind: "folder" as const, imageCount: files.length };
       }
 
-      return await probeFile(resolved.id, "drive-image");
+      return await probeFile(resolved.id, resolved.name ?? "drive-image");
     } catch (error) {
       const driveError =
         error instanceof DriveFetchError
@@ -636,7 +977,7 @@ export const fetchDriveImagesServer = createServerFn({ method: "POST" })
       const files =
         resolved.kind === "folder"
           ? await collectImageFilesFromFolder(resolved.id, maxFiles + 1, MAX_NESTED_IMAGE_DEPTH)
-          : [{ id: resolved.id, name: "drive-image", kind: "file" as const, mimeType: "image/*" }];
+          : [{ id: resolved.id, name: resolved.name ?? "drive-image", kind: "file" as const, mimeType: "image/*" }];
 
       if (files.length === 0) {
         return {
@@ -651,7 +992,9 @@ export const fetchDriveImagesServer = createServerFn({ method: "POST" })
         try {
           return {
             ok: true as const,
-            file: await downloadFile(file.id, file.name),
+            file: looksLikeHttpUrl(file.id)
+              ? await downloadDirectImageUrl(file.id, file.name)
+              : await downloadFile(file.id, file.name),
           };
         } catch (error) {
           const driveError =
@@ -691,6 +1034,114 @@ export const fetchDriveImagesServer = createServerFn({ method: "POST" })
         error instanceof DriveFetchError
           ? error
           : new DriveFetchError(error instanceof Error ? error.message : String(error));
+      return {
+        ok: false as const,
+        error: "Không tải được Drive: " + driveError.message,
+        errorCode: driveError.code,
+      };
+    }
+  });
+
+export const fetchDriveImagesToDataServer = createServerFn({ method: "POST" })
+  .inputValidator(validateDriveInput)
+  .handler(async ({ data }) => {
+    const maxFiles =
+      typeof data.maxFiles === "number" && data.maxFiles > 0
+        ? Math.min(data.maxFiles, MAX_STREAM_FILES_PER_REFERENCE)
+        : MAX_STREAM_FILES_PER_REFERENCE;
+
+    try {
+      const resolved = await resolveReference(data.reference, data.rootFolderUrl, data.searchContext);
+      if (!resolved) {
+        return {
+          ok: false as const,
+          error: "Không tìm thấy file/folder Drive. Nếu cột chỉ là tên folder, hãy cấu hình root folder Drive public.",
+          errorCode: "not_found" as const,
+        };
+      }
+
+      const files =
+        resolved.kind === "folder"
+          ? await collectImageFilesFromFolder(resolved.id, maxFiles + 1, MAX_NESTED_IMAGE_DEPTH)
+          : [{ id: resolved.id, name: resolved.name ?? "drive-image", kind: "file" as const, mimeType: "image/*" }];
+
+      if (files.length === 0) {
+        return {
+          ok: false as const,
+          error: "Folder Drive không có file ảnh public đọc được.",
+          errorCode: "not_found" as const,
+        };
+      }
+
+      const filesToDownload = files.slice(0, maxFiles);
+      const downloadResults = await mapWithConcurrency(filesToDownload, STREAM_FILE_CONCURRENCY, async (file) => {
+        try {
+          return {
+            ok: true as const,
+            file: looksLikeHttpUrl(file.id)
+              ? await downloadDirectImageUrlToData({
+                  url: file.id,
+                  fallbackName: file.name,
+                  sheetName: data.searchContext,
+                  entityName: data.entityName,
+                })
+              : await downloadDriveFileToData({
+                  file,
+                  sheetName: data.searchContext,
+                  entityName: data.entityName,
+                }),
+          };
+        } catch (error) {
+          const driveError = classifyNetworkError(error);
+          return {
+            ok: false as const,
+            error: { message: driveError.message, code: driveError.code },
+          };
+        }
+      });
+
+      const downloaded = downloadResults
+        .filter((result): result is Extract<(typeof downloadResults)[number], { ok: true }> => result.ok)
+        .map((result) => result.file);
+      const errors = downloadResults
+        .filter((result): result is Extract<(typeof downloadResults)[number], { ok: false }> => !result.ok)
+        .map((result) => result.error);
+      const downloadedBytes = downloaded
+        .filter((file) => !file.skipped)
+        .reduce((sum, file) => sum + (file.size || 0), 0);
+      const skippedBytes = downloaded
+        .filter((file) => file.skipped)
+        .reduce((sum, file) => sum + (file.size || 0), 0);
+      const skippedExisting = downloaded.filter((file) => file.skipped).length;
+      const warnings = [
+        ...downloaded.flatMap((file) => file.warnings),
+        ...errors.map((error) => error.message),
+      ];
+
+      if (files.length > maxFiles) {
+        warnings.unshift(`Folder có hơn ${maxFiles} ảnh. App đã dừng theo giới hạn ảnh/quán của lượt này.`);
+      }
+
+      if (downloaded.length === 0) {
+        const firstError = errors[0];
+        return {
+          ok: false as const,
+          error: firstError?.message ?? "Không tải được ảnh Drive.",
+          errorCode: firstError?.code ?? ("unknown" as const),
+        };
+      }
+
+      return {
+        ok: true as const,
+        files: downloaded.map(({ warnings: _warnings, ...file }) => file),
+        skipped: Math.max(files.length - downloaded.length, 0),
+        skippedExisting,
+        downloadedBytes,
+        skippedBytes,
+        warnings,
+      };
+    } catch (error) {
+      const driveError = classifyNetworkError(error);
       return {
         ok: false as const,
         error: "Không tải được Drive: " + driveError.message,

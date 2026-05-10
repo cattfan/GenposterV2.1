@@ -52,6 +52,7 @@ import {
   Archive,
   Download,
   Upload,
+  Trash2,
 } from "lucide-react";
 import { PageContainer, PageHeader } from "@/components/PageHeader";
 import { Switch } from "@/components/ui/switch";
@@ -130,6 +131,10 @@ async function restoreImportedData(entities: Entity[], assets: Asset[], blobs: B
     if (blobs.length) await db.blobs.bulkPut(blobs);
     if (assets.length) await db.assets.bulkPut(assets);
   });
+}
+
+async function restoreAllLocalData(entities: Entity[], assets: Asset[], blobs: BlobRecord[]) {
+  await restoreImportedData(entities, assets, blobs);
 }
 
 function SettingsPage() {
@@ -267,6 +272,29 @@ function SettingsPage() {
 
   const clearImportedData = async () => {
     const snapshotEntities = await db.entities.toArray();
+
+    await db.transaction("rw", [db.entities], async () => {
+      await db.entities.clear();
+    });
+
+    toast.success(`Đã xoá ${snapshotEntities.length} dòng dữ liệu đã import`, {
+      duration: UNDO_TOAST_DURATION,
+      action:
+        snapshotEntities.length
+          ? {
+              label: "Khôi phục",
+              onClick: () => {
+                void db.entities.bulkPut(snapshotEntities).then(() => {
+                  toast.success("Đã khôi phục dữ liệu");
+                });
+              },
+            }
+          : undefined,
+    });
+  };
+
+  const clearAllLocalData = async () => {
+    const snapshotEntities = await db.entities.toArray();
     const snapshotAssets = await db.assets.toArray();
     const snapshotBlobs = await readAssetBlobs(snapshotAssets);
 
@@ -277,16 +305,16 @@ function SettingsPage() {
       if (blobKeys.length) await db.blobs.bulkDelete(blobKeys);
     });
 
-    toast.success(`Đã xoá ${snapshotEntities.length} dòng dữ liệu đã import`, {
+    toast.success("Đã xoá tất cả dữ liệu local", {
       duration: UNDO_TOAST_DURATION,
       action:
         snapshotEntities.length || snapshotAssets.length || snapshotBlobs.length
           ? {
               label: "Khôi phục",
               onClick: () => {
-                void restoreImportedData(snapshotEntities, snapshotAssets, snapshotBlobs).then(
+                void restoreAllLocalData(snapshotEntities, snapshotAssets, snapshotBlobs).then(
                   () => {
-                    toast.success("Đã khôi phục dữ liệu");
+                    toast.success("Đã khôi phục dữ liệu local");
                   },
                 );
               },
@@ -300,7 +328,6 @@ function SettingsPage() {
       <PageHeader
         icon={<SettingsIcon className="size-5" />}
         title="Cài đặt"
-        description="Cấu hình AI provider và quản lý dữ liệu local."
       />
 
       <Card>
@@ -311,10 +338,6 @@ function SettingsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Backup dạng ZIP. Có thể chọn toàn hệ thống, chỉ pack template hoặc chỉ khuôn đổ dữ
-            liệu. API key không nằm trong file backup.
-          </p>
           <div className="grid gap-3 rounded-lg border bg-muted/20 p-4">
             <div className="space-y-2">
               <Label>Phạm vi backup</Label>
@@ -358,9 +381,6 @@ function SettingsPage() {
           <div className="grid gap-3 md:grid-cols-2">
             <div className="rounded-lg border p-4">
               <div className="font-medium">Tải backup</div>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Xuất file ZIP theo phạm vi đã chọn.
-              </p>
               <Button
                 className="mt-4 w-full"
                 onClick={() => void exportBackup()}
@@ -376,10 +396,7 @@ function SettingsPage() {
             </div>
 
             <div className="rounded-lg border p-4">
-              <div className="font-medium">Import backup</div>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Nhận file .zip mới hoặc JSON cũ. JSON cũ không có ảnh local.
-              </p>
+              <div className="font-medium">Nhập backup</div>
               <Button
                 variant="outline"
                 className="mt-4 w-full"
@@ -559,7 +576,7 @@ function SettingsPage() {
             />
           </div>
           <div>
-            <Label>Export scale</Label>
+            <Label>Độ nét file tải xuống</Label>
             <Input
               type="number"
               min={1}
@@ -575,14 +592,36 @@ function SettingsPage() {
         <CardHeader>
           <CardTitle>Dữ liệu local</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-2">
+        <CardContent className="grid gap-3 md:grid-cols-3">
+          <div className="rounded-lg border p-4">
+            <div className="flex items-start gap-3">
+              <div className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                <Trash2 />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-medium">Tất cả</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {entities.length} dòng, {assets.length} ảnh.
+                </div>
+              </div>
+            </div>
+            <Button
+              variant="destructive"
+              className="mt-4 w-full"
+              onClick={() => void clearAllLocalData()}
+              disabled={entities.length === 0 && assets.length === 0}
+            >
+              Xoá tất cả
+            </Button>
+          </div>
+
           <div className="rounded-lg border p-4">
             <div className="flex items-start gap-3">
               <div className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
                 <Image />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="font-medium">Ảnh đã import</div>
+                <div className="font-medium">Ảnh</div>
                 <div className="mt-1 text-sm text-muted-foreground">
                   {assets.length} asset, {localImageCount} ảnh local.
                 </div>
@@ -604,9 +643,9 @@ function SettingsPage() {
                 <Database />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="font-medium">Dữ liệu đã import</div>
+                <div className="font-medium">Dữ liệu sheet</div>
                 <div className="mt-1 text-sm text-muted-foreground">
-                  {entities.length} quán/entity. Xoá kèm ảnh đang gắn với dữ liệu này.
+                  {entities.length} dòng dữ liệu.
                 </div>
               </div>
             </div>
@@ -616,7 +655,7 @@ function SettingsPage() {
               onClick={() => void clearImportedData()}
               disabled={entities.length === 0 && assets.length === 0}
             >
-              Xoá dữ liệu import
+              Xoá dữ liệu sheet
             </Button>
           </div>
         </CardContent>

@@ -8,6 +8,7 @@ import {
   Download,
   FolderOpen,
   ImagePlus,
+  RotateCcw,
   RefreshCw,
   Upload,
   X,
@@ -29,12 +30,13 @@ import {
   getAssetEntityIds,
   getEntityImageReferences,
   getEntityImageReferencesWithAssets,
+  getImageReferenceEntityIds,
   isImageReferenceAsset,
   isUsableImageAsset,
   looksLikeDriveReference,
 } from "@/features/data/imageReferences";
 import { matchFilesToEntities, type MatchResult } from "@/features/data/imageMatcher";
-import type { Asset, Entity } from "@/models";
+import type { Asset, DriveDownloadCheckpoint, Entity } from "@/models";
 import { db, saveBlob } from "@/storage/db";
 import { makeIdbSrc } from "@/storage/imageSrc";
 import { getSettings, saveSettings } from "@/storage/settings";
@@ -48,8 +50,16 @@ interface PendingFile {
   role: Asset["role"];
 }
 
-type DriveFailureType = "private" | "not_found" | "not_image" | "too_large" | "unknown";
+type DriveFailureType =
+  | "private"
+  | "not_found"
+  | "not_image"
+  | "too_large"
+  | "network"
+  | "throttle"
+  | "unknown";
 type DriveFailureFilter = "all" | DriveFailureType;
+type DriveImageLimit = "all" | number;
 
 interface DriveFailure {
   entityId: string;
@@ -62,7 +72,14 @@ interface DriveFailure {
 const PREVIEW_PAGE_SIZE = 80;
 const PREVIEW_INCREMENT = 80;
 const DEFAULT_FUZZY_THRESHOLD = 0.78;
-const DRIVE_ENTITY_CONCURRENCY = 4;
+const DEFAULT_DRIVE_ENTITY_LIMIT = 20;
+const DRIVE_IMAGE_LIMIT_OPTIONS: Array<{ value: string; label: string; limit: DriveImageLimit }> = [
+  { value: "all", label: "Tất cả ảnh", limit: "all" },
+  { value: "5", label: "5 ảnh", limit: 5 },
+  { value: "10", label: "10 ảnh", limit: 10 },
+  { value: "20", label: "20 ảnh", limit: 20 },
+  { value: "50", label: "50 ảnh", limit: 50 },
+];
 const EMPTY_ENTITIES: Entity[] = [];
 const EMPTY_ASSETS: Asset[] = [];
 const DRIVE_FAILURE_FILTERS: DriveFailureFilter[] = [
@@ -70,6 +87,8 @@ const DRIVE_FAILURE_FILTERS: DriveFailureFilter[] = [
   "not_found",
   "not_image",
   "too_large",
+  "throttle",
+  "network",
   "unknown",
   "all",
 ];
@@ -88,37 +107,6 @@ async function yieldToBrowser(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let cursor = 0;
-  const workerCount = Math.max(1, Math.min(concurrency, items.length));
-
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (cursor < items.length) {
-        const index = cursor;
-        cursor += 1;
-        results[index] = await worker(items[index], index);
-      }
-    }),
-  );
-
-  return results;
-}
-
-function base64ToBlob(base64: string, mimeType: string) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return new Blob([bytes], { type: mimeType });
-}
-
 function classifyDriveFailure(error: string, errorCode?: string): DriveFailureType {
   if (
     errorCode === "private" ||
@@ -129,7 +117,41 @@ function classifyDriveFailure(error: string, errorCode?: string): DriveFailureTy
   if (errorCode === "not_found" || /không tìm thấy|not found|404/i.test(error)) return "not_found";
   if (errorCode === "not_image" || /không phải file ảnh/i.test(error)) return "not_image";
   if (errorCode === "too_large" || /25MB|lớn hơn/i.test(error)) return "too_large";
+  if (errorCode === "throttle" || /giới hạn|throttle|quota|rate|429/i.test(error)) return "throttle";
+  if (errorCode === "network" || /lỗi mạng|network|timeout|fetch failed/i.test(error)) return "network";
   return "unknown";
+}
+
+function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function formatDuration(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "0s";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  if (minutes < 60) return `${minutes}m ${rest}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+function normalizeDriveImageLimit(value: string): DriveImageLimit {
+  if (value === "all") return "all";
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : "all";
+}
+
+function imageLimitToSelectValue(limit: DriveImageLimit) {
+  return limit === "all" ? "all" : String(limit);
 }
 
 function labelDriveFailureFilter(filter: DriveFailureFilter) {
@@ -142,6 +164,10 @@ function labelDriveFailureFilter(filter: DriveFailureFilter) {
       return "Không phải ảnh";
     case "too_large":
       return "Quá nặng";
+    case "throttle":
+      return "Drive giới hạn";
+    case "network":
+      return "Lỗi mạng";
     case "unknown":
       return "Lỗi khác";
     default:
@@ -153,17 +179,21 @@ function DriveImportToast({
   done,
   total,
   current,
+  bytes,
+  skipped,
 }: {
   done: number;
   total: number;
   current?: string;
+  bytes?: number;
+  skipped?: number;
 }) {
   const percent = total > 0 ? Math.round((done / total) * 100) : 0;
 
   return (
     <div className="min-w-64 space-y-2">
       <div className="flex items-center justify-between gap-3 text-sm font-medium">
-        <span>Tải ảnh Drive</span>
+        <span>Tải ảnh từ sheet</span>
         <span>{percent}%</span>
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-muted">
@@ -173,6 +203,12 @@ function DriveImportToast({
         {done}/{total}
         {current ? ` - ${current}` : ""}
       </div>
+      {(bytes || skipped) ? (
+        <div className="text-xs text-muted-foreground">
+          {bytes ? `Đã tải ${formatBytes(bytes)}` : ""}
+          {skipped ? `${bytes ? " · " : ""}Bỏ qua ${skipped} file đã có` : ""}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -232,7 +268,7 @@ async function buildPendingFiles(
         relativePath: item.relativePath,
         match: matches[index],
         manualEntityId: matches[index].autoAssign ? matches[index].matchedEntityId : null,
-        role: "cover" as const,
+        role: "generic" as const,
       })),
     );
 
@@ -251,6 +287,19 @@ export function BulkImageUpload() {
   const [matching, setMatching] = useState(false);
   const [driveBusy, setDriveBusy] = useState(false);
   const [driveRootUrl, setDriveRootUrl] = useState("");
+  const [driveEntityLimit, setDriveEntityLimit] = useState(DEFAULT_DRIVE_ENTITY_LIMIT);
+  const [driveImageLimit, setDriveImageLimit] = useState<DriveImageLimit>("all");
+  const [driveCheckpoint, setDriveCheckpoint] = useState<DriveDownloadCheckpoint | null>(null);
+  const [driveRunStats, setDriveRunStats] = useState({
+    done: 0,
+    total: 0,
+    imported: 0,
+    skippedFiles: 0,
+    downloadedBytes: 0,
+    skippedBytes: 0,
+    startedAt: 0,
+    current: "",
+  });
   const [driveFailures, setDriveFailures] = useState<DriveFailure[]>([]);
   const [driveFailureFilter, setDriveFailureFilter] = useState<DriveFailureFilter>("private");
   const [visibleCount, setVisibleCount] = useState(PREVIEW_PAGE_SIZE);
@@ -258,7 +307,16 @@ export function BulkImageUpload() {
   const previewUrlsRef = useRef(new Map<string, string>());
 
   useEffect(() => {
-    getSettings().then((settings) => setDriveRootUrl(settings.driveRootFolderUrl ?? ""));
+    getSettings().then((settings) => {
+      setDriveRootUrl(settings.driveRootFolderUrl ?? "");
+      setDriveCheckpoint(settings.driveDownloadCheckpoint ?? null);
+      if (settings.driveDownloadCheckpoint?.entityLimit) {
+        setDriveEntityLimit(settings.driveDownloadCheckpoint.entityLimit);
+      }
+      if (settings.driveDownloadCheckpoint?.imageLimit) {
+        setDriveImageLimit(settings.driveDownloadCheckpoint.imageLimit);
+      }
+    });
   }, []);
 
   useEffect(() => {
@@ -271,7 +329,10 @@ export function BulkImageUpload() {
     };
   }, []);
 
-  const visiblePending = useMemo(() => pending.slice(0, visibleCount), [pending, visibleCount]);
+  const visiblePending = useMemo(
+    () => pending.slice(0, visibleCount).map((item, index) => ({ item, index })),
+    [pending, visibleCount],
+  );
 
   useEffect(() => {
     const validKeys = new Set(pending.map(pendingKey));
@@ -400,7 +461,7 @@ export function BulkImageUpload() {
   };
 
   const removeRow = (idx: number) => {
-    setPending(pending.filter((_, index) => index !== idx));
+    setPending((current) => current.filter((_, index) => index !== idx));
   };
 
   const importAll = async () => {
@@ -413,25 +474,18 @@ export function BulkImageUpload() {
     setBusy(true);
     try {
       const newAssets: Asset[] = [];
-      const coverCount: Record<string, number> = {};
-      const existing = await db.assets.toArray();
-      for (const asset of existing) {
-        if (asset.isCover) coverCount[asset.entityId] = (coverCount[asset.entityId] ?? 0) + 1;
-      }
 
       for (const item of ready) {
         const entityId = item.manualEntityId!;
         const blobKey = await saveBlob(item.file);
-        const isCover = item.role === "cover" && (coverCount[entityId] ?? 0) === 0;
-        if (isCover) coverCount[entityId] = (coverCount[entityId] ?? 0) + 1;
         newAssets.push({
           assetId: nanoid(),
           entityId,
           sourceType: "local",
           sourceValue: makeIdbSrc(blobKey),
           blobKey,
-          role: item.role,
-          isCover,
+          role: item.role === "cover" ? "generic" : item.role,
+          isCover: false,
           qualityScore: 80,
           status: "ok",
         });
@@ -451,6 +505,10 @@ export function BulkImageUpload() {
 
   const matchedCount = pending.filter((item) => item.manualEntityId).length;
   const assetEntityIds = useMemo(() => getAssetEntityIds(allAssets), [allAssets]);
+  const imageReferenceEntityIds = useMemo(
+    () => getImageReferenceEntityIds(entities, allAssets),
+    [allAssets, entities],
+  );
   const usableAssets = useMemo(() => allAssets.filter(isUsableImageAsset), [allAssets]);
   const assetsByEntityId = useMemo(() => {
     const map = new Map<string, Asset[]>();
@@ -464,6 +522,16 @@ export function BulkImageUpload() {
   const entitiesWithoutImage = useMemo(
     () => entities.filter((entity) => !entityHasUsableImageAsset(entity, assetEntityIds)),
     [assetEntityIds, entities],
+  );
+  const entitiesWithReferenceOnly = useMemo(
+    () =>
+      entitiesWithoutImage.filter((entity) => imageReferenceEntityIds.has(entity.entityId)),
+    [entitiesWithoutImage, imageReferenceEntityIds],
+  );
+  const entitiesWithoutAnyImageSource = useMemo(
+    () =>
+      entitiesWithoutImage.filter((entity) => !imageReferenceEntityIds.has(entity.entityId)),
+    [entitiesWithoutImage, imageReferenceEntityIds],
   );
   const driveImportCandidates = useMemo(
     () =>
@@ -479,6 +547,16 @@ export function BulkImageUpload() {
   );
   const shouldHighlightDriveDownload =
     driveImportCandidates.length > 0 && !driveBusy && !matching && !busy;
+  const driveRunLimit = Math.max(1, Math.min(Math.floor(driveEntityLimit || 1), 500));
+  const driveRunCandidateCount = Math.min(driveRunLimit, driveImportCandidates.length);
+  const driveElapsedSeconds = driveRunStats.startedAt
+    ? (Date.now() - driveRunStats.startedAt) / 1000
+    : 0;
+  const driveSpeed = driveElapsedSeconds > 0 ? driveRunStats.downloadedBytes / driveElapsedSeconds : 0;
+  const driveEtaSeconds =
+    driveBusy && driveRunStats.done > 0
+      ? ((driveRunStats.total - driveRunStats.done) * driveElapsedSeconds) / driveRunStats.done
+      : 0;
   const driveFailureCounts = useMemo(() => {
     const counts: Record<DriveFailureFilter, number> = {
       all: driveFailures.length,
@@ -486,6 +564,8 @@ export function BulkImageUpload() {
       not_found: 0,
       not_image: 0,
       too_large: 0,
+      throttle: 0,
+      network: 0,
       unknown: 0,
     };
     for (const failure of driveFailures) counts[failure.type] += 1;
@@ -505,18 +585,39 @@ export function BulkImageUpload() {
     toast.success("Đã lưu thư mục Drive gốc");
   };
 
-  const importDriveImages = async () => {
+  const saveDriveCheckpoint = async (checkpoint: DriveDownloadCheckpoint) => {
+    setDriveCheckpoint(checkpoint);
+    const settings = await getSettings();
+    await saveSettings({
+      ...settings,
+      driveRootFolderUrl: driveRootUrl.trim() || settings.driveRootFolderUrl,
+      driveDownloadCheckpoint: checkpoint,
+    });
+  };
+
+  const retryDriveFailures = () => {
+    const failedEntityIds = new Set(driveFailures.map((failure) => failure.entityId));
+    const failedCandidates = driveImportCandidates.filter((entity) => failedEntityIds.has(entity.entityId));
+    if (failedCandidates.length === 0) {
+      toast.info("Không còn quán lỗi trong danh sách cần tải.");
+      return;
+    }
+    void importDriveImages(failedCandidates);
+  };
+
+  const importDriveImages = async (candidateOverride?: Entity[]) => {
     if (entities.length === 0) {
       toast.error("Chưa có dữ liệu nào. Hãy nhập dữ liệu trước.");
       return;
     }
-    if (driveImportCandidates.length === 0) {
-      toast.success("Không có quán thiếu ảnh có link Drive để tải.");
+    const selectedCandidates = candidateOverride ?? driveImportCandidates;
+    if (selectedCandidates.length === 0) {
+      toast.success("Không có quán thiếu ảnh có link/folder trong sheet để tải.");
       return;
     }
 
     const rootUrl = driveRootUrl.trim();
-    const hasNameOnlyRef = driveImportCandidates.some((entity) =>
+    const hasNameOnlyRef = selectedCandidates.some((entity) =>
       getEntityImageReferencesWithAssets(entity, assetsByEntityId.get(entity.entityId) ?? []).some(
         (reference) => !looksLikeDriveReference(reference),
       ),
@@ -528,16 +629,40 @@ export function BulkImageUpload() {
 
     setDriveBusy(true);
     setDriveFailures([]);
+    const startedAt = Date.now();
+    setDriveRunStats({
+      done: 0,
+      total: 0,
+      imported: 0,
+      skippedFiles: 0,
+      downloadedBytes: 0,
+      skippedBytes: 0,
+      startedAt,
+      current: "",
+    });
     const toastId = "drive-image-import";
-    const candidates = driveImportCandidates.slice();
+    const candidates = selectedCandidates.slice(0, driveRunLimit);
     const total = candidates.length;
     let done = 0;
     let imported = 0;
-    const coverCount: Record<string, number> = {};
+    let skippedFiles = 0;
+    let downloadedBytes = 0;
+    let skippedBytes = 0;
+    let failedEntitiesSoFar = 0;
+    const imageLimit = driveImageLimit;
 
-    for (const asset of usableAssets) {
-      if (asset.isCover) coverCount[asset.entityId] = (coverCount[asset.entityId] ?? 0) + 1;
-    }
+    await saveDriveCheckpoint({
+      updatedAt: Date.now(),
+      status: "running",
+      totalEntities: total,
+      completedEntities: 0,
+      importedAssets: 0,
+      skippedFiles: 0,
+      downloadedBytes: 0,
+      failedEntities: 0,
+      entityLimit: driveRunLimit,
+      imageLimit,
+    });
 
     toast.loading(<DriveImportToast done={0} total={total} />, {
       id: toastId,
@@ -545,15 +670,34 @@ export function BulkImageUpload() {
     });
 
     try {
-      const { fetchDriveImagesServer } = await import("@/server/driveFetch");
+      const { fetchDriveImagesToDataServer } = await import("@/server/driveFetch");
       if (rootUrl) {
         const settings = await getSettings();
-        await saveSettings({ ...settings, driveRootFolderUrl: rootUrl });
+        await saveSettings({
+          ...settings,
+          driveRootFolderUrl: rootUrl,
+          driveDownloadCheckpoint: {
+            updatedAt: Date.now(),
+            status: "running",
+            totalEntities: total,
+            completedEntities: 0,
+            importedAssets: 0,
+            skippedFiles: 0,
+            downloadedBytes: 0,
+            failedEntities: 0,
+            entityLimit: driveRunLimit,
+            imageLimit,
+          },
+        });
       }
 
-      const results = await mapWithConcurrency(candidates, DRIVE_ENTITY_CONCURRENCY, async (entity) => {
+      const results = [];
+      for (const entity of candidates) {
         const entityAssets: Asset[] = [];
         const entityFailures: DriveFailure[] = [];
+        let entitySkippedFiles = 0;
+        let entityDownloadedBytes = 0;
+        let entitySkippedBytes = 0;
 
         try {
           const references = getEntityImageReferencesWithAssets(
@@ -561,12 +705,13 @@ export function BulkImageUpload() {
             assetsByEntityId.get(entity.entityId) ?? [],
           );
           for (const reference of references) {
-            const result = await fetchDriveImagesServer({
+            const result = await fetchDriveImagesToDataServer({
               data: {
                 reference,
-            rootFolderUrl: rootUrl || undefined,
-            searchContext: entity.sheetName,
-            maxFiles: 20,
+                rootFolderUrl: rootUrl || undefined,
+                searchContext: entity.sheetName,
+                entityName: entity.name,
+                maxFiles: imageLimit === "all" ? undefined : imageLimit,
               },
             });
 
@@ -582,20 +727,23 @@ export function BulkImageUpload() {
               continue;
             }
 
+            const existingUrls = new Set((assetsByEntityId.get(entity.entityId) ?? []).map((asset) => asset.sourceValue));
+            entitySkippedFiles += result.skippedExisting ?? 0;
+            entityDownloadedBytes += result.downloadedBytes ?? 0;
+            entitySkippedBytes += result.skippedBytes ?? 0;
             for (const file of result.files) {
-              const blob = base64ToBlob(file.base64, file.mimeType);
-              const blobKey = await saveBlob(blob);
-              const isCover = (coverCount[entity.entityId] ?? 0) === 0 && entityAssets.length === 0;
-              if (isCover) coverCount[entity.entityId] = 1;
+              if (existingUrls.has(file.url)) {
+                continue;
+              }
+              existingUrls.add(file.url);
 
               entityAssets.push({
                 assetId: nanoid(),
                 entityId: entity.entityId,
                 sourceType: "local",
-                sourceValue: makeIdbSrc(blobKey),
-                blobKey,
-                role: isCover ? "cover" : "generic",
-                isCover,
+                sourceValue: file.url,
+                role: "generic",
+                isCover: false,
                 qualityScore: 80,
                 status: "ok",
               });
@@ -606,7 +754,7 @@ export function BulkImageUpload() {
             const staleAssets = (assetsByEntityId.get(entity.entityId) ?? []).filter(
               isImageReferenceAsset,
             );
-            await db.transaction("rw", db.assets, db.blobs, async () => {
+            await db.transaction("rw", db.assets, async () => {
               if (staleAssets.length) {
                 await db.assets.bulkDelete(staleAssets.map((asset) => asset.assetId));
               }
@@ -630,19 +778,56 @@ export function BulkImageUpload() {
 
         done += 1;
         imported += entityAssets.length;
-        toast.loading(<DriveImportToast done={done} total={total} current={entity.name} />, {
-          id: toastId,
-          duration: Infinity,
+        if (entityFailures.length) failedEntitiesSoFar += 1;
+        skippedFiles += entitySkippedFiles;
+        downloadedBytes += entityDownloadedBytes;
+        skippedBytes += entitySkippedBytes;
+        const nextStats = {
+          done,
+          total,
+          imported,
+          skippedFiles,
+          downloadedBytes,
+          skippedBytes,
+          startedAt,
+          current: entity.name,
+        };
+        setDriveRunStats(nextStats);
+        await saveDriveCheckpoint({
+          updatedAt: Date.now(),
+          status: "running",
+          totalEntities: total,
+          completedEntities: done,
+          importedAssets: imported,
+          skippedFiles,
+          downloadedBytes,
+          failedEntities: failedEntitiesSoFar,
+          entityLimit: driveRunLimit,
+          imageLimit,
         });
+        toast.loading(
+          <DriveImportToast
+            done={done}
+            total={total}
+            current={entity.name}
+            bytes={downloadedBytes}
+            skipped={skippedFiles}
+          />,
+          {
+            id: toastId,
+            duration: Infinity,
+          },
+        );
         await yieldToBrowser();
 
-        return {
+        results.push({
           imported: entityAssets.length,
           failures: entityFailures,
-        };
-      });
+        });
+      }
 
       const failed = results.flatMap((result) => result.failures);
+      const failedEntityCount = new Set(failed.map((item) => item.entityId)).size;
 
       setDriveFailures(failed);
       if (failed.some((item) => item.type === "private")) {
@@ -654,20 +839,46 @@ export function BulkImageUpload() {
       if (imported > 0) {
         const privateCount = failed.filter((item) => item.type === "private").length;
         toast.success(
-          `Đã tải ${imported} ảnh Drive cho ${total - failed.length}/${total} quán${
+          `Đã tải ${imported} ảnh (${formatBytes(downloadedBytes)}) vào data/images cho ${total - failedEntityCount}/${total} quán${
+            skippedFiles ? `. Bỏ qua ${skippedFiles} file đã có` : ""
+          }${
             failed.length
-              ? `. Lỗi ${failed.length} quán${privateCount ? `, bị private ${privateCount}` : ""}.`
+              ? `. Lỗi ${failedEntityCount} quán${privateCount ? `, bị private ${privateCount}` : ""}.`
               : "."
           }`,
           { id: toastId, duration: 8000 },
         );
       } else {
-        toast.error(failed[0]?.error ?? "Không tải được ảnh Drive.", { id: toastId, duration: 8000 });
+        toast.error(failed[0]?.error ?? "Không tải được ảnh từ sheet.", { id: toastId, duration: 8000 });
       }
+      await saveDriveCheckpoint({
+        updatedAt: Date.now(),
+        status: failed.length ? "error" : "done",
+        totalEntities: total,
+        completedEntities: done,
+        importedAssets: imported,
+        skippedFiles,
+        downloadedBytes,
+        failedEntities: failedEntityCount,
+        entityLimit: driveRunLimit,
+        imageLimit,
+      });
     } catch (error) {
-      toast.error("Lỗi tải Drive: " + (error instanceof Error ? error.message : String(error)), {
+      toast.error("Lỗi tải ảnh từ sheet: " + (error instanceof Error ? error.message : String(error)), {
         id: toastId,
         duration: 8000,
+      });
+      await saveDriveCheckpoint({
+        updatedAt: Date.now(),
+        status: "error",
+        totalEntities: total,
+        completedEntities: done,
+        importedAssets: imported,
+        skippedFiles,
+        downloadedBytes,
+        failedEntities: 1,
+        entityLimit: driveRunLimit,
+        imageLimit,
       });
     } finally {
       setDriveBusy(false);
@@ -679,9 +890,9 @@ export function BulkImageUpload() {
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle>Bước 3: Ghép ảnh vào dữ liệu</CardTitle>
+            <CardTitle>Bước 3: Tải ảnh vào dữ liệu</CardTitle>
             <CardDescription>
-              Cách dễ nhất là chọn thư mục ảnh từ máy. Drive chỉ dùng khi bạn có thư mục public.
+              Sheet là nguồn chính. App tải ảnh từ link/folder trong sheet về data/images; chọn ảnh từ máy chỉ là dự phòng.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
@@ -751,6 +962,74 @@ export function BulkImageUpload() {
                   Lưu
                 </Button>
               </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <Label>Số quán tối đa/lượt</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={driveEntityLimit}
+                    onChange={(event) =>
+                      setDriveEntityLimit(Math.max(1, Math.min(Number(event.target.value) || 1, 500)))
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Số ảnh/quán</Label>
+                  <Select
+                    value={imageLimitToSelectValue(driveImageLimit)}
+                    onValueChange={(value) => setDriveImageLimit(normalizeDriveImageLimit(value))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DRIVE_IMAGE_LIMIT_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="mt-3 rounded-md border bg-background px-3 py-2 text-xs text-muted-foreground">
+                Lượt này sẽ tải {driveRunCandidateCount}/{driveImportCandidates.length} quán, theo thứ tự từng quán để tránh Drive giới hạn.
+                {driveImageLimit === "all" ? " Mỗi quán tải tất cả ảnh tìm thấy trong folder." : ` Mỗi quán tối đa ${driveImageLimit} ảnh.`}
+              </div>
+              {driveBusy && (
+                <div className="mt-3 grid gap-2 rounded-md border border-primary/30 bg-primary/5 p-3 text-xs text-primary sm:grid-cols-2 lg:grid-cols-4">
+                  <div>
+                    <div className="font-medium">{driveRunStats.done}/{driveRunStats.total}</div>
+                    <div>Quán đã xử lý</div>
+                  </div>
+                  <div>
+                    <div className="font-medium">{driveRunStats.imported} ảnh</div>
+                    <div>Đã tạo asset</div>
+                  </div>
+                  <div>
+                    <div className="font-medium">{formatBytes(driveSpeed)}/s</div>
+                    <div>{formatBytes(driveRunStats.downloadedBytes)} đã tải</div>
+                  </div>
+                  <div>
+                    <div className="font-medium">{driveEtaSeconds ? formatDuration(driveEtaSeconds) : "Đang tính"}</div>
+                    <div>Còn lại ước tính</div>
+                  </div>
+                  {driveRunStats.current ? (
+                    <div className="truncate sm:col-span-2 lg:col-span-4">
+                      Đang xử lý: {driveRunStats.current}
+                      {driveRunStats.skippedFiles ? ` · bỏ qua ${driveRunStats.skippedFiles} file đã có` : ""}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+              {driveCheckpoint && !driveBusy && (
+                <div className="mt-3 rounded-md border px-3 py-2 text-xs text-muted-foreground">
+                  Lần tải gần nhất: {driveCheckpoint.completedEntities}/{driveCheckpoint.totalEntities} quán,
+                  {` ${driveCheckpoint.importedAssets} ảnh mới, ${driveCheckpoint.skippedFiles} file đã có, ${formatBytes(driveCheckpoint.downloadedBytes)}.`}
+                </div>
+              )}
               <Button
                 type="button"
                 className={cn(
@@ -761,12 +1040,12 @@ export function BulkImageUpload() {
                 onClick={() => void importDriveImages()}
                 disabled={driveBusy || matching || busy || driveImportCandidates.length === 0}
               >
-                <Download /> Tải ảnh từ Drive ({driveImportCandidates.length})
+                <Download /> {driveCheckpoint && driveCheckpoint.status !== "done" ? "Tải tiếp" : "Tải ảnh từ link trong sheet"} ({driveRunCandidateCount})
               </Button>
               {shouldHighlightDriveDownload && (
                 <div className="mt-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-primary">
-                  Có {driveImportCandidates.length} quán có tên folder/link ảnh trong sheet. Bạn có
-                  thể chọn thư mục ảnh từ máy, hoặc tải từ Drive nếu đã có thư mục Drive gốc public.
+                  Có {driveImportCandidates.length} quán có tên folder/link ảnh trong sheet. App sẽ tải ảnh về
+                  thư mục data/images và không đưa ảnh lên git.
                 </div>
               )}
             </div>
@@ -790,7 +1069,16 @@ export function BulkImageUpload() {
               <div className="text-sm text-muted-foreground">Ảnh đọc được</div>
               {allAssets.length !== usableAssets.length ? (
                 <div className="mt-1 text-xs text-muted-foreground">
-                  {allAssets.length - usableAssets.length} link ảnh cần tải về máy trước khi dùng
+                  {allAssets.length - usableAssets.length} tham chiếu ảnh cần ghép/tải thành ảnh đọc được
+                </div>
+              ) : null}
+            </div>
+            <div className="rounded-lg border p-3">
+              <div className="text-2xl font-semibold">{entitiesWithReferenceOnly.length}</div>
+              <div className="text-sm text-muted-foreground">Có tên folder/link, chưa ghép</div>
+              {entitiesWithReferenceOnly.length > 0 ? (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Ví dụ như OLLIN Coffee nếu cột ảnh là tên folder: cần chọn thư mục ảnh từ máy hoặc tải Drive.
                 </div>
               ) : null}
             </div>
@@ -803,10 +1091,10 @@ export function BulkImageUpload() {
                   <AlertTriangle className="text-destructive" />
                 )}
               </div>
-              <div className="text-sm text-muted-foreground">Thiếu ảnh đọc được</div>
+              <div className="text-sm text-muted-foreground">Chưa có ảnh đọc được</div>
               {entitiesWithoutImage.length > 0 ? (
                 <div className="mt-1 text-xs text-muted-foreground">
-                  Chưa ghép ảnh. Hãy chọn thư mục ảnh từ máy, hoặc tải Drive nếu có thư mục public.
+                  Không có nghĩa sheet thiếu ảnh. Dòng có tên folder/link cần ghép local hoặc tải Drive trước.
                 </div>
               ) : null}
             </div>
@@ -847,6 +1135,25 @@ export function BulkImageUpload() {
             </div>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={retryDriveFailures}
+                disabled={driveBusy || matching || busy}
+              >
+                <RotateCcw /> Tải lại lỗi
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setDriveFailures([])}
+                disabled={driveBusy}
+              >
+                Bỏ qua lỗi
+              </Button>
+            </div>
             <div className="flex flex-wrap gap-2">
               {DRIVE_FAILURE_FILTERS.map((filter) => {
                 const count = driveFailureCounts[filter];
@@ -945,7 +1252,7 @@ export function BulkImageUpload() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visiblePending.map((item, idx) => (
+                  {visiblePending.map(({ item, index }) => (
                     <tr key={pendingKey(item)} className="border-t">
                       <td className="p-3">
                         <img
@@ -990,7 +1297,7 @@ export function BulkImageUpload() {
                         <Select
                           value={item.manualEntityId ?? "__none__"}
                           onValueChange={(value) =>
-                            setManual(idx, value === "__none__" ? null : value)
+                            setManual(index, value === "__none__" ? null : value)
                           }
                         >
                           <SelectTrigger className="h-8 w-60 text-xs">
@@ -1009,13 +1316,12 @@ export function BulkImageUpload() {
                       <td className="p-3">
                         <Select
                           value={item.role}
-                          onValueChange={(value) => setRole(idx, value as Asset["role"])}
+                          onValueChange={(value) => setRole(index, value as Asset["role"])}
                         >
                           <SelectTrigger className="h-8 w-36 text-xs">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="cover">Ảnh chính</SelectItem>
                             <SelectItem value="facade">Mặt tiền</SelectItem>
                             <SelectItem value="food_closeup">Món/chi tiết</SelectItem>
                             <SelectItem value="space">Không gian</SelectItem>
@@ -1030,7 +1336,7 @@ export function BulkImageUpload() {
                         <Button
                           size="icon"
                           variant="ghost"
-                          onClick={() => removeRow(idx)}
+                          onClick={() => removeRow(index)}
                           aria-label="Bỏ ảnh khỏi danh sách nhập"
                         >
                           <X />
@@ -1048,11 +1354,19 @@ export function BulkImageUpload() {
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between gap-3">
-            <CardTitle>Quán thiếu ảnh đọc được</CardTitle>
+            <CardTitle>Dòng chưa có ảnh đọc được</CardTitle>
             <Badge variant={entitiesWithoutImage.length === 0 ? "default" : "destructive"}>
               {entitiesWithoutImage.length}/{entities.length}
             </Badge>
           </div>
+          {entitiesWithReferenceOnly.length > 0 || entitiesWithoutAnyImageSource.length > 0 ? (
+            <CardDescription>
+              {entitiesWithReferenceOnly.length} dòng đã có tên folder/link nhưng chưa ghép/tải ảnh.
+              {entitiesWithoutAnyImageSource.length > 0
+                ? ` ${entitiesWithoutAnyImageSource.length} dòng chưa có cột ảnh trong sheet.`
+                : ""}
+            </CardDescription>
+          ) : null}
         </CardHeader>
         <CardContent>
           {entitiesWithoutImage.length === 0 ? (
@@ -1066,10 +1380,21 @@ export function BulkImageUpload() {
                   key={entity.entityId}
                   className="flex min-w-0 items-center gap-2 rounded-md border p-2"
                 >
-                  <span className="size-2 shrink-0 rounded-full bg-destructive" />
+                  <span
+                    className={`size-2 shrink-0 rounded-full ${
+                      imageReferenceEntityIds.has(entity.entityId)
+                        ? "bg-amber-500"
+                        : "bg-destructive"
+                    }`}
+                  />
                   <span className="truncate">{entity.name}</span>
-                  {entity.partnerFlag && (
+                  {imageReferenceEntityIds.has(entity.entityId) ? (
                     <Badge variant="outline" className="ml-auto">
+                      Có folder/link
+                    </Badge>
+                  ) : null}
+                  {entity.partnerFlag && (
+                    <Badge variant="outline" className={imageReferenceEntityIds.has(entity.entityId) ? "" : "ml-auto"}>
                       Đối tác
                     </Badge>
                   )}

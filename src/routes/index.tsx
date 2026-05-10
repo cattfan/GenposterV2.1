@@ -4,12 +4,8 @@ import { db } from "@/storage/db";
 import { getSettings } from "@/storage/settings";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import {
   AlertTriangle,
-  CheckCircle2,
-  Clock3,
   Database,
   Download,
   FileText,
@@ -21,6 +17,7 @@ import {
 import { PageContainer } from "@/components/PageHeader";
 import {
   getEntityImageReferencesWithAssets,
+  getImageReferenceEntityIds,
   isUsableImageAsset,
 } from "@/features/data/imageReferences";
 import { cn } from "@/lib/utils";
@@ -87,8 +84,16 @@ function Dashboard() {
       group.push(asset);
       assetsByEntityId.set(asset.entityId, group);
     }
+    const imageReferenceEntityIds = getImageReferenceEntityIds(entities, assets);
     const entitiesWithoutAssets = entities.filter((entity) => !assetEntityIds.has(entity.entityId))
       .length;
+    const entitiesWithReferenceOnly = entities.filter(
+      (entity) => !assetEntityIds.has(entity.entityId) && imageReferenceEntityIds.has(entity.entityId),
+    ).length;
+    const entitiesWithoutAnyImageSource = entities.filter(
+      (entity) =>
+        !assetEntityIds.has(entity.entityId) && !imageReferenceEntityIds.has(entity.entityId),
+    ).length;
     const driveDownloadCandidateCount = entities.filter(
       (entity) =>
         !assetEntityIds.has(entity.entityId) &&
@@ -113,18 +118,6 @@ function Dashboard() {
     );
     const aiConfigured = Boolean(settings.ai?.baseUrl && settings.ai.model);
 
-    const readinessChecks = [
-      entities.length > 0,
-      packTemplates.length > 0 && pageTemplates.length > 0,
-      hasUsableAssets,
-      aiConfigured,
-    ];
-    const rawReadiness = Math.round(
-      (readinessChecks.filter(Boolean).length / readinessChecks.length) * 100,
-    );
-    const readiness =
-      entities.length > 0 && !hasUsableAssets ? Math.min(rawReadiness, 49) : rawReadiness;
-
     const issues: DashboardIssue[] = [];
     if (entities.length === 0) {
       issues.push({
@@ -144,10 +137,10 @@ function Dashboard() {
     }
     if (assets.length === 0) {
       issues.push({
-        label: "Chưa có ảnh",
+        label: driveDownloadCandidateCount > 0 ? "Chưa ghép/tải ảnh" : "Chưa có ảnh",
         detail:
           driveDownloadCandidateCount > 0
-            ? `Có ${driveDownloadCandidateCount} quán có link ảnh trong bảng, cần tải ảnh Drive.`
+        ? `Có ${driveDownloadCandidateCount} dòng có tên folder/link trong sheet; cần tải ảnh về data/images.`
             : "Dữ liệu có thể đã nhập nhưng chưa có ảnh.",
         to: "/data",
         search: driveDownloadCandidateCount > 0 ? { tab: "images" } : undefined,
@@ -163,8 +156,12 @@ function Dashboard() {
     }
     if (entitiesWithoutAssets > 0) {
       issues.push({
-        label: "Quán thiếu ảnh",
-        detail: `${entitiesWithoutAssets} quán chưa có ảnh gắn trực tiếp.`,
+        label:
+          entitiesWithReferenceOnly > 0 ? "Có folder/link nhưng chưa ghép ảnh" : "Dòng chưa có ảnh",
+        detail:
+          entitiesWithReferenceOnly > 0
+            ? `${entitiesWithReferenceOnly} dòng đã có tên folder/link nhưng chưa có ảnh đọc được.`
+            : `${entitiesWithoutAssets} dòng chưa có ảnh đọc được.`,
         to: "/data",
         search: driveDownloadCandidateCount > 0 ? { tab: "images" } : undefined,
         tone: assets.length === 0 ? "danger" : "warning",
@@ -207,6 +204,8 @@ function Dashboard() {
       localAssets,
       linkAssets,
       driveDownloadCandidateCount,
+      entitiesWithReferenceOnly,
+      entitiesWithoutAnyImageSource,
       blobCount,
       brokenAssets,
       missingAssets,
@@ -220,12 +219,10 @@ function Dashboard() {
       totalSlots,
       mappedSlots,
       aiConfigured,
-      readiness,
       issues,
     };
   }, []);
 
-  const readiness = dashboard?.readiness ?? 0;
   const issues = dashboard?.issues ?? [];
 
   return (
@@ -233,9 +230,6 @@ function Dashboard() {
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Bảng tổng quan</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Trạng thái dữ liệu, ảnh, khuôn mẫu và lịch sử tạo nội dung.
-          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button asChild variant="outline" size="sm">
@@ -248,7 +242,7 @@ function Dashboard() {
             <Button asChild variant="outline" size="sm">
               <Link to="/data" search={{ tab: "images" }}>
                 <Download className="size-4" />
-                Tải ảnh Drive
+            Tải ảnh từ sheet
               </Link>
             </Button>
           )}
@@ -260,35 +254,6 @@ function Dashboard() {
           </Button>
         </div>
       </div>
-
-      <Card className="border-border/70">
-        <CardContent className="flex flex-col gap-4 p-4 md:flex-row md:items-center md:justify-between">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="text-sm font-medium">Mức sẵn sàng</div>
-              <StatusBadge tone={readiness >= 75 ? "good" : readiness >= 50 ? "warning" : "danger"}>
-                {readiness}%
-              </StatusBadge>
-            </div>
-            <Progress value={readiness} className="mt-3 max-w-xl" />
-            <p className="mt-2 text-sm text-muted-foreground">
-              Đủ dữ liệu, khuôn mẫu, ảnh và AI thì có thể tạo nội dung ổn định hơn.
-            </p>
-          </div>
-          <div className="grid grid-cols-2 gap-2 text-sm md:min-w-72">
-            <ReadinessChip active={(dashboard?.entities ?? 0) > 0} label="Dữ liệu" />
-            <ReadinessChip
-              active={(dashboard?.packTemplates ?? 0) > 0 && (dashboard?.pageTemplates ?? 0) > 0}
-              label="Khuôn mẫu"
-            />
-            <ReadinessChip
-              active={(dashboard?.localAssets ?? 0) > 0 || (dashboard?.linkAssets ?? 0) > 0}
-              label="Ảnh"
-            />
-            <ReadinessChip active={Boolean(dashboard?.aiConfigured)} label="AI" />
-          </div>
-        </CardContent>
-      </Card>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
@@ -353,12 +318,13 @@ function Dashboard() {
             ["Ảnh", dashboard?.assets ?? 0],
             ["Ảnh trong máy", dashboard?.blobCount ?? 0],
             ["Ảnh dạng link", dashboard?.linkAssets ?? 0],
-            ["Quán thiếu ảnh", dashboard?.entitiesWithoutAssets ?? 0],
+            ["Chờ ghép/tải", dashboard?.entitiesWithReferenceOnly ?? 0],
+            ["Chưa có nguồn ảnh", dashboard?.entitiesWithoutAnyImageSource ?? 0],
           ]}
           actionTo="/data"
           actionSearch={{ tab: "images" }}
           actionLabel={
-            (dashboard?.driveDownloadCandidateCount ?? 0) > 0 ? "Tải ảnh Drive" : "Kiểm ảnh"
+                      (dashboard?.driveDownloadCandidateCount ?? 0) > 0 ? "Tải ảnh từ sheet" : "Kiểm ảnh"
           }
         />
         <StatusCard
@@ -531,28 +497,6 @@ function StatusCard({
   );
 }
 
-function StatusBadge({ tone, children }: { tone: StatusTone; children: React.ReactNode }) {
-  return (
-    <Badge variant="outline" className={cn("border px-2 py-0.5", STATUS_TONE_CLASSES[tone])}>
-      {children}
-    </Badge>
-  );
-}
-
 function StatusDot({ tone }: { tone: StatusTone }) {
   return <span className={cn("size-2.5 shrink-0 rounded-full", STATUS_DOT_CLASSES[tone])} />;
-}
-
-function ReadinessChip({ active, label }: { active: boolean; label: string }) {
-  return (
-    <div
-      className={cn(
-        "flex items-center gap-2 rounded-lg border px-3 py-2",
-        active ? STATUS_TONE_CLASSES.good : STATUS_TONE_CLASSES.neutral,
-      )}
-    >
-      {active ? <CheckCircle2 className="size-4" /> : <Clock3 className="size-4" />}
-      <span className="font-medium">{label}</span>
-    </div>
-  );
 }

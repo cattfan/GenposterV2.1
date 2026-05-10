@@ -188,6 +188,58 @@ function splitClusterByRepeatedEntityRows(
   }));
 }
 
+function splitClusterByRepeatedAnchors(
+  key: string,
+  slots: Slot[],
+): Array<{ key: string; slots: Slot[] }> {
+  const entitySlots = slots.filter(isEntityDataBinding);
+  if (entitySlots.length <= 1) return [{ key, slots }];
+
+  const counts = new Map<string, number>();
+  for (const slot of entitySlots) {
+    const path = canonicalEntityBindingPath(slot);
+    if (!path) continue;
+    counts.set(path, (counts.get(path) ?? 0) + 1);
+  }
+
+  const anchorPath =
+    Array.from(counts.entries())
+      .filter(([, count]) => count > 1)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? undefined;
+  if (!anchorPath) return [{ key, slots }];
+
+  const anchors = entitySlots
+    .filter((slot) => canonicalEntityBindingPath(slot) === anchorPath)
+    .sort((a, b) => a.y - b.y || a.x - b.x);
+  if (anchors.length <= 1) return [{ key, slots }];
+
+  const out = anchors.map((anchor, index) => ({
+    key: `${key}__anchor_${index}`,
+    anchor,
+    slots: [] as Slot[],
+  }));
+
+  for (const slot of slots) {
+    let best = out[0];
+    let bestDistance = Infinity;
+    for (const cluster of out) {
+      const dy = Math.abs(slot.y + slot.height / 2 - (cluster.anchor.y + cluster.anchor.height / 2));
+      const dx = Math.abs(slot.x + slot.width / 2 - (cluster.anchor.x + cluster.anchor.width / 2));
+      const distance = dy * 3 + dx;
+      if (distance < bestDistance) {
+        best = cluster;
+        bestDistance = distance;
+      }
+    }
+    best.slots.push(slot);
+  }
+
+  return out.map((cluster) => ({
+    key: cluster.key,
+    slots: cluster.slots.sort((a, b) => a.y - b.y || a.x - b.x),
+  }));
+}
+
 /**
  * Cluster các slot CÓ bindingPath theo vị trí (Y nếu vertical, X nếu horizontal).
  * Mỗi cluster sẽ ăn 1 entity riêng.
@@ -305,10 +357,14 @@ function autoClusterSlots(
     explicitDataGroups.set(slot.dataGroupId, groupSlots);
     explicitDataGroupSlotIds.add(slot.slotId);
   }
-  const explicitClusters = Array.from(explicitDataGroups.entries()).map(([groupId, groupSlots]) => ({
-    key: `dataGroup:${groupId}`,
-    slots: groupSlots,
-  }));
+  const explicitClusters = Array.from(explicitDataGroups.entries()).flatMap(
+    ([groupId, groupSlots]) =>
+      splitSpatially(groupSlots, `dataGroup:${groupId}`).flatMap((cluster) =>
+        splitClusterByRepeatedEntityRows(cluster.key, cluster.slots).flatMap((rowCluster) =>
+          splitClusterByRepeatedAnchors(rowCluster.key, rowCluster.slots),
+        ),
+      ),
+  );
   const autoBindable = bindable.filter((slot) => !explicitDataGroupSlotIds.has(slot.slotId));
 
   // Bước 1: nhóm theo groupId nếu có

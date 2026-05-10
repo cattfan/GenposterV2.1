@@ -32,6 +32,7 @@ import {
 import { getAssetImageSource } from "@/engines/binding/assetImage";
 import { useResolvedImageSrc } from "@/storage/imageSrc";
 import { expandPageWithCardGroups } from "@/engines/binding/cardRepeater";
+import { isDataGroupMarkerSlot } from "@/engines/binding/slotMarkers";
 import { renderRichTextRuns } from "@/features/editor/richText";
 
 const IMAGE_PLACEHOLDER_BACKGROUND =
@@ -541,6 +542,7 @@ function SlotRenderer({
   }
 
   if (slot.kind === "text") {
+    if (isDataGroupMarkerSlot(slot)) return null;
     const text = slot.bindingPath
       ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool, {
           entities: allEntities,

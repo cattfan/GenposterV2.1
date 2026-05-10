@@ -23,6 +23,7 @@ import { LayoutGuides } from "@/features/render/LayoutGuides";
 import { useResolvedImageSrc } from "@/storage/imageSrc";
 import { expandPageWithCardGroups } from "@/engines/binding/cardRepeater";
 import type { ExpandedSlot } from "@/engines/binding/cardRepeater";
+import { isDataGroupMarkerSlot } from "@/engines/binding/slotMarkers";
 import { renderRichTextRuns } from "@/features/editor/richText";
 
 const IMAGE_PLACEHOLDER_BACKGROUND =
@@ -166,7 +167,7 @@ export function BindCanvas({
     return buildSelectionBounds(selectedOverlaySlots);
   }, [selectedOverlaySlots]);
   const marqueeSlots = useMemo(
-    () => visiblePrimarySlots.filter(isBindableSlot),
+    () => visiblePrimarySlots.filter(isSelectableSlot),
     [visiblePrimarySlots],
   );
   const marqueeRef = useRef<{
@@ -299,7 +300,7 @@ export function BindCanvas({
             showSafeFrame={showSafeFrame}
             label={
               slot.cardIndex === 1 && isFirstSlotOfCard(slot, expanded.slots)
-                ? `Nhóm ${slot.cardIndex + 1}: ${cardEntity?.name ?? "—"}`
+                ? cardEntity?.name
                 : undefined
             }
           />
@@ -326,7 +327,7 @@ export function BindCanvas({
                 slot.slotId,
                 mode,
                 mode === "replace"
-                  ? getDataGroupSlotIds(slot, visiblePrimarySlots)
+                  ? getReplaceSlotIds(slot, visiblePrimarySlots)
                   : getRelatedSlotIds(slot, visiblePrimarySlots),
               )
             }
@@ -354,7 +355,7 @@ export function BindCanvas({
               slot.slotId,
               mode,
               mode === "replace"
-                ? getDataGroupSlotIds(slot, visiblePrimarySlots)
+                ? getReplaceSlotIds(slot, visiblePrimarySlots)
                 : getRelatedSlotIds(slot, visiblePrimarySlots),
             )
           }
@@ -377,13 +378,12 @@ export function BindCanvas({
   );
 }
 
-function isBindableSlot(slot: Slot): boolean {
-  return (
-    slot.kind === "text" ||
-    slot.kind === "image" ||
-    slot.kind === "shape" ||
-    slot.kind === "section"
-  );
+function isSelectableSlot(slot: Slot): boolean {
+  return isDataBindableSlot(slot) || slot.kind === "section";
+}
+
+function isDataBindableSlot(slot: Slot): boolean {
+  return slot.kind === "text" || slot.kind === "image" || slot.kind === "shape";
 }
 
 function bindingStatusLabel(slot: Slot): string {
@@ -396,8 +396,9 @@ function bindingStatusLabel(slot: Slot): string {
   if (bindingPath.includes("entity.priceRange")) return "Giá";
   if (bindingPath.includes("entity.openingHours")) return "Giờ mở cửa";
   if (bindingPath.includes("entity.signatureDish")) return "Món nổi bật";
-  if (bindingPath.startsWith("asset.cover")) return "Ảnh cover";
+  if (bindingPath.startsWith("asset.cover")) return "Ảnh ngẫu nhiên";
   if (bindingPath.startsWith("asset.random_scope")) return "Ảnh theo nguồn/thư mục";
+  if (bindingPath.startsWith("asset.random_global")) return "Ảnh toàn hệ thống";
   if (bindingPath.startsWith("asset.random")) return "Ảnh ngẫu nhiên";
   if (bindingPath.startsWith("asset.")) return "Ảnh";
   return "Dữ liệu";
@@ -443,9 +444,47 @@ function getDataGroupSlotIds(slot: Slot, slots: ExpandedSlot[]): string[] {
   return [slot.slotId];
 }
 
+function slotCenterInside(container: Slot, item: Slot): boolean {
+  const centerX = item.x + item.width / 2;
+  const centerY = item.y + item.height / 2;
+  return (
+    centerX >= container.x &&
+    centerX <= container.x + container.width &&
+    centerY >= container.y &&
+    centerY <= container.y + container.height
+  );
+}
+
+function getContainedDataSlotIds(slot: Slot, slots: ExpandedSlot[]): string[] {
+  if (slot.kind !== "section" && slot.kind !== "group") return [];
+  return slots
+    .filter(
+      (item) =>
+        item.slotId !== slot.slotId &&
+        isDataBindableSlot(item) &&
+        !isDataGroupMarkerSlot(item) &&
+        slotCenterInside(slot, item),
+    )
+    .map((item) => item.slotId);
+}
+
+function getReplaceSlotIds(slot: Slot, slots: ExpandedSlot[]): string[] {
+  if (slot.kind === "section" || slot.kind === "group") {
+    const relatedIds = getRelatedSlotIds(slot, slots);
+    if (relatedIds.some((slotId) => slotId !== slot.slotId)) return relatedIds;
+  }
+  return getDataGroupSlotIds(slot, slots);
+}
+
 function getRelatedSlotIds(slot: Slot, slots: ExpandedSlot[]): string[] {
   const dataGroupIds = getDataGroupSlotIds(slot, slots);
   if (dataGroupIds.length > 1) return dataGroupIds;
+  if (slot.kind === "group") {
+    const childIds = slots
+      .filter((item) => item.groupId === slot.slotId)
+      .map((item) => item.slotId);
+    if (childIds.length > 0) return childIds;
+  }
   if (slot.groupId) {
     const groupIds = slots
       .filter((item) => item.groupId === slot.groupId)
@@ -458,6 +497,8 @@ function getRelatedSlotIds(slot: Slot, slots: ExpandedSlot[]): string[] {
       .map((item) => item.slotId);
     if (sectionIds.length > 1) return sectionIds;
   }
+  const containedIds = getContainedDataSlotIds(slot, slots);
+  if (containedIds.length > 0) return containedIds;
   return [slot.slotId];
 }
 
@@ -482,7 +523,7 @@ function SlotHitTarget({
   flatPreview?: boolean;
   onSelect: (mode: BindCanvasSelectionMode) => void;
 }) {
-  const isBindable = isBindableSlot(slot);
+  const isBindable = isSelectableSlot(slot);
   if (!isBindable) return null;
 
   const fontSize = (slot.style?.fontSize ?? 24) * scale;
@@ -765,7 +806,7 @@ function BindSlot({
   const rot = slot.rotation ? `rotate(${slot.rotation}deg)` : "";
   const transform = (rot + flip).trim() || undefined;
   const hasBinding = !!slot.bindingPath;
-  const isBindable = slot.kind === "text" || slot.kind === "image" || slot.kind === "shape";
+  const isBindable = isSelectableSlot(slot);
 
   const outline = selected
     ? "1px solid hsl(var(--primary) / 0.72)"
@@ -1003,6 +1044,7 @@ function BindSlot({
   }
 
   if (slot.kind === "text") {
+    if (isDataGroupMarkerSlot(slot)) return null;
     const text = slot.bindingPath
       ? resolveTextBinding(slot.bindingPath, entity, slot.staticText, entityPool, {
           entities: imageResolveEntities,
@@ -1055,7 +1097,7 @@ function BindSlot({
           fontSize: 12,
         }}
       >
-        {section?.layoutMode === "poster_list" ? "Danh sách ảnh" : "Nhóm"}
+        {section?.layoutMode === "poster_list" ? "Danh sách ảnh" : null}
       </div>
     );
   }

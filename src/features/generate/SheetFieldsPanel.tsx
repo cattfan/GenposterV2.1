@@ -35,7 +35,7 @@ function looksLikeImageUrl(value: unknown): boolean {
     return false;
   }
   return (
-    /\.(png|jpe?g|gif|webp|avif|svg)(\?|#|$)/.test(text) ||
+    /\.(png|jpe?g|jfif|gif|webp|avif|svg)(\?|#|$)/.test(text) ||
     text.includes("googleusercontent") ||
     text.includes("drive.google.com") ||
     text.includes("imgur") ||
