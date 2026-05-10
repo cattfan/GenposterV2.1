@@ -13,6 +13,8 @@ function dataImagesPlugin(): Plugin {
 
   return {
     name: "genposter-data-images",
+    enforce: "pre",
+    apply: "serve",
     configureServer(server) {
       server.middlewares.use(middleware);
     },
@@ -34,6 +36,12 @@ export default defineConfig({
       host: "0.0.0.0",
       port: 9090,
       strictPort: true,
+    },
+    test: {
+      environment: "node",
+      globals: true,
+      include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+      exclude: ["src/routes/*.tsx", "src/routes/*.ts"],
     },
   },
 });

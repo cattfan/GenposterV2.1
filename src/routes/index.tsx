@@ -15,7 +15,7 @@ import {
   UploadCloud,
 } from "lucide-react";
 import { PageContainer } from "@/components/PageHeader";
-import { buildDashboardSummary, type DashboardIssue } from "@/routes/dashboardSummary";
+import { buildDashboardSummary, type DashboardIssue } from "@/lib/dashboardSummary";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({
