@@ -2287,72 +2287,74 @@ export function PackTabContent({
     if (sel.length === 0) return toast.error("Chưa chọn trang nào");
     toast.info(`Đang xuất ${sel.length} trang...`);
     try {
-      // Group selected pages by bundle
-      const allBundleMeta = buildBundleGroups(currentJob, jobPack, tpls, entities);
-      const bundlesWithSelected = allBundleMeta
-        .map((group) => ({
-          ...group,
-          pages: group.pages.filter((meta) => sel.some((s) => s.pageIndex === meta.page.pageIndex)),
-        }))
-        .filter((group) => group.pages.length > 0);
-
-      if (bundlesWithSelected.length === 0) return toast.error("Không tìm thấy ảnh đang hiển thị để xuất");
-
-      // Step 1: Render all images
-      const bundleImageData: Array<{
-        group: (typeof bundlesWithSelected)[number];
-        imageBlobs: Array<{ blob: Blob; ext: string }>;
-      }> = [];
-
-      for (const group of bundlesWithSelected) {
-        const imageBlobs: Array<{ blob: Blob; ext: string }> = [];
-        for (const meta of group.pages) {
-          const node = packRefs.current.get(meta.page.pageIndex);
-          if (!node) continue;
-          try {
-            const blob = await nodeToPngBlob(node, 2);
-            imageBlobs.push({ blob, ext: "png" });
-          } catch {
-            // Skip pages that fail to render
-          }
-        }
-        if (imageBlobs.length > 0) {
-          bundleImageData.push({ group, imageBlobs });
+      // Step 1: Render all selected pages to PNG (same as old code)
+      const renderedPages: Array<{ pageIndex: number; blob: Blob }> = [];
+      let renderFailed = 0;
+      for (const p of sel) {
+        const node = packRefs.current.get(p.pageIndex);
+        if (!node) { renderFailed++; continue; }
+        try {
+          // Timeout each page render to 5 seconds to avoid hanging
+          const blob = await Promise.race([
+            nodeToPngBlob(node, 2),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("render-timeout")), 5000)),
+          ]);
+          renderedPages.push({ pageIndex: p.pageIndex, blob });
+        } catch {
+          renderFailed++;
         }
       }
 
-      if (bundleImageData.length === 0) return toast.error("Không tìm thấy ảnh đang hiển thị để xuất");
+      if (renderedPages.length === 0) {
+        return toast.error(`Không render được ảnh nào (${renderFailed} trang lỗi). Thử refresh trang rồi xuất lại.`);
+      }
 
-      // Step 2: Build bundle files (caption + xlsx) - all synchronous, no AI
+      // Step 2: Group rendered pages by bundle index
+      const bundleSize = Math.max(1, jobPack.orderedPages.length);
+      const totalPages = currentJob.pages.length;
+      const bundleMap = new Map<number, Array<{ pageIndex: number; blob: Blob }>>();
+
+      for (const rp of renderedPages) {
+        const originalIdx = currentJob.pages.findIndex((p) => p.pageIndex === rp.pageIndex);
+        const bundleIdx = totalPages <= bundleSize ? 1 : Math.floor(originalIdx / bundleSize) + 1;
+        if (!bundleMap.has(bundleIdx)) bundleMap.set(bundleIdx, []);
+        bundleMap.get(bundleIdx)!.push(rp);
+      }
+
+      // Step 3: Build ZIP structure
+      const bundleEntries = Array.from(bundleMap.entries()).sort((a, b) => a[0] - b[0]);
       const bundleArtifacts: Array<{ files: Array<{ name: string; blob: Blob }> }> = [];
 
-      for (let i = 0; i < bundleImageData.length; i++) {
-        const { group, imageBlobs } = bundleImageData[i];
-        const bundlePages = group.pages.map((meta) => ({
-          pageFile: meta.displayPageName,
-          pageIndex: meta.page.pageIndex,
-          pageName: meta.pageTemplate?.name ?? meta.page.workingTemplate?.name,
-          entityId: meta.page.entityId,
-          entityName: meta.page.entityName,
-          items: meta.page.items,
+      for (const [bundleIdx, pages] of bundleEntries) {
+        const files: Array<{ name: string; blob: Blob }> = pages.map((rp, idx) => ({
+          name: `${idx + 1}.png`,
+          blob: rp.blob,
         }));
 
-        const files: Array<{ name: string; blob: Blob }> = imageBlobs.map((img, idx) => ({
-          name: `${idx + 1}.${img.ext}`,
-          blob: img.blob,
-        }));
+        // Get entity/page data for this bundle's pages
+        const bundlePages = pages.map((rp) => {
+          const p = currentJob.pages.find((pg) => pg.pageIndex === rp.pageIndex)!;
+          return {
+            pageFile: p.pageFile,
+            pageIndex: p.pageIndex,
+            pageName: p.workingTemplate?.name,
+            entityId: p.entityId,
+            entityName: p.entityName,
+            items: p.items,
+          };
+        });
 
-        // Caption (local fallback, no AI - instant)
+        // Caption (local, no AI)
         const captionBlob = buildFallbackCaptionBlob({
           packName: jobPack.name,
-          bundleLabel: group.bundleLabel,
+          bundleLabel: `Bộ ${bundleIdx}`,
           pages: bundlePages,
           entities,
           variantCount: 3,
         });
         files.push({ name: "caption.txt", blob: captionBlob });
 
-        // doitac.xlsx (sync, fast)
+        // doitac.xlsx
         const xlsxBlob = buildPartnerWorkbookBlob({ pages: bundlePages, entities });
         files.push({ name: "doitac.xlsx", blob: xlsxBlob });
 
@@ -2361,13 +2363,13 @@ export function PackTabContent({
 
       const templateName = formatTemplateDisplayName(currentJob.packTemplateName, "bo-anh");
       const zipFileName = bundleArtifacts.length === 1
-        ? `${formatZipFileName(templateName, { version: bundlesWithSelected[0].bundleIndex })}.zip`
+        ? `${formatZipFileName(templateName, { version: bundleEntries[0][0] })}.zip`
         : `${formatZipFileName(templateName)}.zip`;
 
       await downloadMultiBundleZip(bundleArtifacts, zipFileName);
       await db.jobs.put({ ...currentJob, status: "exported" });
       toast.success(
-        `Đã xuất ZIP · ${bundleArtifacts.length} bộ · ${bundleArtifacts.reduce((sum, b) => sum + b.files.length, 0)} file`,
+        `Đã xuất ZIP · ${bundleArtifacts.length} bộ · ${renderedPages.length} ảnh`,
       );
     } catch (error) {
       toast.error("Không thể xuất ZIP: " + formatExportError(error));
@@ -2384,10 +2386,13 @@ export function PackTabContent({
         const node = packRefs.current.get(meta.page.pageIndex);
         if (!node) continue;
         try {
-          const blob = await nodeToPngBlob(node, 2);
+          const blob = await Promise.race([
+            nodeToPngBlob(node, 2),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("render-timeout")), 8000)),
+          ]);
           imageBlobs.push({ blob, ext: "png" });
         } catch {
-          // Skip pages that fail to render
+          // Skip pages that fail to render or timeout
         }
       }
       if (imageBlobs.length === 0) return toast.error("Không tìm thấy ảnh trong bộ này để tải");
