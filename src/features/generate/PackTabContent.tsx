@@ -115,7 +115,7 @@ import {
 } from "@/features/generate/generatePresetPortability";
 import { formatTemplateDisplayName } from "@/lib/templateNames";
 import { usePageCommands, type CommandEntry } from "@/components/CommandPalette";
-import { EmptyState, StepIndicator } from "@/components/ux";
+import { EmptyState, StepIndicator, createProgressToast } from "@/components/ux";
 
 type Filter = "all" | "selected" | "errors" | "partner";
 type SurfaceSelectionRect = { left: number; top: number; width: number; height: number };
@@ -2295,12 +2295,19 @@ export function PackTabContent({
     if (!currentJob || !jobPack) return;
     const sel = currentJob.pages.filter((p) => p.selected);
     if (sel.length === 0) return toast.error("Chưa chọn trang nào");
-    toast.info(`Đang xuất ${sel.length} trang...`);
+
+    const progress = createProgressToast({
+      initialLabel: `Đang render ${sel.length} trang...`,
+      total: sel.length,
+    });
+
     try {
       // Step 1: Render all selected pages to PNG (same as old code)
       const renderedPages: Array<{ pageIndex: number; blob: Blob }> = [];
       let renderFailed = 0;
-      for (const p of sel) {
+      for (let i = 0; i < sel.length; i++) {
+        const p = sel[i];
+        progress.update(i, `Đang render ảnh ${i + 1}/${sel.length}...`);
         const node = packRefs.current.get(p.pageIndex);
         if (!node) { renderFailed++; continue; }
         try {
@@ -2316,8 +2323,11 @@ export function PackTabContent({
       }
 
       if (renderedPages.length === 0) {
-        return toast.error(`Không render được ảnh nào (${renderFailed} trang lỗi). Thử refresh trang rồi xuất lại.`);
+        progress.error(`Không render được ảnh nào (${renderFailed} trang lỗi)`);
+        return;
       }
+
+      progress.update(renderedPages.length, "Đang tạo caption và đóng gói ZIP...");
 
       // Step 2: Group rendered pages by bundle index
       const bundleSize = Math.max(1, jobPack.orderedPages.length);
@@ -2392,21 +2402,26 @@ export function PackTabContent({
 
       await downloadMultiBundleZip(bundleArtifacts, zipFileName);
       await db.jobs.put({ ...currentJob, status: "exported" });
-      toast.success(
+      progress.success(
         `Đã xuất ZIP · ${bundleArtifacts.length} bộ · ${renderedPages.length} ảnh`,
       );
     } catch (error) {
-      toast.error("Không thể xuất ZIP: " + formatExportError(error));
+      progress.error("Không thể xuất ZIP: " + formatExportError(error));
     }
   };
 
   const exportBundleZip = async (bundle: (typeof bundleGroups)[number]) => {
     if (!currentJob || !jobPack) return;
     setBundleExportingIndex(bundle.bundleIndex);
-    toast.info(`Đang tải ${bundle.bundleLabel}...`);
+    const progress = createProgressToast({
+      initialLabel: `Đang tải ${bundle.bundleLabel}...`,
+      total: bundle.pages.length,
+    });
     try {
       const imageBlobs: Array<{ blob: Blob; ext: string }> = [];
-      for (const meta of bundle.pages) {
+      for (let i = 0; i < bundle.pages.length; i++) {
+        const meta = bundle.pages[i];
+        progress.update(i, `Đang render ${i + 1}/${bundle.pages.length}...`);
         const node = packRefs.current.get(meta.page.pageIndex);
         if (!node) continue;
         try {
@@ -2419,7 +2434,12 @@ export function PackTabContent({
           // Skip pages that fail to render or timeout
         }
       }
-      if (imageBlobs.length === 0) return toast.error("Không tìm thấy ảnh trong bộ này để tải");
+      if (imageBlobs.length === 0) {
+        progress.error("Không tìm thấy ảnh trong bộ này để tải");
+        return;
+      }
+
+      progress.update(imageBlobs.length, "Đang tạo caption và đóng gói...");
 
       const bundlePages = bundle.pages.map((meta) => ({
         pageFile: meta.displayPageName,
@@ -2467,9 +2487,9 @@ export function PackTabContent({
       const zipFileName = `${formatZipFileName(templateName, { version: bundle.bundleIndex })}.zip`;
 
       await downloadMultiBundleZip([{ files }], zipFileName);
-      toast.success(`Đã tải ${bundle.bundleLabel}`);
+      progress.success(`Đã tải ${bundle.bundleLabel}`);
     } catch (error) {
-      toast.error("Không thể tải bộ: " + formatExportError(error));
+      progress.error("Không thể tải bộ: " + formatExportError(error));
     } finally {
       setBundleExportingIndex(null);
     }
