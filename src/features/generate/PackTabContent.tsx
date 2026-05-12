@@ -3518,9 +3518,36 @@ export function PackTabContent({
           {/* Kết quả render */}
           {currentJob && currentJob.pages.length > 0 && (
             <>
+              {bundleGroups.length > 2 && (
+                <div className="sticky top-0 z-20 -mx-4 mb-3 flex flex-wrap items-center gap-2 border-b bg-background/95 px-4 py-2 backdrop-blur">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    Nhảy tới bộ:
+                  </span>
+                  {bundleGroups.map((bundle) => (
+                    <Button
+                      key={bundle.bundleIndex}
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => {
+                        const el = document.getElementById(`bundle-${bundle.bundleIndex}`);
+                        el?.scrollIntoView({ behavior: "smooth", block: "start" });
+                      }}
+                      title={`Tới ${bundle.bundleLabel} (${bundle.pages.length} trang)`}
+                    >
+                      {bundle.bundleLabel}
+                    </Button>
+                  ))}
+                </div>
+              )}
               <div className="space-y-6">
                 {bundleGroups.map((bundle, bundleGroupIndex) => (
-                  <div key={bundle.bundleIndex} className="space-y-3">
+                  <div
+                    key={bundle.bundleIndex}
+                    id={`bundle-${bundle.bundleIndex}`}
+                    className="space-y-3 scroll-mt-20"
+                  >
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex flex-wrap items-center gap-3">
                         <h2 className="text-lg font-semibold">{bundle.bundleLabel}</h2>
