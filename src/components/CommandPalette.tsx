@@ -257,10 +257,11 @@ export function getRegisteredPageCommands(): CommandEntry[] {
 export function usePageCommands(commands: CommandEntry[]) {
   const ref = useRef<CommandEntry[]>(commands);
   ref.current = commands;
+  const commandIdsKey = commands.map((c) => c.id).join("|");
   useEffect(() => {
     return registerPageCommands(ref.current);
     // Re-register whenever the *shape* of commands changes (ids).
-  }, [commands.map((c) => c.id).join("|")]);
+  }, [commandIdsKey]);
 }
 
 function usePageCommandsSnapshot(): CommandEntry[] {

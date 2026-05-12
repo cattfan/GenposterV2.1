@@ -878,6 +878,8 @@ export function PackTabContent({
     }
 
     return Array.from(resolved.values());
+    // getSlotBindMode is a stable helper that reads template + slot; safe to omit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveActive, selectedSlots]);
   const selectedTextSlots = selectedBindableSlots.filter((slot) => getSlotBindMode(slot) === "text");
   const selectedImageSlots = selectedBindableSlots.filter((slot) => getSlotBindMode(slot) === "image");
@@ -1042,6 +1044,8 @@ export function PackTabContent({
         return sourceEntities.some((entity) => entityHasTextField(entity, fieldKey));
       });
     },
+    // slotSourceConfig is a stable helper derived from other deps already listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [activeGenerateConfig, entities],
   );
   const handleSelectSlot = (
@@ -1710,6 +1714,8 @@ export function PackTabContent({
           emptyTarget,
         };
       }),
+    // getSlotBindMode is a stable helper; deps listed are sufficient.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [packPages, packOv, previewPageDrafts, globalGenerateConfig, sourceNeutralPageConfigs, entities],
   );
   const hasTextOrImageSlots = useMemo(

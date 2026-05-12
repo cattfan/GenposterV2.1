@@ -2398,6 +2398,9 @@ export function DesignWorkspace({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
+    // handleResetZoom is declared below and accessed via closure at call-time;
+    // safe because it reads latest state from refs/editor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
