@@ -22,6 +22,30 @@
   --font-sans:
     "Inter", "Be Vietnam Pro", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
+
+  /* Spacing scale — Requirement 1.2 */
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-5: 20px;
+  --spacing-6: 24px;
+  --spacing-8: 32px;
+  --spacing-12: 48px;
+
+  /* Typography scale — Requirement 1.3 */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+  --text-2xl: 24px;
+
+  /* Shadow scale — Requirement 1.4 */
+  --shadow-sm: 0 1px 2px color-mix(in oklch, var(--foreground) 6%, transparent);
+  --shadow-md: 0 4px 12px color-mix(in oklch, var(--foreground) 10%, transparent);
+  --shadow-lg: 0 12px 32px color-mix(in oklch, var(--foreground) 14%, transparent);
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -246,5 +270,82 @@
 
   .design-stage-scroll::-webkit-scrollbar-corner {
     background: transparent;
+  }
+
+  /* Focus ring - Requirement 15.2 */
+  .focus-ring {
+    outline: none;
+  }
+  .focus-ring:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-md);
+  }
+
+  /* Inspector section accordion styles - Requirement 6 */
+  .inspector-section {
+    border-bottom: 1px solid var(--border);
+  }
+  .inspector-section:last-child {
+    border-bottom: none;
+  }
+  .inspector-section-header {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 12px;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--foreground);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: background-color 120ms ease;
+  }
+  .inspector-section-header:hover {
+    background: color-mix(in oklch, var(--muted) 60%, transparent);
+  }
+  .inspector-section-body {
+    padding: 8px 12px 14px;
+  }
+
+  /* Toolbar group separator */
+  .toolbar-separator {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+    margin: 0 4px;
+    align-self: center;
+  }
+
+  /* Subtle panel shadow for Design Workspace sub-panels */
+  .ux-panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* Number input with step hints */
+  .ux-number-input {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Keyboard shortcut hint */
+  .ux-kbd {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 1px 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--muted-foreground);
+    background: color-mix(in oklch, var(--muted) 70%, transparent);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    line-height: 1.4;
   }
 }

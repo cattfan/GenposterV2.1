@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { initThemeOnce, useTheme } from "@/hooks/useTheme";
 import { GlobalCommandPaletteHost } from "@/components/CommandPalette";
+import { ShortcutsDialog, useShortcutsDialogHotkey } from "@/components/ux";
 
 const SIDEBAR_COLLAPSED_KEY = "cpg_sidebar_collapsed";
 
@@ -333,7 +334,30 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
-      <GlobalCommandPaletteHost />
+      <GlobalCommandPaletteHost extraCommands={useAppShellCommands()} />
+      <AppShellShortcuts />
     </div>
   );
+}
+
+function AppShellShortcuts() {
+  const { open, setOpen } = useShortcutsDialogHotkey();
+  return <ShortcutsDialog open={open} onOpenChange={setOpen} />;
+}
+
+/** Trả về lệnh mở danh sách phím tắt để thêm vào Command Palette. */
+function useAppShellCommands() {
+  return useMemo(() => [
+    {
+      id: "help:shortcuts",
+      label: "Xem danh sách phím tắt",
+      group: "Trợ giúp",
+      keywords: ["shortcut", "phim tat", "help"],
+      action: () => {
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+        }
+      },
+    },
+  ], []);
 }
