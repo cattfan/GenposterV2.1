@@ -102,6 +102,7 @@ import {
 import {
   buildPartnerWorkbookBlob,
   buildFallbackCaptionBlob,
+  buildTikTokCaptionBlob,
 } from "@/features/generate/exportArtifacts";
 import { applyFontVariationToGeneratedJob } from "@/features/generate/fontVariation";
 import {
@@ -2344,14 +2345,28 @@ export function PackTabContent({
           };
         });
 
-        // Caption (local, no AI)
-        const captionBlob = buildFallbackCaptionBlob({
-          packName: jobPack.name,
-          bundleLabel: `Bộ ${bundleIdx}`,
-          pages: bundlePages,
-          entities,
-          variantCount: 3,
-        });
+        // Caption - try AI with timeout, fallback to local
+        let captionBlob: Blob;
+        try {
+          captionBlob = await Promise.race([
+            buildTikTokCaptionBlob({
+              packName: jobPack.name,
+              bundleLabel: `Bộ ${bundleIdx}`,
+              pages: bundlePages,
+              entities,
+              variantCount: 3,
+            }),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 15000)),
+          ]);
+        } catch {
+          captionBlob = buildFallbackCaptionBlob({
+            packName: jobPack.name,
+            bundleLabel: `Bộ ${bundleIdx}`,
+            pages: bundlePages,
+            entities,
+            variantCount: 3,
+          });
+        }
         files.push({ name: "caption.txt", blob: captionBlob });
 
         // doitac.xlsx
@@ -2412,14 +2427,28 @@ export function PackTabContent({
         blob: img.blob,
       }));
 
-      // Caption (local fallback, no AI - instant)
-      const captionBlob = buildFallbackCaptionBlob({
-        packName: jobPack.name,
-        bundleLabel: bundle.bundleLabel,
-        pages: bundlePages,
-        entities,
-        variantCount: 3,
-      });
+      // Caption - try AI with timeout, fallback to local
+      let captionBlob: Blob;
+      try {
+        captionBlob = await Promise.race([
+          buildTikTokCaptionBlob({
+            packName: jobPack.name,
+            bundleLabel: bundle.bundleLabel,
+            pages: bundlePages,
+            entities,
+            variantCount: 3,
+          }),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 15000)),
+        ]);
+      } catch {
+        captionBlob = buildFallbackCaptionBlob({
+          packName: jobPack.name,
+          bundleLabel: bundle.bundleLabel,
+          pages: bundlePages,
+          entities,
+          variantCount: 3,
+        });
+      }
       files.push({ name: "caption.txt", blob: captionBlob });
 
       const xlsxBlob = buildPartnerWorkbookBlob({ pages: bundlePages, entities });
