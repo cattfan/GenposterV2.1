@@ -23,26 +23,30 @@ export function buildPartnerWorkbookBlob(input: {
   pages: ExportPageEntityData[];
   entities: Entity[];
 }): Blob {
-  const partners = collectPartnerLikeEntities(input.pages, input.entities);
-  const headers = ["Tên", "Danh mục", "Địa chỉ", "Đối tác"];
-  const dataRows = partners.length > 0
-    ? [
-        headers,
-        ...partners.map((entity) => [
-          entity.name || "",
-          entity.categoryMain || entity.categorySub || "",
-          entity.address || "",
-          entity.partnerFlag ? "Có" : "",
-        ]),
-      ]
-    : [["Không có đối tác hoặc dữ liệu nào trong bộ ảnh đã chọn."]];
+  const used = collectUsedEntities(input.pages, input.entities);
+  const partners = used.filter((e) => e.partnerFlag);
 
   const workbook = XLSX.utils.book_new();
-  const partnerSheet = XLSX.utils.aoa_to_sheet(dataRows);
-  partnerSheet["!cols"] = partners.length
-    ? [{ wch: 30 }, { wch: 18 }, { wch: 40 }, { wch: 10 }]
-    : [{ wch: 48 }];
-  XLSX.utils.book_append_sheet(workbook, partnerSheet, "doitac");
+
+  if (partners.length === 0) {
+    const dataRows = [["Không có đối tác"]];
+    const sheet = XLSX.utils.aoa_to_sheet(dataRows);
+    sheet["!cols"] = [{ wch: 24 }];
+    XLSX.utils.book_append_sheet(workbook, sheet, "doitac");
+  } else {
+    const headers = ["Tên", "Danh mục", "Địa chỉ"];
+    const dataRows = [
+      headers,
+      ...partners.map((entity) => [
+        entity.name || "",
+        entity.categoryMain || entity.categorySub || "",
+        entity.address || "",
+      ]),
+    ];
+    const sheet = XLSX.utils.aoa_to_sheet(dataRows);
+    sheet["!cols"] = [{ wch: 30 }, { wch: 18 }, { wch: 40 }];
+    XLSX.utils.book_append_sheet(workbook, sheet, "doitac");
+  }
 
   const buffer = XLSX.write(workbook, { bookType: "xlsx", type: "array" }) as ArrayBuffer;
   return new Blob([buffer], { type: XLSX_MIME });
@@ -230,30 +234,31 @@ function buildFallbackCaptions(
 ): CaptionVariant[] {
   const names = entities.map((entity) => entity.name).filter(Boolean);
   const topNames = names.slice(0, 4).join(", ");
+  const seoKeywords = buildSeoKeywords(entities);
   const variants: Array<{ headline: string; body: string }> = [
     {
-      headline: `Đà Lạt hóa ra có cả list spot xịn mlem vậy 😎`,
+      headline: `ĐÀ LẠT HÓA RA CÓ CẢ LIST SPOT XỊN MLEM VẬY`,
       body: topNames.length > 0
-        ? `Em thề những địa điểm này rất đáng để lưu lại đó nha. Gồm ${topNames}. Dùng cẩm nang này, cả lịch trình Đà Lạt sẽ chất hơn, nhanh hơn, không sợ trôi giữa muôn vàn lựa chọn đâu.`
-        : `Em thề những địa điểm này rất đáng để lưu lại đó nha. Dùng cẩm nang này, cả lịch trình Đà Lạt sẽ chất hơn, nhanh hơn, không sợ trôi giữa muôn vàn lựa chọn đâu.`,
+        ? `Em thề những địa điểm này rất đáng để lưu lại. Gồm ${topNames}. Dùng cẩm nang này, lịch trình du lịch Đà Lạt sẽ chất hơn, ${seoKeywords}. Không sợ trôi giữa muôn vàn lựa chọn đâu.`
+        : `Em thề những địa điểm này rất đáng để lưu lại. Dùng cẩm nang ${packName.toLowerCase()} này, lịch trình du lịch Đà Lạt sẽ chất hơn, ${seoKeywords}. Không sợ trôi giữa muôn vàn lựa chọn.`,
     },
     {
-      headline: `Lưu ngay ${names.length || "bộ"} gợi ý Đà Lạt trước khi đi 📌`,
+      headline: `LƯU NGAY ${names.length || "BỘ"} GỢI Ý ĐÀ LẠT TRƯỚC KHI ĐI`,
       body: topNames.length > 0
-        ? `Mình tổng hợp ${packName.toLowerCase()} với ${topNames}. Ai đi Đà Lạt mà chưa biết đi đâu thì save post này lại nha!`
-        : `Mình tổng hợp ${packName.toLowerCase()} cho ai đi Đà Lạt mà chưa biết đi đâu. Save post này lại nha!`,
+        ? `Mình tổng hợp ${packName.toLowerCase()} với ${topNames}. Ai đi Đà Lạt mà chưa biết đi đâu, ăn gì, ở đâu thì save post này. Review chi tiết ${seoKeywords}.`
+        : `Mình tổng hợp ${packName.toLowerCase()} cho ai đi Đà Lạt mà chưa biết đi đâu, ăn gì, ở đâu. Save post này lại. Review chi tiết ${seoKeywords}.`,
     },
     {
-      headline: `Đà Lạt đi hoài không chán vì có list này 🌿`,
+      headline: `ĐI ĐÀ LẠT HOÀI KHÔNG CHÁN VÌ CÓ LIST NÀY`,
       body: topNames.length > 0
-        ? `Toàn chỗ chất lượng: ${topNames}. Lưu lại rồi tag đứa hay rủ đi Đà Lạt để lên lịch ngay!`
-        : `Toàn chỗ chất lượng, lưu lại rồi tag đứa hay rủ đi Đà Lạt để lên lịch ngay!`,
+        ? `Toàn chỗ chất lượng: ${topNames}. Lưu lại rồi tag đứa hay rủ đi Đà Lạt để lên lịch ngay. Cẩm nang du lịch Đà Lạt, ${seoKeywords} đầy đủ nhất.`
+        : `Toàn chỗ chất lượng, lưu lại rồi tag đứa hay rủ đi Đà Lạt để lên lịch ngay. Cẩm nang du lịch Đà Lạt, ${seoKeywords} đầy đủ nhất.`,
     },
     {
-      headline: `Newbie Đà Lạt cần gì thì coi đây 🗺️`,
+      headline: `NEWBIE ĐÀ LẠT NHẤT ĐỊNH PHẢI BIẾT NHỮNG CHỖ NÀY`,
       body: topNames.length > 0
-        ? `Lần đầu đi Đà Lạt? Đây là ${packName.toLowerCase()} mình recommend: ${topNames}. Đi theo list này khỏi lo lạc!`
-        : `Lần đầu đi Đà Lạt? Đây là ${packName.toLowerCase()} mình recommend. Đi theo list này khỏi lo lạc!`,
+        ? `Lần đầu đi Đà Lạt? Đây là ${packName.toLowerCase()} mình recommend: ${topNames}. Đi theo list này khỏi lo lạc. Checkin, review, ${seoKeywords} chuẩn nhất.`
+        : `Lần đầu đi Đà Lạt? Đây là ${packName.toLowerCase()} mình recommend. Đi theo list này khỏi lo lạc. Checkin, review, ${seoKeywords} chuẩn nhất.`,
     },
   ];
 
@@ -263,6 +268,26 @@ function buildFallbackCaptions(
   });
 }
 
+function buildSeoKeywords(entities: Entity[]): string {
+  const cats = new Set<string>();
+  for (const e of entities) {
+    if (e.categoryMain) cats.add(e.categoryMain);
+    if (e.categorySub) cats.add(e.categorySub);
+  }
+  const catMap: Record<string, string> = {
+    cafe: "cafe view đẹp",
+    quan_an: "quán ăn ngon",
+    homestay: "homestay xinh",
+    checkin: "điểm checkin",
+    spa: "spa thư giãn",
+    thue_xe: "thuê xe tự lái",
+  };
+  const keywords = Array.from(cats)
+    .map((c) => catMap[c] || c)
+    .slice(0, 3);
+  return keywords.length > 0 ? keywords.join(", ") : "cafe, quán ăn, homestay";
+}
+
 function normalizeCaptionVariant(
   headline: string,
   body: string,
@@ -270,7 +295,7 @@ function normalizeCaptionVariant(
   entities: Entity[],
 ): CaptionVariant {
   return {
-    headline: trimAt(headline.trim(), 100),
+    headline: trimAt(headline.toUpperCase(), 90),
     body: trimAt(body.replace(/\s+/g, " ").trim(), 300),
     hashtags: ensureHashtags(hashtags, entities),
   };
