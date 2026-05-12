@@ -9,6 +9,7 @@ import {
   buildBorder,
   buildGradient,
   buildTextStyle,
+  isEntityScopedImageBindingPath,
   resolveImageBinding,
   resolveTextBinding,
   shapeBorderRadius,
@@ -20,6 +21,7 @@ import {
   type SlotImagePlan,
 } from "@/engines/binding/imagePlan";
 import { LayoutGuides } from "@/features/render/LayoutGuides";
+import { isLikelyGeneratePageBackgroundSlot } from "@/features/generate/backgroundGuards";
 import { useResolvedImageSrc } from "@/storage/imageSrc";
 import { expandPageWithCardGroups } from "@/engines/binding/cardRepeater";
 import type { ExpandedSlot } from "@/engines/binding/cardRepeater";
@@ -29,6 +31,8 @@ import { mergeBindingSources } from "@/engines/binding/sourceContext";
 
 const IMAGE_PLACEHOLDER_BACKGROUND =
   "repeating-linear-gradient(135deg, rgba(99,102,241,0.035) 0, rgba(99,102,241,0.035) 12px, rgba(248,250,252,0.28) 12px, rgba(248,250,252,0.28) 24px)";
+const BIND_CANVAS_INTERACTIVE_SELECTOR =
+  "[data-bind-hit-target], [data-bind-selection-overlay], [data-bind-selection-bounds], [data-bind-card-badge]";
 
 type BindCanvasSelectionMode = "replace" | "toggle" | "group" | "replace-many";
 type SelectionRect = { left: number; top: number; width: number; height: number };
@@ -102,7 +106,7 @@ export function BindCanvas({
 
   const ghostSlots = useMemo(() => expanded.slots.filter((slot) => slot.cardIndex > 0), [expanded]);
 
-  const resolveEntityForSlot = (
+  const resolveEntityForSlot = useCallback((
     slot: Slot & { originalSlotId?: string; __cardEntityId?: string },
   ) => {
     const override =
@@ -127,10 +131,12 @@ export function BindCanvas({
       )?.entityId;
       if (sectionEntity) return entityLookup.get(sectionEntity);
     }
-    if (slotItems && slotItems.length > 0) return undefined;
     if (slot.__cardEntityId) return entityLookup.get(slot.__cardEntityId);
+    if (slotItems && slotItems.length > 0 && slot.bindingPath?.startsWith("entity.")) {
+      return undefined;
+    }
     return entity;
-  };
+  }, [bindingSources, entity, entityLookup, imageResolveEntities, slotEntityOverride, slotItems]);
 
   const imagePlan: SlotImagePlan = useMemo(
     () =>
@@ -144,9 +150,7 @@ export function BindCanvas({
     [
       expanded.slots,
       assets,
-      entityLookup,
-      slotEntityOverride,
-      entity,
+      resolveEntityForSlot,
       seedKey,
       template.pageTemplateId,
       imageResolveEntities,
@@ -172,8 +176,11 @@ export function BindCanvas({
     () =>
       selectedSlotIds
         .map((slotId) => visibleSlotById.get(slotId))
-        .filter((slot): slot is ExpandedSlot => !!slot),
-    [selectedSlotIds, visibleSlotById],
+        .filter(
+          (slot): slot is ExpandedSlot =>
+            !!slot && !isLikelyGeneratePageBackgroundSlot(slot, template),
+        ),
+    [selectedSlotIds, template, visibleSlotById],
   );
 
   const selectedBounds = useMemo(() => {
@@ -181,8 +188,16 @@ export function BindCanvas({
     return buildSelectionBounds(selectedOverlaySlots);
   }, [selectedOverlaySlots]);
   const marqueeSlots = useMemo(
-    () => visiblePrimarySlots.filter(isSelectableSlot),
-    [visiblePrimarySlots],
+    () => visiblePrimarySlots.filter((slot) => isSelectableSlot(slot, template)),
+    [template, visiblePrimarySlots],
+  );
+  const hitTargetSlots = useMemo(
+    () =>
+      visiblePrimarySlots
+        .filter((slot) => isSelectableSlot(slot, template))
+        .slice()
+        .sort(compareHitTargetSlots),
+    [template, visiblePrimarySlots],
   );
   const marqueeRef = useRef<{
     start: { x: number; y: number };
@@ -207,8 +222,9 @@ export function BindCanvas({
   const startMarqueeSelection = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       if (event.button !== 0) return;
-      const target = event.target as HTMLElement;
-      if (target.closest("[data-bind-hit-target]")) return;
+      if (isBindCanvasInteractiveTarget(event.target)) {
+        return;
+      }
       event.preventDefault();
       const canvas = event.currentTarget;
       const pointerId = event.pointerId;
@@ -337,13 +353,15 @@ export function BindCanvas({
             scale={scale}
             selected={selectedSlotIds.includes(slot.slotId)}
             onSelect={(mode) =>
-              onSelectSlot(
-                slot.slotId,
-                mode,
-                mode === "replace"
-                  ? getReplaceSlotIds(slot, visiblePrimarySlots)
-                  : getRelatedSlotIds(slot, visiblePrimarySlots),
-              )
+              isLikelyGeneratePageBackgroundSlot(slot, template)
+                ? undefined
+                : onSelectSlot(
+                    slot.slotId,
+                    mode,
+                    mode === "replace"
+                      ? getReplaceSlotIds(slot, visiblePrimarySlots, template, slotItems)
+                      : getRelatedSlotIds(slot, visiblePrimarySlots, template, slotItems),
+                  )
             }
             entity={resolvedEntity}
             entityPool={entityPool}
@@ -357,7 +375,7 @@ export function BindCanvas({
           />
         );
       })}
-      {visiblePrimarySlots.map((slot) => (
+      {hitTargetSlots.map((slot) => (
         <SlotHitTarget
           key={`hit-${slot.slotId}`}
           slot={slot}
@@ -369,8 +387,8 @@ export function BindCanvas({
               slot.slotId,
               mode,
               mode === "replace"
-                ? getReplaceSlotIds(slot, visiblePrimarySlots)
-                : getRelatedSlotIds(slot, visiblePrimarySlots),
+                ? getReplaceSlotIds(slot, visiblePrimarySlots, template, slotItems)
+                : getRelatedSlotIds(slot, visiblePrimarySlots, template, slotItems),
             )
           }
         />
@@ -382,6 +400,15 @@ export function BindCanvas({
           scale={scale}
           flatPreview={flatPreview}
           label={bindingStatusLabel(slot)}
+          onSelect={(mode) =>
+            onSelectSlot(
+              slot.slotId,
+              mode,
+              mode === "replace"
+                ? getReplaceSlotIds(slot, visiblePrimarySlots, template, slotItems)
+                : getRelatedSlotIds(slot, visiblePrimarySlots, template, slotItems),
+            )
+          }
         />
       ))}
       {selectedBounds && (
@@ -392,11 +419,14 @@ export function BindCanvas({
   );
 }
 
-function isSelectableSlot(slot: Slot): boolean {
-  return isDataBindableSlot(slot) || slot.kind === "section";
+function isSelectableSlot(slot: Slot, template: PageTemplate): boolean {
+  return isDataBindableSlot(slot, template) || slot.kind === "section" || slot.kind === "group";
 }
 
-function isDataBindableSlot(slot: Slot): boolean {
+function isDataBindableSlot(slot: Slot, template?: PageTemplate): boolean {
+  if (slot.isUploadedBackground) return false;
+  if (isDataGroupMarkerSlot(slot)) return false;
+  if (isLikelyGeneratePageBackgroundSlot(slot, template)) return false;
   return slot.kind === "text" || slot.kind === "image" || slot.kind === "shape";
 }
 
@@ -448,14 +478,76 @@ function rectIntersectsSlot(rect: SelectionRect, slot: Slot): boolean {
   return rect.left <= slotRight && right >= slot.x && rect.top <= slotBottom && bottom >= slot.y;
 }
 
-function getDataGroupSlotIds(slot: Slot, slots: ExpandedSlot[]): string[] {
+function isBindCanvasInteractiveTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && !!target.closest(BIND_CANVAS_INTERACTIVE_SELECTOR);
+}
+
+function slotArea(slot: Slot): number {
+  return Math.max(0, slot.width) * Math.max(0, slot.height);
+}
+
+function slotFullyContains(container: Slot, item: Slot): boolean {
+  return (
+    item.x >= container.x &&
+    item.y >= container.y &&
+    item.x + item.width <= container.x + container.width &&
+    item.y + item.height <= container.y + container.height
+  );
+}
+
+function compareHitTargetSlots(a: ExpandedSlot, b: ExpandedSlot): number {
+  const aContainsB = slotFullyContains(a, b);
+  const bContainsA = slotFullyContains(b, a);
+  if (aContainsB && !bContainsA) return -1;
+  if (bContainsA && !aContainsB) return 1;
+
+  const zIndexDelta = (a.zIndex ?? 0) - (b.zIndex ?? 0);
+  if (zIndexDelta !== 0) return zIndexDelta;
+
+  const areaDelta = slotArea(b) - slotArea(a);
+  if (Math.abs(areaDelta) > 1) return areaDelta;
+
+  return a.renderOrder - b.renderOrder;
+}
+
+function getDataGroupSlotIds(
+  slot: Slot,
+  slots: ExpandedSlot[],
+  template: PageTemplate,
+): string[] {
   if (slot.dataGroupId) {
     const dataGroupIds = slots
-      .filter((item) => item.dataGroupId === slot.dataGroupId)
+      .filter((item) => item.dataGroupId === slot.dataGroupId && isDataBindableSlot(item, template))
       .map((item) => item.slotId);
     if (dataGroupIds.length > 1) return dataGroupIds;
   }
   return [slot.slotId];
+}
+
+function getRenderedTargetKey(slotId: string, slotItems?: RenderedItem[]): string | undefined {
+  const item = slotItems?.find((candidate) => candidate.slotId === slotId);
+  const entityBindCode = item?.reasonCodes?.find((code) => code.startsWith("entity_bind:"));
+  if (entityBindCode) return entityBindCode;
+  return item?.entityId ? `entity:${item.entityId}` : undefined;
+}
+
+function getRenderedTargetSlotIds(
+  slot: Slot,
+  slots: ExpandedSlot[],
+  template: PageTemplate,
+  slotItems?: RenderedItem[],
+): string[] {
+  const targetKey = getRenderedTargetKey(slot.slotId, slotItems);
+  if (!targetKey) return [slot.slotId];
+
+  const ids = slots
+    .filter(
+      (item) =>
+        getRenderedTargetKey(item.slotId, slotItems) === targetKey &&
+        isDataBindableSlot(item, template),
+    )
+    .map((item) => item.slotId);
+  return ids.length > 1 ? ids : [slot.slotId];
 }
 
 function slotCenterInside(container: Slot, item: Slot): boolean {
@@ -469,50 +561,272 @@ function slotCenterInside(container: Slot, item: Slot): boolean {
   );
 }
 
-function getContainedDataSlotIds(slot: Slot, slots: ExpandedSlot[]): string[] {
+function getContainedDataSlotIds(
+  slot: Slot,
+  slots: ExpandedSlot[],
+  template: PageTemplate,
+): string[] {
   if (slot.kind !== "section" && slot.kind !== "group") return [];
   return slots
     .filter(
       (item) =>
         item.slotId !== slot.slotId &&
-        isDataBindableSlot(item) &&
+        isDataBindableSlot(item, template) &&
         !isDataGroupMarkerSlot(item) &&
         slotCenterInside(slot, item),
     )
     .map((item) => item.slotId);
 }
 
-function getReplaceSlotIds(slot: Slot, slots: ExpandedSlot[]): string[] {
-  if (slot.kind === "section" || slot.kind === "group") {
-    const relatedIds = getRelatedSlotIds(slot, slots);
-    if (relatedIds.some((slotId) => slotId !== slot.slotId)) return relatedIds;
-  }
-  return getDataGroupSlotIds(slot, slots);
+function slotCenter(slot: Slot) {
+  return {
+    x: slot.x + slot.width / 2,
+    y: slot.y + slot.height / 2,
+  };
 }
 
-function getRelatedSlotIds(slot: Slot, slots: ExpandedSlot[]): string[] {
-  const dataGroupIds = getDataGroupSlotIds(slot, slots);
+function isImageLikeBindableSlot(slot: Slot): boolean {
+  return slot.kind === "image" || (slot.kind === "shape" && !slot.staticText?.trim());
+}
+
+function normalizeFieldText(value: string | undefined): string {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\u0111/gi, "d")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function isLikelyDataFieldSlot(slot: Slot): boolean {
+  if (isImageLikeBindableSlot(slot)) return true;
+  if (slot.bindingPath || slot.fieldParts?.length) return true;
+  const label = normalizeFieldText(slot.staticText ?? slot.name);
+  const compactLabel = label.replace(/\s+/g, "");
+  const labels = [
+    "ten",
+    "ten quan",
+    "name",
+    "dia chi",
+    "address",
+    "gia",
+    "muc gia",
+    "price",
+    "so dien thoai",
+    "sdt",
+    "phone",
+    "mo hinh",
+    "phong cach",
+    "nhom",
+  ];
+  const compactLabels = [
+    "ten",
+    "tenquan",
+    "name",
+    "diachi",
+    "address",
+    "gia",
+    "mucgia",
+    "price",
+    "sodienthoai",
+    "sdt",
+    "phone",
+    "mohinh",
+    "phongcach",
+    "nhom",
+  ];
+  return labels.includes(label) || compactLabels.includes(compactLabel);
+}
+
+function rectsOverlapOrTouch(a: Slot, b: Slot, pad = 0): boolean {
+  return (
+    a.x - pad <= b.x + b.width &&
+    a.x + a.width + pad >= b.x &&
+    a.y - pad <= b.y + b.height &&
+    a.y + a.height + pad >= b.y
+  );
+}
+
+function isSlotInsideImageCard(anchor: Slot, item: Slot): boolean {
+  const center = slotCenter(item);
+  const horizontalReach = Math.max(72, anchor.width * 1.38);
+  const bottomReach = Math.max(64, anchor.height * 0.58);
+  const left = anchor.x - horizontalReach;
+  const right = anchor.x + anchor.width + horizontalReach;
+  const top = anchor.y - Math.max(12, anchor.height * 0.12);
+  const bottom = anchor.y + anchor.height + bottomReach;
+
+  if (center.x < left || center.x > right || center.y < top || center.y > bottom) return false;
+  if (item.slotId === anchor.slotId) return true;
+  if (isImageLikeBindableSlot(item)) return false;
+  if (!isLikelyDataFieldSlot(item)) return false;
+  return true;
+}
+
+function hasRepeatedBindingPath(anchor: Slot, item: Slot, slots: ExpandedSlot[]): boolean {
+  if (!item.bindingPath) return false;
+  const previousSamePath = slots.some(
+    (candidate) =>
+      candidate.slotId !== item.slotId &&
+      candidate.bindingPath === item.bindingPath &&
+      candidate.y < item.y - Math.max(10, item.height * 0.35) &&
+      Math.abs(candidate.x - item.x) <= Math.max(40, item.width * 0.5),
+  );
+  const nextSamePath = slots.some(
+    (candidate) =>
+      candidate.slotId !== item.slotId &&
+      candidate.bindingPath === item.bindingPath &&
+      candidate.y > item.y + Math.max(10, item.height * 0.35) &&
+      Math.abs(candidate.x - item.x) <= Math.max(40, item.width * 0.5),
+  );
+  const anchorBottom = anchor.y + anchor.height;
+  return (previousSamePath && item.y > anchorBottom + 12) || (nextSamePath && item.y < anchor.y - 12);
+}
+
+function getImageCardSlotIds(
+  anchor: Slot,
+  slots: ExpandedSlot[],
+  template: PageTemplate,
+): string[] {
+  if (!isImageLikeBindableSlot(anchor)) return [anchor.slotId];
+  const ids = slots
+    .filter(
+      (item) =>
+        isDataBindableSlot(item, template) &&
+        isSlotInsideImageCard(anchor, item) &&
+        !hasRepeatedBindingPath(anchor, item, slots),
+    )
+    .sort((a, b) => a.y - b.y || a.x - b.x)
+    .map((item) => item.slotId);
+  return ids.length > 1 ? ids : [anchor.slotId];
+}
+
+function findImageAnchorForSlot(
+  slot: Slot,
+  slots: ExpandedSlot[],
+  template: PageTemplate,
+): ExpandedSlot | undefined {
+  if (isImageLikeBindableSlot(slot)) return slot as ExpandedSlot;
+  const center = slotCenter(slot);
+  return slots
+    .filter((item) => isDataBindableSlot(item, template) && isImageLikeBindableSlot(item))
+    .filter((item) => isSlotInsideImageCard(item, slot))
+    .sort((a, b) => {
+      const centerA = slotCenter(a);
+      const centerB = slotCenter(b);
+      const distA = Math.abs(center.x - centerA.x) + Math.abs(center.y - centerA.y);
+      const distB = Math.abs(center.x - centerB.x) + Math.abs(center.y - centerB.y);
+      return distA - distB;
+    })[0];
+}
+
+function getNearbyTextSlotIds(
+  slot: Slot,
+  slots: ExpandedSlot[],
+  template: PageTemplate,
+): string[] {
+  const center = slotCenter(slot);
+  const ids = slots
+    .filter((item) => {
+      if (!isDataBindableSlot(item, template) || isImageLikeBindableSlot(item)) return false;
+      if (!isLikelyDataFieldSlot(item)) return false;
+      const itemCenter = slotCenter(item);
+      return (
+        Math.abs(itemCenter.x - center.x) <= Math.max(80, slot.width * 1.8) &&
+        Math.abs(itemCenter.y - center.y) <= Math.max(95, slot.height * 3)
+      );
+    })
+    .sort((a, b) => a.y - b.y || a.x - b.x)
+    .map((item) => item.slotId);
+  return ids.length > 1 ? ids : [slot.slotId];
+}
+
+function getSpatialRelatedSlotIds(
+  slot: Slot,
+  slots: ExpandedSlot[],
+  template: PageTemplate,
+): string[] {
+  if (!isDataBindableSlot(slot, template)) return [slot.slotId];
+  const anchor = findImageAnchorForSlot(slot, slots, template);
+  if (anchor) {
+    const imageCardIds = getImageCardSlotIds(anchor, slots, template);
+    if (imageCardIds.length > 1) return imageCardIds;
+  }
+  return getNearbyTextSlotIds(slot, slots, template);
+}
+
+function getActualGroupSelectionIds(slot: Slot, slots: ExpandedSlot[]): string[] {
+  if (slot.kind === "group" && slots.some((item) => item.groupId === slot.slotId)) {
+    return [slot.slotId];
+  }
+  if (
+    slot.groupId &&
+    slots.some((item) => item.slotId === slot.groupId && item.kind === "group")
+  ) {
+    return [slot.groupId];
+  }
+  return [];
+}
+
+function getReplaceSlotIds(
+  slot: Slot,
+  slots: ExpandedSlot[],
+  template: PageTemplate,
+  slotItems?: RenderedItem[],
+): string[] {
+  const groupSelectionIds = getActualGroupSelectionIds(slot, slots);
+  if (groupSelectionIds.length > 0) return groupSelectionIds;
+
+  const dataGroupIds = getDataGroupSlotIds(slot, slots, template);
   if (dataGroupIds.length > 1) return dataGroupIds;
-  if (slot.kind === "group") {
-    const childIds = slots
-      .filter((item) => item.groupId === slot.slotId)
-      .map((item) => item.slotId);
-    if (childIds.length > 0) return childIds;
+
+  if (isDataBindableSlot(slot, template)) {
+    const spatialIds = getSpatialRelatedSlotIds(slot, slots, template);
+    if (spatialIds.length > 1) return spatialIds;
   }
-  if (slot.groupId) {
-    const groupIds = slots
-      .filter((item) => item.groupId === slot.groupId)
+
+  const relatedIds = getRelatedSlotIds(slot, slots, template, slotItems);
+  if (relatedIds.some((slotId) => slotId !== slot.slotId)) return relatedIds;
+
+  return [slot.slotId];
+}
+
+function getRelatedSlotIds(
+  slot: Slot,
+  slots: ExpandedSlot[],
+  template: PageTemplate,
+  slotItems?: RenderedItem[],
+): string[] {
+  const groupSelectionIds = getActualGroupSelectionIds(slot, slots);
+  if (groupSelectionIds.length > 0) return groupSelectionIds;
+
+  const dataGroupIds = getDataGroupSlotIds(slot, slots, template);
+  if (dataGroupIds.length > 1) return dataGroupIds;
+
+  const expandedSlot = slot as ExpandedSlot;
+  if (expandedSlot.cardGroupId) {
+    const cardSlotIds = slots
+      .filter(
+        (item) =>
+          item.cardGroupId === expandedSlot.cardGroupId &&
+          item.cardIndex === expandedSlot.cardIndex &&
+          isDataBindableSlot(item, template) &&
+          !isDataGroupMarkerSlot(item),
+      )
       .map((item) => item.slotId);
-    if (groupIds.length > 1) return groupIds;
+    if (cardSlotIds.length > 1) return cardSlotIds;
   }
-  if (slot.sectionRefId) {
-    const sectionIds = slots
-      .filter((item) => item.sectionRefId === slot.sectionRefId)
-      .map((item) => item.slotId);
-    if (sectionIds.length > 1) return sectionIds;
-  }
-  const containedIds = getContainedDataSlotIds(slot, slots);
+  const containedIds = getContainedDataSlotIds(slot, slots, template);
   if (containedIds.length > 0) return containedIds;
+
+  const spatialIds = getSpatialRelatedSlotIds(slot, slots, template);
+  if (spatialIds.length > 1) return spatialIds;
+
+  const renderedTargetIds = getRenderedTargetSlotIds(slot, slots, template, slotItems);
+  if (renderedTargetIds.length > 1) return renderedTargetIds;
+
   return [slot.slotId];
 }
 
@@ -537,7 +851,7 @@ function SlotHitTarget({
   flatPreview?: boolean;
   onSelect: (mode: BindCanvasSelectionMode) => void;
 }) {
-  const isBindable = isSelectableSlot(slot);
+  const isBindable = isDataBindableSlot(slot) || slot.kind === "section" || slot.kind === "group";
   if (!isBindable) return null;
 
   const fontSize = (slot.style?.fontSize ?? 24) * scale;
@@ -587,11 +901,15 @@ function SelectedSlotOverlay({
   scale,
   flatPreview,
   label,
+  showLabel = true,
+  onSelect,
 }: {
   slot: ExpandedSlot;
   scale: number;
   flatPreview?: boolean;
   label: string;
+  showLabel?: boolean;
+  onSelect: (mode: BindCanvasSelectionMode) => void;
 }) {
   const transform = `${slot.rotation ? `rotate(${slot.rotation}deg)` : ""}${buildFlipTransform(
     slot.style,
@@ -614,28 +932,52 @@ function SelectedSlotOverlay({
         pointerEvents: "none",
         zIndex: 2147483646,
       }}
+      onPointerDown={(event) => {
+        event.stopPropagation();
+      }}
+      onClick={(event) => event.stopPropagation()}
+      onMouseDown={(event) => {
+        event.stopPropagation();
+        if (event.shiftKey) {
+          onSelect("group");
+          return;
+        }
+        onSelect(event.metaKey || event.ctrlKey ? "toggle" : "replace");
+      }}
     >
-      <div
-        style={{
-          position: "absolute",
-          left: 0,
-          top: -22,
-          maxWidth: 160,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          borderRadius: 999,
-          background: "hsl(var(--primary))",
-          color: "hsl(var(--primary-foreground))",
-          fontSize: 10,
-          fontWeight: 700,
-          lineHeight: "18px",
-          padding: "0 8px",
-          boxShadow: "0 4px 12px rgba(15,23,42,0.12)",
-        }}
-      >
-        {label}
-      </div>
+      {showLabel ? (
+        <div
+          style={{
+            position: "absolute",
+            top: 4,
+            right: 4,
+            maxWidth: 140,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            borderRadius: 4,
+            background: "rgba(124, 58, 237, 0.9)",
+            color: "#fff",
+            fontSize: 9,
+            fontWeight: 700,
+            lineHeight: "14px",
+            padding: "0 6px",
+            pointerEvents: "auto",
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+          onMouseDown={(event) => {
+            event.stopPropagation();
+            if (event.shiftKey) {
+              onSelect("group");
+              return;
+            }
+            onSelect(event.metaKey || event.ctrlKey ? "toggle" : "replace");
+          }}
+        >
+          {label}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -801,7 +1143,7 @@ function BindSlot({
   seedKey,
   cardBadge,
 }: {
-  slot: Slot;
+  slot: ExpandedSlot;
   template: PageTemplate;
   scale: number;
   selected: boolean;
@@ -820,7 +1162,7 @@ function BindSlot({
   const rot = slot.rotation ? `rotate(${slot.rotation}deg)` : "";
   const transform = (rot + flip).trim() || undefined;
   const hasBinding = !!slot.bindingPath;
-  const isBindable = isSelectableSlot(slot);
+  const isBindable = isDataBindableSlot(slot, template) || slot.kind === "section" || slot.kind === "group";
 
   const outline = selected
     ? "1px solid hsl(var(--primary) / 0.72)"
@@ -848,6 +1190,7 @@ function BindSlot({
     outlineOffset: 0,
     boxSizing: "border-box",
     cursor: isBindable ? "pointer" : "default",
+    pointerEvents: isBindable ? "auto" : "none",
   };
 
   const onClick = (e: React.MouseEvent) => {
@@ -860,15 +1203,29 @@ function BindSlot({
     onSelect(e.metaKey || e.ctrlKey ? "toggle" : "replace");
   };
 
+  const isGeneratedCoverBackground = isLikelyGeneratePageBackgroundSlot(slot, template);
   const rawSrc =
-    slot.kind === "image" || slot.kind === "shape" ? (planned?.src ?? slot.staticImage) : undefined;
+    slot.kind === "image" || slot.kind === "shape"
+      ? isGeneratedCoverBackground
+        ? slot.staticImage
+        : (planned?.src ?? slot.staticImage)
+      : undefined;
   const resolvedBindingImage =
-    !planned?.src && (slot.kind === "image" || slot.kind === "shape") && slot.bindingPath
-      ? resolveImageBinding(slot.bindingPath, entity, assets, rawSrc, {
-          entities: imageResolveEntities,
-          source: slot.dataSourceId ? { id: slot.dataSourceId, kind: "sheet", label: slot.dataSourceId } : undefined,
-          seed: `${seedKey ?? "bind"}:${slot.slotId}`,
-        })
+    !isGeneratedCoverBackground &&
+    !planned?.src &&
+    (slot.kind === "image" || slot.kind === "shape") &&
+    slot.bindingPath
+      ? resolveImageBinding(
+          slot.bindingPath,
+          isEntityScopedImageBindingPath(slot.bindingPath) ? entity : undefined,
+          assets,
+          rawSrc,
+          {
+            entities: imageResolveEntities,
+            source: slot.dataSourceId ? { id: slot.dataSourceId, kind: "sheet", label: slot.dataSourceId } : undefined,
+            seed: `${seedKey ?? "bind"}:${slot.originalSlotId ?? slot.slotId}:${slot.slotId}`,
+          },
+        )
       : undefined;
   const effectiveRawSrc = resolvedBindingImage?.src ?? rawSrc;
   const resolvedRaw = useResolvedImageSrc(effectiveRawSrc);
@@ -1119,12 +1476,33 @@ function BindSlot({
     );
   }
 
+  if (slot.kind === "group") {
+    return (
+      <div
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          if (e.shiftKey) {
+            onSelect("group");
+            return;
+          }
+          onSelect(e.metaKey || e.ctrlKey ? "toggle" : "replace");
+        }}
+        style={{
+          ...baseStyle,
+          background: "transparent",
+          border: selected ? "1px solid hsl(var(--primary) / 0.72)" : "1px dashed transparent",
+        }}
+      />
+    );
+  }
+
   return null;
 }
 
 function CardBadge({ label }: { label: string }) {
   return (
     <div
+      data-bind-card-badge="true"
       style={{
         position: "absolute",
         top: -22,

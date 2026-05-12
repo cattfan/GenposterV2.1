@@ -19,6 +19,7 @@ import type { ScoreContext } from "../scoring/score";
 import {
   allocateEntityBindingsForTemplate,
   buildEntityAllocationOrder,
+  entityContentKey,
 } from "./entityBindAllocator";
 import { buildEntityBindingTargets } from "../binding/cardRepeater";
 import { parseEntityListBindingPath } from "../binding/dataBinding";
@@ -41,6 +42,7 @@ export interface GenerateInput {
   prioritizePartner?: boolean;
   onlyPartner?: boolean;
   maxEntities?: number;
+  batchCount?: number;
   selectedSheet?: string;
   filterMoHinh?: string;
   filterPhongCach?: string;
@@ -61,6 +63,7 @@ export function generatePackJob(input: GenerateInput): GenerationJob {
     prioritizePartner = true,
     onlyPartner = false,
     maxEntities,
+    batchCount,
     selectedSheet,
     filterMoHinh,
     filterPhongCach,
@@ -79,6 +82,7 @@ export function generatePackJob(input: GenerateInput): GenerationJob {
       prioritizePartner,
       onlyPartner,
       maxEntities,
+      batchCount,
       selectedSheet,
       filterMoHinh,
       filterPhongCach,
@@ -204,6 +208,7 @@ function generateEntityBindJob(
   prioritizePartner: boolean,
   onlyPartner: boolean,
   maxEntities: number | undefined,
+  batchCount: number | undefined,
   selectedSheet: string | undefined,
   filterMoHinh: string | undefined,
   filterPhongCach: string | undefined,
@@ -253,7 +258,7 @@ function generateEntityBindJob(
       partnerQuotaPerPage: pageOnlyPartner
         ? Number.MAX_SAFE_INTEGER
         : (pageConfig?.partnerQuotaPerPage ?? partnerQuotaPerPage),
-      maxEntities: Math.max(1, Math.floor(pageConfig?.maxEntities ?? maxEntities ?? entityPool.length)),
+      maxEntities: Math.max(1, Math.floor(pageConfig?.maxEntities ?? entityPool.length)),
     };
   };
 
@@ -270,6 +275,8 @@ function generateEntityBindJob(
     return true;
   };
 
+  const jobSeed = String(Date.now()) + ":" + pack.packTemplateId;
+
   const pageOrderCache = new Map<string, Entity[]>();
   const getPageEntityOrder = (templateId: string): Entity[] => {
     const cached = pageOrderCache.get(templateId);
@@ -279,10 +286,11 @@ function generateEntityBindJob(
     const source = config.onlyPartner
       ? scopedEntityPool.filter((entity) => entity.partnerFlag)
       : scopedEntityPool.slice();
-    const ordered = buildEntityAllocationOrder(source, config.prioritizePartner).slice(
-      0,
-      config.maxEntities,
-    );
+    const ordered = buildEntityAllocationOrder(
+      source,
+      config.prioritizePartner,
+      `${jobSeed}:${templateId}`,
+    ).slice(0, config.maxEntities);
     pageOrderCache.set(templateId, ordered);
     return ordered;
   };
@@ -311,7 +319,7 @@ function generateEntityBindJob(
     tpl: PageTemplate,
     pageEntityPool: Entity[],
     perPackIdx: number,
-    batchState: { usedEntityIds: Set<string> },
+    batchState: { usedEntityIds: Set<string>; usedEntityKeys?: Set<string> },
   ) => {
     const owner = pageEntityPool[0];
     if (!owner) return;
@@ -352,9 +360,11 @@ function generateEntityBindJob(
       0,
       ...orderedTpls.map((tpl) => getPageEntityOrder(tpl.pageTemplateId).length),
     );
-    const packCount = Math.max(1, Math.ceil(maxPageEntityCount / packDemand));
+    const requestedBatchCount =
+      batchCount == null ? undefined : Math.max(1, Math.floor(batchCount));
+    const packCount = requestedBatchCount ?? Math.max(1, Math.ceil(maxPageEntityCount / packDemand));
     for (let packIdx = 0; packIdx < packCount; packIdx += 1) {
-      const batchState = { usedEntityIds: new Set<string>() };
+      const batchState = { usedEntityIds: new Set<string>(), usedEntityKeys: new Set<string>() };
       let packOffset = packIdx * packDemand;
       orderedTpls.forEach((tpl, i) => {
         const demand = templateDemands.get(tpl.pageTemplateId) ?? 1;
@@ -365,13 +375,14 @@ function generateEntityBindJob(
           demand,
           config.partnerQuotaPerPage,
           batchState.usedEntityIds,
+          batchState.usedEntityKeys,
         );
         pushPage(tpl, pageEntityPool, i, batchState);
         packOffset += demand;
       });
     }
   } else {
-    const batchState = { usedEntityIds: new Set<string>() };
+    const batchState = { usedEntityIds: new Set<string>(), usedEntityKeys: new Set<string>() };
     let pageOffset = 0;
     orderedTpls.forEach((tpl, i) => {
       const demand = templateDemands.get(tpl.pageTemplateId) ?? 1;
@@ -382,6 +393,7 @@ function generateEntityBindJob(
         demand,
         config.partnerQuotaPerPage,
         batchState.usedEntityIds,
+        batchState.usedEntityKeys,
       );
       pushPage(tpl, pageEntityPool, i, batchState);
       pageOffset += demand;
@@ -419,6 +431,7 @@ function selectPageEntityPool(
   demand: number,
   partnerQuotaPerPage: number,
   usedEntityIds?: Set<string>,
+  usedEntityKeys?: Set<string>,
 ): Entity[] {
   if (orderedEntities.length === 0) return [];
   const required = Math.max(1, Math.min(orderedEntities.length, Math.floor(demand) || 1));
@@ -433,15 +446,20 @@ function selectPageEntityPool(
   const nonPartnerEntities = orderedEntities.filter((entity) => !entity.partnerFlag);
   const selected: Entity[] = [];
   const selectedIds = new Set<string>();
+  const selectedKeys = new Set<string>();
 
   const take = (candidates: Entity[], limit: number, unusedOnly: boolean) => {
     let taken = 0;
     for (const entity of rotateEntities(candidates, startIndex)) {
+      const entityKey = entityContentKey(entity);
       if (selected.length >= required || limit <= 0) break;
       if (selectedIds.has(entity.entityId)) continue;
+      if (selectedKeys.has(entityKey)) continue;
       if (unusedOnly && usedEntityIds?.has(entity.entityId)) continue;
+      if (unusedOnly && usedEntityKeys?.has(entityKey)) continue;
       selected.push(entity);
       selectedIds.add(entity.entityId);
+      selectedKeys.add(entityKey);
       limit -= 1;
       taken += 1;
     }
@@ -454,15 +472,6 @@ function selectPageEntityPool(
   } else {
     take(orderedEntities, required - selected.length, true);
   }
-  take(orderedEntities, required - selected.length, true);
-
-  if (selected.length < required && partnerQuota > partnerTaken) {
-    take(partnerEntities, partnerQuota - partnerTaken, false);
-  }
-  if (partnerQuota > 0) {
-    take(nonPartnerEntities, required - selected.length, false);
-  }
-  take(orderedEntities, required - selected.length, false);
   return selected;
 }
 

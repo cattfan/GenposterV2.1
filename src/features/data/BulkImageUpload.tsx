@@ -344,7 +344,7 @@ export function BulkImageUpload() {
     }
 
     let changed = false;
-    for (const item of visiblePending) {
+    for (const { item } of visiblePending) {
       const key = pendingKey(item);
       if (!previewUrlsRef.current.has(key)) {
         previewUrlsRef.current.set(key, URL.createObjectURL(item.file));

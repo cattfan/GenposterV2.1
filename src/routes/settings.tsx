@@ -153,6 +153,12 @@ function SettingsPage() {
   const backupInputRef = useRef<HTMLInputElement>(null);
   const entities = useLiveQuery(() => db.entities.toArray(), []) ?? [];
   const assets = useLiveQuery(() => db.assets.toArray(), []) ?? [];
+  const packTemplatesCount = useLiveQuery(() => db.packTemplates.count(), []) ?? 0;
+  const pageTemplatesCount = useLiveQuery(() => db.pageTemplates.count(), []) ?? 0;
+  const designDocsCount = useLiveQuery(() => db.designDocuments.count(), []) ?? 0;
+  const jobsCount = useLiveQuery(() => db.jobs.count(), []) ?? 0;
+  const generatePresetsCount = useLiveQuery(() => db.generatePresets.count(), []) ?? 0;
+  const symbolsCount = useLiveQuery(() => db.symbols.count(), []) ?? 0;
   const localImageCount = assets.filter((asset) => asset.blobKey).length;
 
   useEffect(() => {
@@ -323,6 +329,73 @@ function SettingsPage() {
     });
   };
 
+  const clearAllTemplates = async () => {
+    const [packs, pages, designs, jobs, presets, symbols, overrides] = await Promise.all([
+      db.packTemplates.toArray(),
+      db.pageTemplates.toArray(),
+      db.designDocuments.toArray(),
+      db.jobs.toArray(),
+      db.generatePresets.toArray(),
+      db.symbols.toArray(),
+      db.overrides.toArray(),
+    ]);
+    const summary = `${packs.length} bộ · ${pages.length} trang · ${designs.length} design · ${jobs.length} lần tạo · ${presets.length} preset · ${symbols.length} symbol`;
+
+    await db.transaction(
+      "rw",
+      [
+        db.packTemplates,
+        db.pageTemplates,
+        db.designDocuments,
+        db.jobs,
+        db.generatePresets,
+        db.symbols,
+        db.overrides,
+      ],
+      async () => {
+        await db.packTemplates.clear();
+        await db.pageTemplates.clear();
+        await db.designDocuments.clear();
+        await db.jobs.clear();
+        await db.generatePresets.clear();
+        await db.symbols.clear();
+        await db.overrides.clear();
+      },
+    );
+
+    toast.success(`Đã xoá tất cả khuôn mẫu (${summary})`, {
+      duration: UNDO_TOAST_DURATION,
+      action: {
+        label: "Khôi phục",
+        onClick: () => {
+          void db
+            .transaction(
+              "rw",
+              [
+                db.packTemplates,
+                db.pageTemplates,
+                db.designDocuments,
+                db.jobs,
+                db.generatePresets,
+                db.symbols,
+                db.overrides,
+              ],
+              async () => {
+                if (packs.length) await db.packTemplates.bulkPut(packs);
+                if (pages.length) await db.pageTemplates.bulkPut(pages);
+                if (designs.length) await db.designDocuments.bulkPut(designs);
+                if (jobs.length) await db.jobs.bulkPut(jobs);
+                if (presets.length) await db.generatePresets.bulkPut(presets);
+                if (symbols.length) await db.symbols.bulkPut(symbols);
+                if (overrides.length) await db.overrides.bulkPut(overrides);
+              },
+            )
+            .then(() => toast.success("Đã khôi phục khuôn mẫu"));
+        },
+      },
+    });
+  };
+
   return (
     <PageContainer className="max-w-3xl space-y-6">
       <PageHeader
@@ -459,9 +532,8 @@ function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Tất cả tính năng AI (dựng template từ ảnh, gợi ý bind, caption, combo) sẽ gọi qua
-            endpoint OpenAI-compatible này. Request gửi <strong>trực tiếp từ browser</strong> nên hỗ
-            trợ cả URL local (vd <code>http://localhost:20128/v1</code>).
+            Tất cả tính năng AI sẽ gọi qua endpoint OpenAI-compatible này. App gửi qua server
+            local trước để tránh lỗi CORS của provider.
           </p>
 
           <div>
@@ -518,7 +590,8 @@ function SettingsPage() {
               placeholder={presetSpec.needsApiKey ? "sk-..." : "(không cần với local LLM)"}
             />
             <p className="text-xs text-muted-foreground mt-1">
-              Lưu local trong IndexedDB của trình duyệt, không gửi lên server.
+              Lưu local trong trình duyệt. Khi gọi AI, key chỉ được gửi tới server local và
+              provider đã cấu hình.
             </p>
           </div>
 
@@ -592,14 +665,14 @@ function SettingsPage() {
         <CardHeader>
           <CardTitle>Dữ liệu local</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-3">
+        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-lg border p-4">
             <div className="flex items-start gap-3">
               <div className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
                 <Trash2 />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="font-medium">Tất cả</div>
+                <div className="font-medium">Tất cả (data)</div>
                 <div className="mt-1 text-sm text-muted-foreground">
                   {entities.length} dòng, {assets.length} ảnh.
                 </div>
@@ -656,6 +729,37 @@ function SettingsPage() {
               disabled={entities.length === 0 && assets.length === 0}
             >
               Xoá dữ liệu sheet
+            </Button>
+          </div>
+
+          <div className="rounded-lg border p-4">
+            <div className="flex items-start gap-3">
+              <div className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                <Trash2 />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-medium">Khuôn mẫu</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {packTemplatesCount} bộ, {pageTemplatesCount} trang,{" "}
+                  {designDocsCount} design, {jobsCount} lần tạo, {generatePresetsCount}{" "}
+                  preset, {symbolsCount} symbol.
+                </div>
+              </div>
+            </div>
+            <Button
+              variant="destructive"
+              className="mt-4 w-full"
+              onClick={() => void clearAllTemplates()}
+              disabled={
+                packTemplatesCount === 0 &&
+                pageTemplatesCount === 0 &&
+                designDocsCount === 0 &&
+                jobsCount === 0 &&
+                generatePresetsCount === 0 &&
+                symbolsCount === 0
+              }
+            >
+              Xoá khuôn mẫu
             </Button>
           </div>
         </CardContent>

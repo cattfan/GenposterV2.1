@@ -4,16 +4,55 @@ import {
   resolveAssetsFromContext,
   resolveEntitiesFromContext,
 } from "./sourceContext";
+import type { Asset, Entity } from "@/models";
 
 const entities = [
-  { entityId: "e1", sheetName: "sheet-a" },
-  { entityId: "e2", sheetName: "sheet-b" },
-] as any[];
+  {
+    entityId: "e1",
+    name: "Entity 1",
+    sheetName: "sheet-a",
+    partnerFlag: false,
+    partnerPriority: 0,
+    partnerType: "none",
+    campaignTags: [],
+    seoKeywords: [],
+    status: "active",
+  },
+  {
+    entityId: "e2",
+    name: "Entity 2",
+    sheetName: "sheet-b",
+    partnerFlag: false,
+    partnerPriority: 0,
+    partnerType: "none",
+    campaignTags: [],
+    seoKeywords: [],
+    status: "active",
+  },
+] satisfies Entity[];
 
 const assets = [
-  { assetId: "a1", entityId: "e1" },
-  { assetId: "a2", entityId: "e2" },
-] as any[];
+  {
+    assetId: "a1",
+    entityId: "e1",
+    sourceType: "local",
+    sourceValue: "/a1.jpg",
+    role: "generic",
+    qualityScore: 100,
+    isCover: false,
+    status: "ok",
+  },
+  {
+    assetId: "a2",
+    entityId: "e2",
+    sourceType: "local",
+    sourceValue: "/a2.jpg",
+    role: "generic",
+    qualityScore: 100,
+    isCover: false,
+    status: "ok",
+  },
+] satisfies Asset[];
 
 describe("sourceContext", () => {
   it("falls back to secondary source when primary is empty", () => {

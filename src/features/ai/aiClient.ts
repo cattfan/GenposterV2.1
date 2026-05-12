@@ -1,8 +1,9 @@
-// Client-side AI gateway: gọi OpenAI-compatible API trực tiếp từ browser.
-// Đọc config từ AppSettings (IndexedDB). Hỗ trợ DeepSeek, Lovable, custom (vd LM Studio, vLLM, ollama).
+// Client-side AI gateway. The browser calls a local server function, then the
+// server calls the OpenAI-compatible provider. This avoids provider CORS issues.
 
-import { getSettings } from "@/storage/settings";
 import type { AiProviderConfig, AiProviderPreset } from "@/models";
+import { callAiServer } from "@/server/aiProxy";
+import { getSettings } from "@/storage/settings";
 
 export interface AiPresetSpec {
   label: string;
@@ -19,7 +20,7 @@ export const AI_PRESETS: Record<AiProviderPreset, AiPresetSpec> = {
     baseUrl: "https://api.deepseek.com/v1",
     model: "deepseek-chat",
     needsApiKey: true,
-    hint: "Lấy API key tại https://platform.deepseek.com",
+    hint: "Lay API key tai https://platform.deepseek.com",
   },
   lovable: {
     label: "Lovable AI Gateway",
@@ -27,14 +28,14 @@ export const AI_PRESETS: Record<AiProviderPreset, AiPresetSpec> = {
     model: "google/gemini-2.5-pro",
     visionModel: "google/gemini-2.5-pro",
     needsApiKey: true,
-    hint: "Dán LOVABLE_API_KEY (lấy ở Settings → Workspace → Usage)",
+    hint: "Dan LOVABLE_API_KEY trong Workspace Settings cua Lovable.",
   },
   custom: {
     label: "Custom (OpenAI-compatible)",
     baseUrl: "http://localhost:20128/v1",
     model: "cx/gpt-5.4",
     needsApiKey: false,
-    hint: "Tự điền base URL + model name. Hỗ trợ LM Studio, vLLM, ollama, hoặc bất kỳ endpoint OpenAI-compatible nào.",
+    hint: "Tu dien base URL + model name. Ho tro LM Studio, vLLM, Ollama hoac endpoint OpenAI-compatible.",
   },
 };
 
@@ -67,7 +68,7 @@ export interface AiCallOptions {
   tool_choice?: { type: "function"; function: { name: string } } | "auto";
   temperature?: number;
   useVisionModel?: boolean;
-  /** Override config (vd test config trước khi save). Nếu không truyền, đọc từ Settings. */
+  /** Override config, used by Settings before saving. */
   config?: AiProviderConfig;
 }
 
@@ -80,84 +81,46 @@ async function loadConfig(): Promise<AiProviderConfig | null> {
   return s.ai ?? null;
 }
 
-function joinUrl(base: string, path: string): string {
-  return base.replace(/\/+$/, "") + "/" + path.replace(/^\/+/, "");
-}
-
 export async function callAi(opts: AiCallOptions): Promise<AiCallResult> {
   const cfg = opts.config ?? (await loadConfig());
   if (!cfg || !cfg.baseUrl) {
     return {
       ok: false,
       status: 0,
-      error: "Chưa cấu hình AI provider — vào /settings để dán base URL + model.",
+      error: "Chua cau hinh AI provider - vao Cai dat de dien Base URL va model.",
     };
   }
-  const url = joinUrl(cfg.baseUrl, "chat/completions");
+
   const model = opts.useVisionModel && cfg.visionModel ? cfg.visionModel : cfg.model;
   if (!model) {
-    return { ok: false, status: 0, error: "Chưa điền model name trong /settings." };
+    return { ok: false, status: 0, error: "Chua dien model AI trong Cai dat." };
   }
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;
 
-  const body: Record<string, unknown> = {
-    model,
-    messages: opts.messages,
-    temperature: opts.temperature ?? 0.3,
-  };
-  if (opts.tools) body.tools = opts.tools;
-  if (opts.tool_choice) body.tool_choice = opts.tool_choice;
-
-  let res: Response;
   try {
-    res = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
+    const result = await callAiServer({
+      data: {
+        config: cfg,
+        messages: opts.messages,
+        tools: opts.tools,
+        tool_choice: opts.tool_choice,
+        temperature: opts.temperature,
+        useVisionModel: opts.useVisionModel,
+      },
     });
+    return result as AiCallResult;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return {
       ok: false,
       status: 0,
       error:
-        `Không gọi được ${url}: ${msg}. ` +
-        (cfg.baseUrl.includes("localhost") || cfg.baseUrl.includes("127.0.0.1")
-          ? "Kiểm tra: server local đang chạy chưa? CORS có cho phép browser không? (LM Studio mặc định cho phép)."
-          : "Kiểm tra mạng / CORS của provider."),
+        `Khong goi duoc AI qua server local: ${msg}. ` +
+        "Kiem tra dev server va provider co truy cap duoc tu may nay khong.",
     };
   }
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    if (res.status === 429) return { ok: false, status: 429, error: "AI rate limit — thử lại sau." };
-    if (res.status === 402) return { ok: false, status: 402, error: "Hết credits AI." };
-    if (res.status === 401)
-      return { ok: false, status: 401, error: "API key sai/hết hạn — kiểm tra /settings." };
-    return { ok: false, status: res.status, error: `AI lỗi ${res.status}: ${txt.slice(0, 400)}` };
-  }
-  const json = (await res.json()) as {
-    choices?: Array<{
-      message?: {
-        content?: string | null;
-        tool_calls?: Array<{ function?: { arguments?: string } }>;
-      };
-    }>;
-  };
-  const choice = json.choices?.[0]?.message;
-  let toolArgs: unknown = null;
-  const argStr = choice?.tool_calls?.[0]?.function?.arguments;
-  if (argStr) {
-    try {
-      toolArgs = JSON.parse(argStr);
-    } catch {
-      toolArgs = null;
-    }
-  }
-  return { ok: true, content: choice?.content ?? null, toolArgs };
 }
 
-/** Test 1 ping nhỏ để xác nhận provider/key/CORS hoạt động. */
+/** Test one small ping to verify provider, key, model and network. */
 export async function testAiConfig(cfg: AiProviderConfig): Promise<AiCallResult> {
   return callAi({
     config: cfg,

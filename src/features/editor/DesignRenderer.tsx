@@ -14,6 +14,7 @@ import {
 import { useResolvedImageSrc } from "@/storage/imageSrc";
 import { getHeroiconComponent } from "./designAssets";
 import { renderRichTextRuns } from "./richText";
+import { CurvedText } from "./curvedText";
 
 export function DesignRenderer({
   page,
@@ -218,6 +219,8 @@ const DesignElementNode = memo(
 
     if (element.kind === "text") {
       const textStyle = buildTextStyle(element.style, scale);
+      const curve = element.style?.textCurve ?? 0;
+      const hasRichRuns = (element.textRuns?.length ?? 0) > 0;
       return (
         <div
           data-rendered-element-id={element.elementId}
@@ -225,18 +228,30 @@ const DesignElementNode = memo(
             ...style,
             display: "flex",
             alignItems: textVerticalFlexAlign(element.style),
+            justifyContent: Math.abs(curve) > 0.5 ? "center" : undefined,
             overflow: "hidden",
           }}
         >
-          <div style={{ ...textStyle, width: "100%" }}>
-            {renderRichTextRuns({
-              text: element.text,
-              runs: element.textRuns,
-              baseStyle: element.style,
-              scale,
-              fallback: displayEditorText(element.text),
-            })}
-          </div>
+          {Math.abs(curve) > 0.5 && !hasRichRuns ? (
+            <div style={{ ...textStyle, width: "100%", textAlign: "center" }}>
+              <CurvedText
+                text={element.text ?? ""}
+                curveDegrees={curve}
+                fontSize={(element.style?.fontSize ?? 24) * scale}
+                letterSpacing={(element.style?.letterSpacing ?? 0) * scale}
+              />
+            </div>
+          ) : (
+            <div style={{ ...textStyle, width: "100%" }}>
+              {renderRichTextRuns({
+                text: element.text,
+                runs: element.textRuns,
+                baseStyle: element.style,
+                scale,
+                fallback: displayEditorText(element.text),
+              })}
+            </div>
+          )}
           <EditorGuideBounds kind={element.kind} show={showGuides} />
         </div>
       );

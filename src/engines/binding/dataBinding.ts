@@ -49,6 +49,15 @@ export const IMAGE_BINDING_OPTIONS: BindingFieldOption[] = [
   { value: "asset.random_scope", label: "Ảnh ngẫu nhiên chỉ định", group: "Ảnh" },
 ];
 
+export function isEntityScopedImageBindingPath(bindingPath: string | undefined): boolean {
+  if (!bindingPath) return false;
+  return (
+    bindingPath === "asset.random" ||
+    bindingPath === "asset.cover" ||
+    bindingPath.startsWith("asset.byRole:")
+  );
+}
+
 export interface AssetRandomScopeConfig {
   sheetName?: string;
   folder?: string;
@@ -141,9 +150,10 @@ function toDisplayText(value: unknown, fallback: string | undefined): string {
 }
 
 function stableHash(input: string): number {
-  let hash = 0;
+  let hash = 2166136261;
   for (let index = 0; index < input.length; index += 1) {
-    hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
   }
   return hash;
 }
@@ -164,6 +174,38 @@ function stableShuffle<T>(items: T[], seed: string): T[] {
     [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
   }
   return next;
+}
+
+function normalizeEntityContentToken(value: unknown): string {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/gi, "d")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function entityListContentKey(entity: Entity): string {
+  const name = normalizeEntityContentToken(entity.name);
+  const address = normalizeEntityContentToken(entity.address ?? entity.metadata?.address);
+  const sheet = normalizeEntityContentToken(entity.sheetName);
+  if (name) return `${sheet}|${name}`;
+  if (address) return `${sheet}|address:${address}`;
+  return entity.entityId;
+}
+
+function dedupeEntitiesByContent(entities: Entity[]): Entity[] {
+  const seen = new Set<string>();
+  const out: Entity[] = [];
+  for (const entity of entities) {
+    const key = entityListContentKey(entity);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entity);
+  }
+  return out;
 }
 
 function pickStableRandomAsset(pool: Asset[], seed: string): Asset | undefined {
@@ -477,7 +519,7 @@ function orderEntitiesForList(
   config: EntityListBindingConfig,
   bindingPath: string,
 ): Entity[] {
-  const usable = entities.filter((entity) => entity.status !== "archived");
+  const usable = dedupeEntitiesByContent(entities.filter((entity) => entity.status !== "archived"));
   const seed = config.seed ?? bindingPath;
   const alpha = (items: Entity[]) =>
     items.slice().sort((a, b) => a.name.localeCompare(b.name, "vi"));
@@ -853,6 +895,14 @@ export function buildTextStyle(style: Slot["style"] | undefined, scale = 1): Rea
     wordBreak: "break-word",
     overflow: s.maxLines && s.maxLines > 0 ? "hidden" : "visible",
   };
+  // Vertical text layout (CJK-style top-to-bottom flow).
+  if (s.textLayout === "vertical-rl" || s.textLayout === "vertical-lr") {
+    (css as React.CSSProperties & { writingMode?: string }).writingMode =
+      s.textLayout === "vertical-lr" ? "vertical-lr" : "vertical-rl";
+    // For vertical writing the `textOrientation: mixed` keeps Vietnamese
+    // diacritics correctly oriented while rotating Latin letters.
+    (css as React.CSSProperties & { textOrientation?: string }).textOrientation = "mixed";
+  }
   // Text outline is rendered with text-shadow, not WebKit text-stroke, so stroke cannot cover fill.
   // Gradient text
   if (s.gradientEnabled && s.gradientFrom && s.gradientTo) {
@@ -895,6 +945,6 @@ export function shapeBorderRadius(
   scale = 1,
 ): number | string | undefined {
   if (shapeKind === "circle") return "50%";
-  if (shapeKind === "badge") return 9999;
+  if (shapeKind === "badge") return borderRadius == null ? 9999 : borderRadius * scale;
   return (borderRadius ?? 0) * scale;
 }

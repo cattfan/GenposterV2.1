@@ -1,5 +1,5 @@
-import { useState, useMemo } from "react";
-import { FONTS, FONT_CATEGORIES, type FontCategory } from "./fonts";
+import { useEffect, useState, useMemo } from "react";
+import { FONTS, FONT_CATEGORIES, ensureExtendedFontsLoaded, type FontCategory } from "./fonts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Languages } from "lucide-react";
@@ -12,6 +12,12 @@ export function FontPicker({
   onChange: (family: string) => void;
 }) {
   const [vietnameseOnly, setVietnameseOnly] = useState(false);
+
+  // Mounting FontPicker means the user is about to pick a family — load the
+  // full catalogue now so previews render correctly.
+  useEffect(() => {
+    ensureExtendedFontsLoaded();
+  }, []);
 
   const grouped = useMemo(() => {
     const map = new Map<FontCategory, typeof FONTS>();

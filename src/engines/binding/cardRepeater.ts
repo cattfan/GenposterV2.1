@@ -384,7 +384,14 @@ function autoClusterSlots(
   for (const [groupId, groupSlots] of byGroup.entries()) {
     const splits = splitSpatially(groupSlots, groupId);
     for (const split of splits) {
-      groupedClusters.set(split.key, split.slots);
+      for (const rowCluster of splitClusterByRepeatedEntityRows(split.key, split.slots)) {
+        for (const anchorCluster of splitClusterByRepeatedAnchors(
+          rowCluster.key,
+          rowCluster.slots,
+        )) {
+          groupedClusters.set(anchorCluster.key, anchorCluster.slots);
+        }
+      }
     }
   }
   byGroup.clear();
@@ -397,7 +404,14 @@ function autoClusterSlots(
   if (noGroup.length > 0) {
     const splits = splitSpatially(noGroup, "__auto");
     for (const split of splits) {
-      byGroup.set(split.key, split.slots);
+      for (const rowCluster of splitClusterByRepeatedEntityRows(split.key, split.slots)) {
+        for (const anchorCluster of splitClusterByRepeatedAnchors(
+          rowCluster.key,
+          rowCluster.slots,
+        )) {
+          byGroup.set(anchorCluster.key, anchorCluster.slots);
+        }
+      }
     }
   }
 
@@ -410,6 +424,22 @@ function autoClusterSlots(
   }
   byGroup.clear();
   for (const [key, value] of entityRowClusters.entries()) {
+    byGroup.set(key, value);
+  }
+
+  // Bước 4: dọn cluster cuối — nếu vẫn còn >=2 slot cùng canonical path trong
+  // cùng cluster (ví dụ 2 "entity.name" đứng gần nhau), force-split bằng anchor.
+  const finalClusters = new Map<string, Slot[]>();
+  for (const [key, value] of byGroup.entries()) {
+    const anchorSplits = splitClusterByRepeatedAnchors(key, value);
+    if (anchorSplits.length > 1) {
+      for (const split of anchorSplits) finalClusters.set(split.key, split.slots);
+    } else {
+      finalClusters.set(key, value);
+    }
+  }
+  byGroup.clear();
+  for (const [key, value] of finalClusters.entries()) {
     byGroup.set(key, value);
   }
 

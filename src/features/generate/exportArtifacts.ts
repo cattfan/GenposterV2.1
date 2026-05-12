@@ -19,60 +19,20 @@ interface CaptionVariant {
 const FIXED_HASHTAGS = ["#riviudalat", "#dalat", "#dalatreview"];
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8";
 
-const PARTNER_FIELDS: Array<{
-  label: string;
-  path: string;
-  read: (entity: Entity) => unknown;
-}> = [
-  { label: "Tên đối tác", path: "name", read: (entity) => entity.name },
-  { label: "Địa chỉ", path: "address", read: (entity) => entity.address },
-  { label: "Số điện thoại", path: "phone", read: (entity) => entity.phone },
-  { label: "Mô hình", path: "categoryMain", read: (entity) => entity.categoryMain },
-  { label: "Phong cách", path: "categorySub", read: (entity) => entity.categorySub },
-  { label: "Giá", path: "priceRange", read: (entity) => entity.priceRange },
-  { label: "Giờ mở cửa", path: "openingHours", read: (entity) => entity.openingHours },
-  { label: "Phong cách khác", path: "style", read: (entity) => entity.style },
-  {
-    label: "Từ khóa SEO",
-    path: "seoKeywords",
-    read: (entity) => entity.seoKeywords.join(", "),
-  },
-  { label: "Nguồn dữ liệu", path: "sheetName", read: (entity) => entity.sheetName },
-  { label: "Mã dòng nguồn", path: "sourceRowId", read: (entity) => entity.sourceRowId },
-];
-
 export function buildPartnerWorkbookBlob(input: {
   pages: ExportPageEntityData[];
   entities: Entity[];
 }): Blob {
   const partners = collectPartnerLikeEntities(input.pages, input.entities);
-  const metadataKeys = Array.from(
-    new Set(partners.flatMap((entity) => Object.keys(entity.metadata ?? {}))),
-  ).sort((a, b) => a.localeCompare(b, "vi"));
-
-  const fields = [
-    ...PARTNER_FIELDS,
-    ...metadataKeys.map((key) => ({
-      label: `Metadata: ${key}`,
-      path: `metadata.${key}`,
-      read: (entity: Entity) => entity.metadata?.[key],
-    })),
-  ];
-
   const dataRows =
     partners.length > 0
-      ? fields.map((field) => partners.map((entity) => stringifyCell(field.read(entity))))
-    : [["Không có đối tác hoặc dữ liệu nào trong bộ ảnh đã chọn."]];
+      ? [partners.map((entity) => stringifyCell(entity.name))]
+      : [["Không có đối tác hoặc dữ liệu nào trong bộ ảnh đã chọn."]];
 
   const workbook = XLSX.utils.book_new();
   const partnerSheet = XLSX.utils.aoa_to_sheet(dataRows);
   partnerSheet["!cols"] = partners.length ? partners.map(() => ({ wch: 34 })) : [{ wch: 48 }];
   XLSX.utils.book_append_sheet(workbook, partnerSheet, "doitac");
-
-  const guideRows = fields.map((field, index) => [index + 1, field.label, field.path]);
-  const guideSheet = XLSX.utils.aoa_to_sheet([["Dòng", "Trường", "Path"], ...guideRows]);
-  guideSheet["!cols"] = [{ wch: 8 }, { wch: 24 }, { wch: 28 }];
-  XLSX.utils.book_append_sheet(workbook, guideSheet, "fields");
 
   const buffer = XLSX.write(workbook, { bookType: "xlsx", type: "array" }) as ArrayBuffer;
   return new Blob([buffer], { type: XLSX_MIME });
@@ -361,4 +321,185 @@ function stringifyCell(value: unknown): string {
   if (Array.isArray(value)) return value.map(stringifyCell).filter(Boolean).join(", ");
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+// Publish bundle (ZIP) helpers.
+// Output files are intentionally minimal for handoff: poster images at ZIP
+// root, caption.txt, and doitac.xlsx when requested.
+
+interface PublishManifestEntry {
+  file: string;
+  pageIndex: number;
+  pageName?: string;
+  entityId?: string;
+  entityName?: string;
+  partnerFlag?: boolean;
+  templateId?: string;
+  templateName?: string;
+}
+
+export interface PublishManifest {
+  generatedAt: string;
+  packName: string;
+  bundleLabel?: string;
+  imageCount: number;
+  entityIds: string[];
+  pages: PublishManifestEntry[];
+}
+
+function buildPublishManifest(input: {
+  packName: string;
+  bundleLabel?: string;
+  pages: ExportPageEntityData[];
+  entities: Entity[];
+  files: Array<{ name: string; pageIndex: number; templateId?: string; templateName?: string }>;
+}): PublishManifest {
+  const entityMap = new Map(input.entities.map((e) => [e.entityId, e]));
+  const pageMap = new Map<number, ExportPageEntityData>();
+  input.pages.forEach((page, idx) => {
+    const pageIndex = (page as ExportPageEntityData & { pageIndex?: number }).pageIndex ?? idx;
+    pageMap.set(pageIndex, page);
+  });
+  const usedEntityIds = new Set<string>();
+  const entries: PublishManifestEntry[] = input.files.map((file) => {
+    const page = pageMap.get(file.pageIndex);
+    const entity = page?.entityId ? entityMap.get(page.entityId) : undefined;
+    if (page?.entityId) usedEntityIds.add(page.entityId);
+    for (const item of page?.items ?? []) {
+      if (item.entityId) usedEntityIds.add(item.entityId);
+    }
+    return {
+      file: file.name,
+      pageIndex: file.pageIndex,
+      pageName: page?.pageName,
+      entityId: page?.entityId,
+      entityName: entity?.name ?? page?.entityName,
+      partnerFlag: entity?.partnerFlag,
+      templateId: file.templateId,
+      templateName: file.templateName,
+    };
+  });
+  return {
+    generatedAt: new Date().toISOString(),
+    packName: input.packName,
+    bundleLabel: input.bundleLabel,
+    imageCount: input.files.length,
+    entityIds: Array.from(usedEntityIds),
+    pages: entries,
+  };
+}
+
+/**
+ * Extract hashtag list from caption text. Deduplicates while preserving order.
+ * The caption builder tends to repeat `#riviudalat`, `#dalat`, `#dalatreview`
+ * across variants so we only want each tag once.
+ */
+function extractHashtagLines(captionText: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const tokens = captionText.match(/#[\p{L}0-9_]+/gu) ?? [];
+  for (const raw of tokens) {
+    const tag = raw.trim();
+    if (!tag || seen.has(tag.toLowerCase())) continue;
+    seen.add(tag.toLowerCase());
+    out.push(tag);
+  }
+  return out;
+}
+
+function buildBundleSlug(bundleLabel: string | undefined): string {
+  const clean = stripVietnamese(bundleLabel ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  const number = clean.match(/\d+/)?.[0];
+  if (number) return `bo${number}`;
+  const slug = clean.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || "bo1";
+}
+
+function getImageExtension(fileName: string, blob: Blob): string {
+  if (blob.type === "image/png") return "png";
+  if (blob.type === "image/jpeg") return "jpg";
+  if (blob.type === "image/webp") return "webp";
+  const extension = fileName.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
+  if (extension && ["png", "jpg", "jpeg", "webp"].includes(extension)) {
+    return extension === "jpeg" ? "jpg" : extension;
+  }
+  return "png";
+}
+
+export interface PublishBundleInput {
+  packName: string;
+  bundleLabel?: string;
+  images: Array<{ fileName: string; blob: Blob; pageIndex: number; templateId?: string; templateName?: string }>;
+  pages: Array<ExportPageEntityData & { pageIndex: number }>;
+  entities: Entity[];
+  variantCount?: number;
+  includePartnerWorkbook?: boolean;
+}
+
+export interface PublishBundleArtifacts {
+  files: Array<{ name: string; blob: Blob }>;
+  captionText: string;
+  hashtags: string[];
+  manifest: PublishManifest;
+}
+
+/**
+ * Build a complete publish-ready bundle in memory. Returns both the files ready
+ * for JSZip and auxiliary data (captionText, hashtags, manifest) so the caller
+ * can surface previews in the UI before triggering the download.
+ */
+export async function buildPublishBundle(
+  input: PublishBundleInput,
+): Promise<PublishBundleArtifacts> {
+  const variantCount = Math.max(1, Math.min(8, input.variantCount ?? 4));
+
+  const bundleSlug = buildBundleSlug(input.bundleLabel);
+  const imageFiles = input.images.map((entry, index) => ({
+    name: `3x4-${index + 1}-${bundleSlug}.${getImageExtension(entry.fileName, entry.blob)}`,
+    blob: entry.blob,
+    pageIndex: entry.pageIndex,
+    templateId: entry.templateId,
+    templateName: entry.templateName,
+  }));
+
+  const captionText = await buildTikTokCaptionText({
+    packName: input.packName,
+    bundleLabel: input.bundleLabel,
+    pages: input.pages,
+    entities: input.entities,
+    variantCount,
+  });
+  const hashtags = extractHashtagLines(captionText);
+
+  const manifest = buildPublishManifest({
+    packName: input.packName,
+    bundleLabel: input.bundleLabel,
+    pages: input.pages,
+    entities: input.entities,
+    files: imageFiles.map((f) => ({
+      name: f.name,
+      pageIndex: f.pageIndex,
+      templateId: f.templateId,
+      templateName: f.templateName,
+    })),
+  });
+
+  const files: Array<{ name: string; blob: Blob }> = [
+    ...imageFiles.map((f) => ({ name: f.name, blob: f.blob })),
+    {
+      name: "caption.txt",
+      blob: new Blob([captionText], { type: "text/plain;charset=utf-8" }),
+    },
+  ];
+
+  if (input.includePartnerWorkbook !== false) {
+    files.push({
+      name: "doitac.xlsx",
+      blob: buildPartnerWorkbookBlob({ pages: input.pages, entities: input.entities }),
+    });
+  }
+
+  return { files, captionText, hashtags, manifest };
 }

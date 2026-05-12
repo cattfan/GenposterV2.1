@@ -1,5 +1,5 @@
 // Tab "Pack template (nâng cao)" — bind dữ liệu vào từng page của pack giống tab entity.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { nanoid } from "nanoid";
 import { toast } from "sonner";
@@ -26,6 +26,7 @@ import {
   Trash2,
   Undo2,
   Redo2,
+  Play as PlayIcon,
 } from "lucide-react";
 import type {
   Asset,
@@ -59,12 +60,14 @@ import {
   buildEntityScopedTextBindingPath,
   getEntityScopedTextBindingBasePath,
   isAssetRandomScopeBindingPath,
+  isEntityScopedImageBindingPath,
   parseAssetRandomScopeBindingPath,
   parseEntityListBindingPath,
   parseEntityScopedTextBindingPath,
   resolveTextBinding,
 } from "@/engines/binding/dataBinding";
 import { BindCanvas } from "@/features/generate/BindCanvas";
+import { BindingIssuesPanel } from "@/features/generate/BindingIssuesPanel";
 import { PageRenderer } from "@/features/render/PageRenderer";
 import {
   TextListBindingPanel,
@@ -72,6 +75,7 @@ import {
 } from "@/features/generate/TextListBindingPanel";
 import { TextRewritePanel } from "@/features/generate/TextRewritePanel";
 import { GeneratePageEditor } from "@/features/generate/GeneratePageEditor";
+import { isLikelyGeneratePageBackgroundSlot } from "@/features/generate/backgroundGuards";
 import { aiCaptionFromEntity, aiRewriteTextPreserveMeaning } from "@/features/ai/aiFeatures";
 import { generatePackJob } from "@/engines/selection/generate";
 import { allocateEntityBindingsForTemplate } from "@/engines/selection/entityBindAllocator";
@@ -93,10 +97,10 @@ import {
   createWorkingTemplate,
   clonePageTemplate,
   resolvePageWorkingTemplate,
+  restoreTemplateGroups,
 } from "@/features/generate/templateState";
 import {
-  buildPartnerWorkbookBlob,
-  buildTikTokCaptionBlob,
+  buildPublishBundle,
 } from "@/features/generate/exportArtifacts";
 import { applyFontVariationToGeneratedJob } from "@/features/generate/fontVariation";
 import {
@@ -107,6 +111,7 @@ import {
   safePortableFileName,
 } from "@/features/generate/generatePresetPortability";
 import { formatTemplateDisplayName } from "@/lib/templateNames";
+import { usePageCommands, type CommandEntry } from "@/components/CommandPalette";
 
 type Filter = "all" | "selected" | "errors" | "partner";
 type SurfaceSelectionRect = { left: number; top: number; width: number; height: number };
@@ -157,6 +162,19 @@ function clonePreviewPageDrafts(drafts: PreviewPageDrafts): PreviewPageDrafts {
     Object.entries(drafts).map(([pageTemplateId, template]) => [
       pageTemplateId,
       clonePageTemplate(template),
+    ]),
+  );
+}
+
+function cloneTemplateDraftsWithSource(
+  drafts: PreviewPageDrafts,
+  sourceTemplates: PageTemplate[],
+): PreviewPageDrafts {
+  const sourceById = new Map(sourceTemplates.map((template) => [template.pageTemplateId, template]));
+  return Object.fromEntries(
+    Object.entries(drafts).map(([pageTemplateId, template]) => [
+      pageTemplateId,
+      clonePageTemplate(restoreTemplateGroups(sourceById.get(pageTemplateId), template)),
     ]),
   );
 }
@@ -253,17 +271,13 @@ function buildConfiguredEntityPool(
     }
     return a.name.localeCompare(b.name, "vi");
   });
-  return list.slice(0, config.maxEntities);
+  return list;
 }
 
 function slotNeedsEntityImage(slot: Slot): boolean {
   if (slot.kind !== "image" && slot.kind !== "shape") return false;
   const bindingPath = slot.bindingPath ?? "";
-  return (
-    bindingPath === "asset.random" ||
-    bindingPath === "asset.random_global" ||
-    bindingPath.startsWith("asset.byRole:")
-  );
+  return isEntityScopedImageBindingPath(bindingPath);
 }
 
 function textBindingOptionLabel(value: string, label: string): string {
@@ -328,6 +342,9 @@ export function PackTabContent({
   } | null>(null);
   const presetImportRef = useRef<HTMLInputElement>(null);
   const presetAutosaveTimer = useRef<number | null>(null);
+  const buildCurrentPresetPayloadRef = useRef<
+    ((name: string, presetId?: string, createdAt?: number) => GenerateBindingPreset) | null
+  >(null);
   const {
     all: packOv,
     setBinding,
@@ -343,6 +360,8 @@ export function PackTabContent({
   const previewPageDraftsRef = useRef<PreviewPageDrafts>({});
   const previewDraftPastRef = useRef<PreviewPageDrafts[]>([]);
   const previewDraftFutureRef = useRef<PreviewPageDrafts[]>([]);
+  const undoPreviewPageDraftsRef = useRef<() => void>(() => {});
+  const redoPreviewPageDraftsRef = useRef<() => void>(() => {});
   const [previewDraftHistoryVersion, setPreviewDraftHistoryVersion] = useState(0);
   const generatePresets = useLiveQuery(
     () => db.generatePresets.where("mode").equals("pack").toArray(),
@@ -376,8 +395,9 @@ export function PackTabContent({
   };
 
   const setPreviewDraftsNoHistory = (next: PreviewPageDrafts) => {
-    previewPageDraftsRef.current = next;
-    setPreviewPageDrafts(next);
+    const hydrated = cloneTemplateDraftsWithSource(next, packPages);
+    previewPageDraftsRef.current = hydrated;
+    setPreviewPageDrafts(hydrated);
   };
 
   const commitPreviewPageDrafts = (
@@ -405,6 +425,14 @@ export function PackTabContent({
     if (options.history === false) clearPreviewDraftHistory();
   };
 
+  const replacePreviewPageDrafts = (
+    next: PreviewPageDrafts,
+    options: { history?: boolean } = {},
+  ) => {
+    commitPreviewPageDrafts(() => clonePreviewPageDrafts(next), options);
+    if (options.history === false) clearPreviewDraftHistory();
+  };
+
   const undoPreviewPageDrafts = () => {
     const previous = previewDraftPastRef.current.at(-1);
     if (!previous) return;
@@ -428,6 +456,11 @@ export function PackTabContent({
     setPreviewDraftsNoHistory(clonePreviewPageDrafts(next));
     touchPreviewDraftHistory();
   };
+
+  useEffect(() => {
+    undoPreviewPageDraftsRef.current = undoPreviewPageDrafts;
+    redoPreviewPageDraftsRef.current = redoPreviewPageDrafts;
+  });
 
   const effectiveActive = useMemo(
     () =>
@@ -529,7 +562,10 @@ export function PackTabContent({
     [entities],
   );
   const pageTemplatesForGenerate = useMemo(
-    () => tpls.map((tpl) => previewPageDrafts[tpl.pageTemplateId] ?? tpl),
+    () =>
+      tpls.map((tpl) =>
+        restoreTemplateGroups(tpl, previewPageDrafts[tpl.pageTemplateId] ?? tpl),
+      ),
     [tpls, previewPageDrafts],
   );
   const previewGenerateJob = useMemo(() => {
@@ -545,7 +581,7 @@ export function PackTabContent({
       partnerQuotaPerPage: globalGenerateConfig.partnerQuotaPerPage,
       prioritizePartner,
       onlyPartner,
-      maxEntities,
+      batchCount: maxEntities,
       selectedSheet: globalGenerateConfig.selectedSheet,
       filterMoHinh: globalGenerateConfig.filterMoHinh,
       filterPhongCach: globalGenerateConfig.filterPhongCach,
@@ -649,7 +685,7 @@ export function PackTabContent({
   };
   const enabledPageConfigCount = Object.keys(pageConfigs).length;
 
-  const buildOrderedEntityPool = (
+  const buildOrderedEntityPool = useCallback((
     primaryEntityId: string | undefined,
     pool: Entity[] = filteredEntities,
   ): Entity[] => {
@@ -658,9 +694,9 @@ export function PackTabContent({
       ...pool.filter((entity) => entity.entityId === primaryEntityId),
       ...pool.filter((entity) => entity.entityId !== primaryEntityId),
     ];
-  };
+  }, [filteredEntities]);
 
-  const buildPageEntityPool = (page: GenerationJob["pages"][number] | undefined): Entity[] => {
+  const buildPageEntityPool = useCallback((page: GenerationJob["pages"][number] | undefined): Entity[] => {
     if (page?.entityPoolIds?.length) {
       const byId = new Map(entities.map((entity) => [entity.entityId, entity]));
       const pool = page.entityPoolIds
@@ -669,9 +705,9 @@ export function PackTabContent({
       if (pool.length > 0) return pool;
     }
     return buildOrderedEntityPool(page?.entityId);
-  };
+  }, [buildOrderedEntityPool, entities]);
 
-  const buildPresetPreviewRenderContext = (
+  const buildPresetPreviewRenderContext = useCallback((
     preset: GenerateBindingPreset,
     template: PageTemplate,
   ) => {
@@ -715,11 +751,11 @@ export function PackTabContent({
       entityPool: pool,
       slotItems: allocation?.items ?? [],
     };
-  };
+  }, [activeFilteredEntities, entities, filteredEntities, globalGenerateConfig]);
 
   const previewEntityPool = useMemo(
     () => buildOrderedEntityPool(previewEntityId, activeFilteredEntities),
-    [activeFilteredEntities, previewEntityId],
+    [activeFilteredEntities, buildOrderedEntityPool, previewEntityId],
   );
 
   const activeTargetCount = useMemo(
@@ -742,13 +778,25 @@ export function PackTabContent({
     previewPageDraftsRef.current = previewPageDrafts;
   }, [previewPageDrafts]);
 
+  useEffect(() => {
+    if (Object.keys(previewPageDraftsRef.current).length === 0) return;
+    const hydrated = cloneTemplateDraftsWithSource(previewPageDraftsRef.current, packPages);
+    if (JSON.stringify(hydrated) === JSON.stringify(previewPageDraftsRef.current)) return;
+    previewPageDraftsRef.current = hydrated;
+    setPreviewPageDrafts(hydrated);
+  }, [packPages]);
+
   // Reset slot khi đổi pack/page
   useEffect(() => {
     setSelectedSlotIds([]);
     setFormatClipboard(null);
     setActivePageIdx(0);
     setPageConfigs({});
-    resetPreviewPageDrafts({ history: false });
+    previewPageDraftsRef.current = {};
+    setPreviewPageDrafts({});
+    previewDraftPastRef.current = [];
+    previewDraftFutureRef.current = [];
+    setPreviewDraftHistoryVersion((version) => version + 1);
     setEditingPageIndex(null);
     setEditingPreviewOpen(false);
   }, [packId]);
@@ -787,15 +835,35 @@ export function PackTabContent({
 
   useEffect(() => {
     if (!hasMoHinhOptions && activeGenerateConfig.filterMoHinh !== ALL_VALUE) {
-      updateActiveSourceConfig({ filterMoHinh: ALL_VALUE });
+      if (!activePage) {
+        setFilterMoHinh(ALL_VALUE);
+        return;
+      }
+      setPageConfigs((prev) => ({
+        ...prev,
+        [activePage.pageTemplateId]: {
+          ...resolveGeneratePageConfig(globalGenerateConfig, prev[activePage.pageTemplateId]),
+          filterMoHinh: ALL_VALUE,
+        },
+      }));
     }
-  }, [hasMoHinhOptions, activeGenerateConfig.filterMoHinh]);
+  }, [activePage, globalGenerateConfig, hasMoHinhOptions, activeGenerateConfig.filterMoHinh]);
 
   useEffect(() => {
     if (!hasPhongCachOptions && activeGenerateConfig.filterPhongCach !== ALL_VALUE) {
-      updateActiveSourceConfig({ filterPhongCach: ALL_VALUE });
+      if (!activePage) {
+        setFilterPhongCach(ALL_VALUE);
+        return;
+      }
+      setPageConfigs((prev) => ({
+        ...prev,
+        [activePage.pageTemplateId]: {
+          ...resolveGeneratePageConfig(globalGenerateConfig, prev[activePage.pageTemplateId]),
+          filterPhongCach: ALL_VALUE,
+        },
+      }));
     }
-  }, [hasPhongCachOptions, activeGenerateConfig.filterPhongCach]);
+  }, [activePage, globalGenerateConfig, hasPhongCachOptions, activeGenerateConfig.filterPhongCach]);
 
   useEffect(() => {
     if (!workspaceOpen) return;
@@ -805,12 +873,12 @@ export function PackTabContent({
       if (event.shiftKey) {
         if (previewDraftFutureRef.current.length === 0) return;
         event.preventDefault();
-        redoPreviewPageDrafts();
+        redoPreviewPageDraftsRef.current();
         return;
       }
       if (previewDraftPastRef.current.length === 0) return;
       event.preventDefault();
-      undoPreviewPageDrafts();
+      undoPreviewPageDraftsRef.current();
     };
 
     window.addEventListener("keydown", onKeyDown);
@@ -844,9 +912,16 @@ export function PackTabContent({
     activeFilteredEntities,
     activeGenerateConfig,
     activeTargetCount,
+    buildOrderedEntityPool,
+    previewEntityId,
   ]);
-  const getSlotBindMode = (slot: Slot): "text" | "image" | null => {
+  const getSlotBindMode = (
+    slot: Slot,
+    template: PageTemplate | undefined = effectiveActive,
+  ): "text" | "image" | null => {
+    if (slot.isUploadedBackground) return null;
     if (isDataGroupMarkerSlot(slot)) return null;
+    if (isLikelyGeneratePageBackgroundSlot(slot, template)) return null;
     if (slot.kind === "text") return "text";
     if (slot.kind === "image") return "image";
     if (slot.kind === "shape") return slot.staticText?.trim() ? "text" : "image";
@@ -873,7 +948,6 @@ export function PackTabContent({
     for (const slot of selectedSlots) {
       if (getSlotBindMode(slot) !== null) {
         addBindable(slot, resolved);
-        continue;
       }
 
       for (const item of effectiveActive.slots) {
@@ -883,11 +957,14 @@ export function PackTabContent({
           (slot.kind === "group" && item.groupId === slot.slotId) ||
           (slot.groupId && item.groupId === slot.groupId);
         const sameSection =
-          (slot.kind === "section" && !!slot.sectionRefId && item.sectionRefId === slot.sectionRefId) ||
-          (slot.sectionRefId && item.sectionRefId === slot.sectionRefId);
+          slot.kind === "section" &&
+          !!slot.sectionRefId &&
+          item.sectionRefId === slot.sectionRefId;
         const insideSelectedContainer =
           (slot.kind === "section" || slot.kind === "group") &&
           getSlotBindMode(item) !== null &&
+          !item.isUploadedBackground &&
+          !isLikelyGeneratePageBackgroundSlot(item, effectiveActive) &&
           !isDataGroupMarkerSlot(item) &&
           slotCenterInside(slot, item);
         if (sameDataGroup || sameGroup || sameSection || insideSelectedContainer) {
@@ -917,9 +994,6 @@ export function PackTabContent({
           }
           if (selectedFormatBaseSlot.groupId)
             return slot.groupId === selectedFormatBaseSlot.groupId;
-          if (selectedFormatBaseSlot.sectionRefId) {
-            return slot.sectionRefId === selectedFormatBaseSlot.sectionRefId;
-          }
           return false;
         })
       : [];
@@ -951,6 +1025,34 @@ export function PackTabContent({
       : slot.bindingPath === "asset.cover"
         ? "asset.random"
         : (slot.bindingPath ?? "_static");
+  const isTextDataSlot = (slot: Slot | undefined) =>
+    !!slot &&
+    getSlotBindMode(slot) === "text" &&
+    (!!slot.bindingPath?.startsWith("entity.") ||
+      !!parseEntityListBindingPath(slot.bindingPath) ||
+      !!slot.fieldParts?.some((part) => part.kind === "field" && !!part.bindingPath));
+  const imageSlotHasLinkedText = (slot: Slot) => {
+    if (!effectiveActive) return false;
+    const sameDataGroup = slot.dataGroupId
+      ? effectiveActive.slots.some(
+          (item) => item.slotId !== slot.slotId && item.dataGroupId === slot.dataGroupId && isTextDataSlot(item),
+        )
+      : false;
+    if (sameDataGroup) return true;
+    const groupId = slot.groupId;
+    if (!groupId) return false;
+    return effectiveActive.slots.some(
+      (item) => item.slotId !== slot.slotId && item.groupId === groupId && isTextDataSlot(item),
+    );
+  };
+  const imageBindingOptionsForSlot = (slot: Slot) => {
+    const hasLinkedText = imageSlotHasLinkedText(slot);
+    return IMAGE_BINDING_OPTIONS.filter((option) => {
+      const value = option.value || "_static";
+      if (isEntityScopedImageBindingPath(value)) return hasLinkedText;
+      return true;
+    });
+  };
   const normalizeSlotLabel = (label: string | undefined, fallback: string) => {
     const value = label?.trim();
     if (!value) return fallback;
@@ -1010,7 +1112,7 @@ export function PackTabContent({
     }
     setSelectedSlotIds((prev) => {
       if (mode === "replace") {
-        return relatedSlotIds.length > 1 ? Array.from(new Set(relatedSlotIds)) : [slotId];
+        return relatedSlotIds.length > 0 ? Array.from(new Set(relatedSlotIds)) : [slotId];
       }
       if (mode === "toggle") {
         return prev.includes(slotId) ? prev.filter((id) => id !== slotId) : [...prev, slotId];
@@ -1123,13 +1225,22 @@ export function PackTabContent({
     pageTemplateId: string,
     bindingPath: string | undefined,
   ) => {
-    slots.forEach((slot) => setBinding(pageTemplateId, slot.slotId, bindingPath));
+    const writableSlots = slots.filter((slot) => {
+      const template =
+        pageTemplateId === activePage?.pageTemplateId
+          ? effectiveActive
+          : packPages.find((page) => page.pageTemplateId === pageTemplateId);
+      return getSlotBindMode(slot, template) !== null;
+    });
+    if (writableSlots.length === 0) return;
+    writableSlots.forEach((slot) => setBinding(pageTemplateId, slot.slotId, bindingPath));
     commitPreviewPageDrafts((prev) => {
       const current = prev[pageTemplateId];
       if (!current) return prev;
+      const targetIds = new Set(writableSlots.map((slot) => slot.slotId));
       const next = createWorkingTemplate(current, undefined, current);
       next.slots = next.slots.map((slot) => {
-        if (!slots.some((target) => target.slotId === slot.slotId)) return slot;
+        if (!targetIds.has(slot.slotId)) return slot;
         return { ...slot, bindingPath: bindingPath || undefined };
       });
       next.updatedAt = Date.now();
@@ -1411,7 +1522,6 @@ export function PackTabContent({
 
         const nextFieldParts = cloneJsonValue(snapshot.fieldParts);
         const nextAllowedAssetRoles = cloneJsonValue(snapshot.allowedAssetRoles);
-        const shouldClearStaticImage = snapshot.bindMode === "image" && !!snapshot.bindingPath;
         const nextDataGroupId = shouldApplyDataGroups ? assignment.dataGroupId : slot.dataGroupId;
         const nextSlot = {
           ...slot,
@@ -1419,15 +1529,13 @@ export function PackTabContent({
           fieldParts: nextFieldParts,
           allowedAssetRoles: nextAllowedAssetRoles,
           dataGroupId: nextDataGroupId,
-          staticImage: shouldClearStaticImage ? undefined : slot.staticImage,
         };
         if (
           slot.bindingPath !== nextSlot.bindingPath ||
           stringifyFormatValue(slot.fieldParts) !== stringifyFormatValue(nextSlot.fieldParts) ||
           stringifyFormatValue(slot.allowedAssetRoles) !==
             stringifyFormatValue(nextSlot.allowedAssetRoles) ||
-          slot.dataGroupId !== nextSlot.dataGroupId ||
-          slot.staticImage !== nextSlot.staticImage
+          slot.dataGroupId !== nextSlot.dataGroupId
         ) {
           changed = true;
         }
@@ -1521,16 +1629,35 @@ export function PackTabContent({
       ),
     [packPages, packOv, previewPageDrafts],
   );
-  const hasTextOrImageSlots = useMemo(
+  const pageReadinessRows = useMemo(
     () =>
-      packPages.some((page) =>
-        (resolvePageWorkingTemplate(
+      packPages.map((page, index) => {
+        const template =
+          resolvePageWorkingTemplate(
+            page,
+            packOv[page.pageTemplateId],
+            previewPageDrafts[page.pageTemplateId],
+          ) ?? page;
+        const config = resolveGeneratePageConfig(
+          globalGenerateConfig,
+          pageConfigs[page.pageTemplateId],
+        );
+        const sourceEntities = buildSourceFilteredEntities(entities, config);
+        const configuredEntities = buildConfiguredEntityPool(sourceEntities, config);
+        return {
           page,
-          packOv[page.pageTemplateId],
-          previewPageDrafts[page.pageTemplateId],
-        )?.slots ?? []).some((slot) => getSlotBindMode(slot) !== null),
-      ),
-    [packPages, packOv, previewPageDrafts],
+          index,
+          entityCount: configuredEntities.length,
+          bindableCount: template.slots.filter((slot) => getSlotBindMode(slot, template) !== null).length,
+          boundCount: template.slots.filter((slot) => !!slot.bindingPath).length,
+          targetCount: buildEntityBindingTargets(template, configuredEntities).length,
+        };
+      }),
+    [packPages, packOv, previewPageDrafts, globalGenerateConfig, pageConfigs, entities],
+  );
+  const hasTextOrImageSlots = useMemo(
+    () => pageReadinessRows.some((row) => row.bindableCount > 0),
+    [pageReadinessRows],
   );
   const generateReadiness: GenerateReadiness = useMemo(() => {
     if (!selectedPack) return { canGenerate: false, reason: "Chưa chọn bộ mẫu" };
@@ -1543,6 +1670,15 @@ export function PackTabContent({
     }
     if (totalBound === 0) {
       return { canGenerate: false, reason: "Chưa liên kết khung chữ/ảnh với dữ liệu" };
+    }
+    const emptyPage = pageReadinessRows.find(
+      (row) => row.targetCount > 0 && row.entityCount === 0,
+    );
+    if (emptyPage) {
+      return {
+        canGenerate: false,
+        reason: `Trang ${emptyPage.index + 1} không có dòng dữ liệu phù hợp`,
+      };
     }
     if (activeAvailableEntities.length === 0) {
       return {
@@ -1565,6 +1701,7 @@ export function PackTabContent({
     generationBaseEntities.length,
     hasTextOrImageSlots,
     totalBound,
+    pageReadinessRows,
     activeAvailableEntities.length,
     hasActiveDataFilters,
     estimateGeneratedPageCount,
@@ -1704,6 +1841,12 @@ export function PackTabContent({
     const savedPageConfigs = Object.fromEntries(
       Object.entries(pageConfigs).filter(([pageTemplateId]) => allowedPageIds.has(pageTemplateId)),
     );
+    const hydratedDrafts = cloneTemplateDraftsWithSource(previewPageDraftsRef.current, packPages);
+    const pageTemplateDrafts = Object.fromEntries(
+      Object.entries(hydratedDrafts)
+        .filter(([pageTemplateId]) => allowedPageIds.has(pageTemplateId))
+        .map(([pageTemplateId, template]) => [pageTemplateId, clonePageTemplate(template)]),
+    );
 
     return {
       presetId,
@@ -1713,6 +1856,8 @@ export function PackTabContent({
       packTemplateNameSnapshot: selectedPack?.name,
       pageTemplateIds: packPages.map((page) => page.pageTemplateId),
       bindOverrides,
+      pageTemplateDrafts:
+        Object.keys(pageTemplateDrafts).length > 0 ? pageTemplateDrafts : undefined,
       generateConfig: {
         selectedSheet,
         filterMoHinh,
@@ -1721,6 +1866,7 @@ export function PackTabContent({
         onlyPartner,
         partnerQuotaPerPage,
         maxEntities,
+        batchCount: maxEntities,
         varyFontsFromSecondBundle,
         pageConfigs: savedPageConfigs,
       },
@@ -1729,6 +1875,10 @@ export function PackTabContent({
       version: 1,
     };
   };
+
+  useEffect(() => {
+    buildCurrentPresetPayloadRef.current = buildCurrentPresetPayload;
+  });
 
   const applyPreset = (preset: GenerateBindingPreset) => {
     const cfg = preset.generateConfig;
@@ -1742,7 +1892,8 @@ export function PackTabContent({
     if (cfg.prioritizePartner != null) setPrioritizePartner(cfg.prioritizePartner);
     if (cfg.onlyPartner != null) setOnlyPartner(cfg.onlyPartner);
     if (cfg.partnerQuotaPerPage != null) setPartnerQuotaPerPage(cfg.partnerQuotaPerPage);
-    if (cfg.maxEntities != null) setMaxEntities(cfg.maxEntities);
+    if (cfg.batchCount != null) setMaxEntities(cfg.batchCount);
+    else if (cfg.maxEntities != null) setMaxEntities(cfg.maxEntities);
     if (cfg.varyFontsFromSecondBundle != null) {
       setVaryFontsFromSecondBundle(cfg.varyFontsFromSecondBundle);
     }
@@ -1769,7 +1920,7 @@ export function PackTabContent({
     });
 
     replaceAll(nextOverrides);
-    resetPreviewPageDrafts({ history: false });
+    replacePreviewPageDrafts(preset.pageTemplateDrafts ?? {}, { history: false });
     setSelectedSlotIds([]);
     setActivePageIdx(0);
     toast.success("Đã áp khuôn" + (missing ? `, bỏ qua ${missing} khối thiếu` : ""));
@@ -1816,11 +1967,12 @@ export function PackTabContent({
     }
 
     presetAutosaveTimer.current = window.setTimeout(() => {
-      const preset = buildCurrentPresetPayload(
+      const preset = buildCurrentPresetPayloadRef.current?.(
         selectedPreset.name,
         selectedPreset.presetId,
         selectedPreset.createdAt,
       );
+      if (!preset) return;
       db.generatePresets.put(preset).catch((error) => {
         toast.error(
           "Không thể tự lưu khuôn: " + (error instanceof Error ? error.message : String(error)),
@@ -1844,6 +1996,7 @@ export function PackTabContent({
     selectedPack?.name,
     packPages,
     packOv,
+    previewPageDrafts,
     selectedSheet,
     filterMoHinh,
     filterPhongCach,
@@ -1853,6 +2006,8 @@ export function PackTabContent({
     maxEntities,
     pageConfigs,
     varyFontsFromSecondBundle,
+    selectedPreset,
+    selectedPack,
   ]);
 
   const runAiCaption = async () => {
@@ -1941,29 +2096,23 @@ export function PackTabContent({
     if (!generateReadiness.canGenerate) {
       return toast.error(generateReadiness.reason);
     }
-    let job = previewGenerateJob
-      ? {
-          ...previewGenerateJob,
-          jobId: nanoid(),
-          createdAt: Date.now(),
-        }
-      : generatePackJob({
-          pack: selectedPack,
-          pageTemplates: pageTemplatesForGenerate,
-          entities,
-          assets,
-          mode: "one-entity-per-pack",
-          entityPool: generationBaseEntities,
-          bindOverrides: packOv,
-          partnerQuotaPerPage: globalGenerateConfig.partnerQuotaPerPage,
-          prioritizePartner,
-          onlyPartner,
-          maxEntities,
-          selectedSheet: globalGenerateConfig.selectedSheet,
-          filterMoHinh: globalGenerateConfig.filterMoHinh,
-          filterPhongCach: globalGenerateConfig.filterPhongCach,
-          pageConfigs,
-        });
+    let job = generatePackJob({
+      pack: selectedPack,
+      pageTemplates: pageTemplatesForGenerate,
+      entities,
+      assets,
+      mode: "one-entity-per-pack",
+      entityPool: generationBaseEntities,
+      bindOverrides: packOv,
+      partnerQuotaPerPage: globalGenerateConfig.partnerQuotaPerPage,
+      prioritizePartner,
+      onlyPartner,
+      batchCount: maxEntities,
+      selectedSheet: globalGenerateConfig.selectedSheet,
+      filterMoHinh: globalGenerateConfig.filterMoHinh,
+      filterPhongCach: globalGenerateConfig.filterPhongCach,
+      pageConfigs,
+    });
     if (job.pages.length === 0) {
       toast.error("Không có trang nào được tạo. Kiểm tra cấu hình dữ liệu từng trang.");
       return;
@@ -1973,7 +2122,9 @@ export function PackTabContent({
         ...page,
         workingTemplate: previewPageDrafts[page.pageTemplateId]
           ? createWorkingTemplate(
-              previewPageDrafts[page.pageTemplateId],
+              pageTemplatesForGenerate.find(
+                (template) => template.pageTemplateId === page.pageTemplateId,
+              ) ?? previewPageDrafts[page.pageTemplateId],
               undefined,
               previewPageDrafts[page.pageTemplateId],
             )
@@ -2004,7 +2155,10 @@ export function PackTabContent({
 
   const jobPack =
     packs.find((pack) => pack.packTemplateId === currentJob?.packTemplateId) ?? selectedPack;
-  const visiblePageIndexes = new Set(filteredPages?.map((page) => page.pageIndex) ?? []);
+  const visiblePageIndexes = useMemo(
+    () => new Set(filteredPages?.map((page) => page.pageIndex) ?? []),
+    [filteredPages],
+  );
   const bundleGroups = useMemo(() => {
     if (!currentJob || !jobPack) return [];
     return buildBundleGroups(currentJob, jobPack, tpls, entities)
@@ -2013,7 +2167,7 @@ export function PackTabContent({
         pages: group.pages.filter((page) => visiblePageIndexes.has(page.page.pageIndex)),
       }))
       .filter((group) => group.pages.length > 0);
-  }, [currentJob, jobPack, tpls, entities, filter, filteredPages]);
+  }, [currentJob, jobPack, tpls, entities, visiblePageIndexes]);
 
   const bundleImageIssuesByIndex = useMemo(() => {
     const renderableAssets = filterRenderableAssets(assets);
@@ -2090,33 +2244,50 @@ export function PackTabContent({
     if (sel.length === 0) return toast.error("Chưa chọn trang nào");
     toast.info(`Đang xuất ${sel.length} trang...`);
     try {
-      const files: Array<{ name: string; blob: Blob }> = [];
+      const images: Array<{
+        fileName: string;
+        blob: Blob;
+        pageIndex: number;
+        templateId?: string;
+        templateName?: string;
+      }> = [];
       for (const p of sel) {
         const node = packRefs.current.get(p.pageIndex);
         if (!node) continue;
         const blob = await nodeToPngBlob(node, 2);
-        files.push({ name: p.pageFile, blob });
+        images.push({
+          fileName: p.pageFile,
+          blob,
+          pageIndex: p.pageIndex,
+          templateId: p.pageTemplateId,
+          templateName: p.workingTemplate?.name,
+        });
       }
-      if (files.length === 0) return toast.error("Không tìm thấy ảnh đang hiển thị để xuất");
-      files.push({
-        name: "doitac.xlsx",
-        blob: buildPartnerWorkbookBlob({ pages: sel, entities }),
+      if (images.length === 0) return toast.error("Không tìm thấy ảnh đang hiển thị để xuất");
+
+      const bundle = await buildPublishBundle({
+        packName: currentJob.packTemplateName,
+        pages: sel.map((p) => ({
+          pageFile: p.pageFile,
+          pageIndex: p.pageIndex,
+          pageName: p.workingTemplate?.name,
+          entityId: p.entityId,
+          entityName: p.entityName,
+          items: p.items,
+        })),
+        entities,
+        images,
+        variantCount: 4,
       });
-      files.push({
-        name: "chu-thich.txt",
-        blob: await buildTikTokCaptionBlob({
-          packName: currentJob.packTemplateName,
-          pages: sel,
-          entities,
-          variantCount: 4,
-        }),
-      });
+
       await downloadZip(
-        files,
+        bundle.files,
         `${formatTemplateDisplayName(currentJob.packTemplateName, "bo-anh")}.zip`,
       );
       await db.jobs.put({ ...currentJob, status: "exported" });
-      toast.success("Đã xuất ZIP");
+      toast.success(
+        `Đã xuất ZIP · ${bundle.files.length} file · caption.txt có ${bundle.hashtags.length} hashtag`,
+      );
     } catch (error) {
       toast.error("Không thể xuất ZIP: " + formatExportError(error));
     }
@@ -2127,37 +2298,90 @@ export function PackTabContent({
     setBundleExportingIndex(bundle.bundleIndex);
     toast.info(`Đang tải ${bundle.bundleLabel}...`);
     try {
-      const files: Array<{ name: string; blob: Blob }> = [];
+      const images: Array<{
+        fileName: string;
+        blob: Blob;
+        pageIndex: number;
+        templateId?: string;
+        templateName?: string;
+      }> = [];
       for (const meta of bundle.pages) {
         const node = packRefs.current.get(meta.page.pageIndex);
         if (!node) continue;
         const blob = await nodeToPngBlob(node, 2);
-        files.push({ name: meta.displayPageName, blob });
+        images.push({
+          fileName: meta.displayPageName,
+          blob,
+          pageIndex: meta.page.pageIndex,
+          templateId: meta.page.pageTemplateId,
+          templateName: meta.pageTemplate?.name ?? meta.page.workingTemplate?.name,
+        });
       }
-      if (files.length === 0) return toast.error("Không tìm thấy ảnh trong bộ này để tải");
-      const bundlePages = bundle.pages.map((meta) => meta.page);
-      files.push({
-        name: "doitac.xlsx",
-        blob: buildPartnerWorkbookBlob({ pages: bundlePages, entities }),
+      if (images.length === 0) return toast.error("Không tìm thấy ảnh trong bộ này để tải");
+      const bundlePages = bundle.pages.map((meta) => ({
+        pageFile: meta.displayPageName,
+        pageIndex: meta.page.pageIndex,
+        pageName: meta.pageTemplate?.name ?? meta.page.workingTemplate?.name,
+        entityId: meta.page.entityId,
+        entityName: meta.page.entityName,
+        items: meta.page.items,
+      }));
+
+      const publishBundle = await buildPublishBundle({
+        packName: jobPack.name,
+        bundleLabel: bundle.bundleLabel,
+        pages: bundlePages,
+        entities,
+        images,
+        variantCount: 3,
       });
-      files.push({
-        name: "chu-thich.txt",
-        blob: await buildTikTokCaptionBlob({
-          packName: jobPack.name,
-          bundleLabel: bundle.bundleLabel,
-          pages: bundlePages,
-          entities,
-          variantCount: 3,
-        }),
-      });
-      await downloadZip(files, `${bundle.bundleLabel.toLowerCase().replace(/\s+/g, "-")}.zip`);
-      toast.success(`Đã tải ${bundle.bundleLabel}`);
+
+      await downloadZip(
+        publishBundle.files,
+        `${bundle.bundleLabel.toLowerCase().replace(/\s+/g, "-")}.zip`,
+      );
+      toast.success(
+        `Đã tải ${bundle.bundleLabel} · caption.txt có ${publishBundle.hashtags.length} hashtag`,
+      );
     } catch (error) {
       toast.error("Không thể tải bộ: " + formatExportError(error));
     } finally {
       setBundleExportingIndex(null);
     }
   };
+
+  // Contribute pack/generate commands to the global Ctrl+K palette.
+  usePageCommands(
+    useMemo<CommandEntry[]>(
+      () => [
+        {
+          id: "generate:pack",
+          label: "Tạo pack mới",
+          group: "Tạo nội dung",
+          keywords: ["generate", "pack"],
+          shortcut: "Enter",
+          icon: <PlayIcon className="size-4" />,
+          action: () => void onGenerate(),
+        },
+        ...(currentJob
+          ? [
+              {
+                id: "generate:export-zip",
+                label: "Xuất ZIP (ảnh + caption)",
+                group: "Tạo nội dung",
+                keywords: ["export", "zip", "publish"],
+                icon: <Download className="size-4" />,
+                action: () => void exportZip(),
+              },
+            ]
+          : []),
+      ],
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [
+        currentJob?.jobId,
+      ],
+    ),
+  );
 
   const canvasScale = effectiveActive
     ? Math.min(560 / effectiveActive.canvas.width, 700 / effectiveActive.canvas.height)
@@ -2195,6 +2419,7 @@ export function PackTabContent({
         )
       : undefined;
   const editingJobPageTemplate = editingJobPage?.workingTemplate ?? editingJobPageBaseTemplate;
+  const jobRenderSeed = currentJob?.jobId ?? "draft";
 
   return (
     <>
@@ -2383,9 +2608,7 @@ export function PackTabContent({
                       size="icon"
                       className="size-9 shrink-0"
                       onClick={() =>
-                        updateActiveGenerateConfig({
-                          maxEntities: Math.max(1, activeGenerateConfig.maxEntities - 1),
-                        })
+                        setMaxEntities((value) => Math.max(1, value - 1))
                       }
                       aria-label="Giảm số lượng tạo"
                       title="Giảm số lượng tạo"
@@ -2395,9 +2618,9 @@ export function PackTabContent({
                     <Input
                       type="number"
                       min={1}
-                      value={activeGenerateConfig.maxEntities}
+                      value={maxEntities}
                       onChange={(e) =>
-                        updateActiveGenerateConfig({ maxEntities: Number(e.target.value) || 1 })
+                        setMaxEntities(normalizeCount(Number(e.target.value), 5))
                       }
                       className="h-9 text-center"
                       aria-label="Số lượng tạo bộ ảnh"
@@ -2408,9 +2631,7 @@ export function PackTabContent({
                       size="icon"
                       className="size-9 shrink-0"
                       onClick={() =>
-                        updateActiveGenerateConfig({
-                          maxEntities: activeGenerateConfig.maxEntities + 1,
-                        })
+                        setMaxEntities((value) => value + 1)
                       }
                       aria-label="Tăng số lượng tạo"
                       title="Tăng số lượng tạo"
@@ -2551,15 +2772,15 @@ export function PackTabContent({
             </Card>
 
             {/* Cột 2: Canvas bind từng page */}
-            <Card className="col-span-12 lg:col-span-6">
-              <CardHeader className="pb-2 flex flex-row items-center justify-end">
-                <div className="flex gap-1">
+            <Card className="col-span-12 lg:col-span-6 min-w-0 overflow-hidden">
+              <CardHeader className="pb-2">
+                <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 overflow-hidden">
                   <Button
                     size="sm"
                     variant="outline"
                     onClick={undoPreviewPageDrafts}
                     disabled={!canUndoPreviewDraft}
-                    className="h-7 text-xs"
+                    className="h-7 shrink-0 px-2 text-xs"
                     title="Hoàn tác (Ctrl+Z)"
                   >
                     <Undo2 className="size-3 mr-1" /> Hoàn tác
@@ -2569,7 +2790,7 @@ export function PackTabContent({
                     variant="outline"
                     onClick={redoPreviewPageDrafts}
                     disabled={!canRedoPreviewDraft}
-                    className="h-7 text-xs"
+                    className="h-7 shrink-0 px-2 text-xs"
                     title="Làm lại (Ctrl+Shift+Z)"
                   >
                     <Redo2 className="size-3 mr-1" /> Làm lại
@@ -2579,7 +2800,7 @@ export function PackTabContent({
                     variant="outline"
                     onClick={() => setEditingPreviewOpen(true)}
                     disabled={!effectiveActive}
-                    className="h-7 text-xs"
+                    className="h-7 shrink-0 px-2 text-xs"
                   >
                     <Type className="size-3 mr-1" /> Chỉnh bố cục
                   </Button>
@@ -2588,12 +2809,51 @@ export function PackTabContent({
                     variant={showSafeFrame ? "secondary" : "outline"}
                     onClick={() => setShowSafeFrame((value) => !value)}
                     disabled={!effectiveActive}
-                    className="h-7 text-xs"
+                    className="h-7 shrink-0 px-2 text-xs"
                     title="Bật/tắt khung an toàn và đường căn chỉnh"
                   >
-                    <Eye className="size-3 mr-1" /> Đường căn chỉnh:{" "}
+                    <Eye className="size-3 mr-1" />
+                    <span className="hidden xl:inline">Đường căn chỉnh: </span>
                     {showSafeFrame ? "Bật" : "Tắt"}
                   </Button>
+                  {activeFilteredEntities.length > 0 ? (
+                    <div className="flex min-w-0 max-w-full shrink items-center gap-1">
+                      <span className="hidden text-[11px] text-muted-foreground xl:inline">
+                        Preview:
+                      </span>
+                      <Select
+                        value={previewEntityId ?? ""}
+                        onValueChange={(value) => setPreviewEntityId(value || undefined)}
+                      >
+                        <SelectTrigger className="h-7 w-[136px] min-w-0 text-xs xl:w-[160px]">
+                          <SelectValue placeholder="Chọn entity..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {activeFilteredEntities.slice(0, 200).map((item) => (
+                            <SelectItem key={item.entityId} value={item.entityId}>
+                              <span className="flex items-center gap-1">
+                                {item.partnerFlag ? (
+                                  <span className="text-amber-500">★</span>
+                                ) : null}
+                                <span className="truncate">{item.name}</span>
+                                {item.sheetName ? (
+                                  <span className="ml-1 text-[10px] text-muted-foreground">
+                                    ({item.sheetName})
+                                  </span>
+                                ) : null}
+                              </span>
+                            </SelectItem>
+                          ))}
+                          {activeFilteredEntities.length > 200 ? (
+                            <div className="px-2 py-1 text-[10px] text-muted-foreground">
+                              Hiển thị 200/{activeFilteredEntities.length} — lọc thêm qua bộ
+                              lọc dữ liệu.
+                            </div>
+                          ) : null}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : null}
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -2672,6 +2932,18 @@ export function PackTabContent({
                           />
                         )}
                       </div>
+                    )}
+
+                    {effectiveActive && (
+                      <BindingIssuesPanel
+                        template={effectiveActive}
+                        entity={previewEntity}
+                        entityPool={previewEntityPool}
+                        assets={assets}
+                        globalAssets={assets}
+                        activeSheetName={previewEntity?.sheetName}
+                        onSelectSlot={(slotId) => handleSelectSlot(slotId)}
+                      />
                     )}
 
                     {activePage &&
@@ -3005,13 +3277,19 @@ export function PackTabContent({
                             : ""}
                         </Label>
                         {sortedSelectedImageSlots.map((slot, index) => {
-                          const value = imageSlotBindingValue(slot);
+                          const rawValue = imageSlotBindingValue(slot);
+                          const hasLinkedText = imageSlotHasLinkedText(slot);
+                          const value =
+                            !hasLinkedText && isEntityScopedImageBindingPath(rawValue)
+                              ? "_static"
+                              : rawValue;
                           const randomScope = parseAssetRandomScopeBindingPath(slot.bindingPath);
                           const randomScopeSheet =
                             randomScope?.sheetName ?? activeGenerateConfig.selectedSheet;
                           const randomScopeFolder = randomScope?.folder ?? ALL_VALUE;
                           const randomImageFolderOptions =
                             randomImageFolderOptionsForSheet(randomScopeSheet);
+                          const imageOptions = imageBindingOptionsForSlot(slot);
                           return (
                             <div
                               key={slot.slotId}
@@ -3035,7 +3313,7 @@ export function PackTabContent({
                                   <SelectValue placeholder="Chọn trường ảnh" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                  {IMAGE_BINDING_OPTIONS.map((option) => (
+                                  {imageOptions.map((option) => (
                                     <SelectItem
                                       key={`${slot.slotId}-${option.value || "_static"}`}
                                       value={option.value || "_static"}
@@ -3045,6 +3323,11 @@ export function PackTabContent({
                                   ))}
                                 </SelectContent>
                               </Select>
+                              {!hasLinkedText && (
+                                <div className="text-[11px] leading-snug text-muted-foreground">
+                                  Muốn dùng ảnh theo quán, hãy nhóm khung ảnh với trường Tên/Địa chỉ/Giá.
+                                </div>
+                              )}
                               {value === ASSET_RANDOM_SCOPE_BINDING_VALUE && (
                                 <div className="grid gap-2 rounded-md border bg-background/70 p-2">
                                   <div>
@@ -3389,7 +3672,7 @@ export function PackTabContent({
                                     entityPool={buildPageEntityPool(page)}
                                     scale={previewScale}
                                     debug={debug}
-                                    seedKey={`${page.pageTemplateId}:${page.pageIndex}`}
+                                    seedKey={`${jobRenderSeed}:${page.pageTemplateId}:${page.pageIndex}`}
                                     hideImagePlaceholderText
                                   />
                                 </div>
@@ -3445,7 +3728,7 @@ export function PackTabContent({
               entityPool={buildPageEntityPool(zoomedPageMeta.page)}
               scale={zoomedScale}
               debug={debug}
-              seedKey={`${zoomedPageMeta.page.pageTemplateId}:${zoomedPageMeta.page.pageIndex}:zoom`}
+              seedKey={`${jobRenderSeed}:${zoomedPageMeta.page.pageTemplateId}:${zoomedPageMeta.page.pageIndex}:zoom`}
               hideImagePlaceholderText
             />
           </div>
@@ -3470,7 +3753,7 @@ export function PackTabContent({
           }
           entityPool={buildPageEntityPool(editingJobPage)}
           slotItems={editingJobPage.items}
-          seedKey={`${editingJobPage.pageTemplateId}:${editingJobPage.pageIndex}`}
+          seedKey={`${jobRenderSeed}:${editingJobPage.pageTemplateId}:${editingJobPage.pageIndex}`}
           preserveBindings={false}
           onApply={(nextTemplate) => {
             updatePage(editingJobPage.pageIndex, (page) => ({

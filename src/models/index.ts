@@ -58,7 +58,10 @@ export interface Asset {
 export type DataSourceKind = "page_primary" | "page_secondary" | "sheet" | "entity_pool" | "asset_pool";
 
 export interface DataSourceBinding {
-  sourceId: string;
+  /** Canonical id used by binding engines. */
+  id: string;
+  /** @deprecated kept for backwards compatibility with older payloads; mirrors `id`. */
+  sourceId?: string;
   kind: DataSourceKind;
   label: string;
   sheetName?: string;
@@ -140,6 +143,12 @@ export interface SlotStyle {
   shadowX?: number;
   shadowY?: number;
   hidden?: boolean;
+  /**
+   * Writing direction for text/shape-with-text elements. Shared by Slot + Design elements.
+   */
+  textLayout?: "horizontal" | "vertical-rl" | "vertical-lr";
+  /** Curved-text baseline in degrees. 0 = flat. */
+  textCurve?: number;
 }
 
 export interface ImageCrop {
@@ -315,6 +324,7 @@ export interface GeneratePresetConfig {
   onlyPartner?: boolean;
   partnerQuotaPerPage?: number;
   maxEntities?: number;
+  batchCount?: number;
   varyFontsFromSecondBundle?: boolean;
   pageConfigs?: Record<ID, GeneratePageConfig>;
 }
@@ -337,6 +347,7 @@ export interface GenerateBindingPreset {
   packTemplateNameSnapshot?: string;
   pageTemplateIds: ID[];
   bindOverrides: Record<string, Record<string, string | undefined>>;
+  pageTemplateDrafts?: Record<ID, PageTemplate>;
   generateConfig: GeneratePresetConfig;
   createdAt: number;
   updatedAt: number;
@@ -852,6 +863,226 @@ export interface AnalysisRecord {
   imageOrder: string[];
   pack: AnalyzedPack;
   draft?: DraftTemplateSuggestion;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ─── Design editor (template/design/generated editor) models ────────────────
+// These types are shared across src/features/editor/* and the Dexie tables
+// `assetLibrary`, `brandKits`, `fontAssets`, `designDocuments`.
+
+export type AssetLibraryKind =
+  | "image"
+  | "logo"
+  | "icon"
+  | "svg"
+  | "pattern"
+  | "background"
+  | "other";
+
+export interface AssetItem {
+  assetId: ID;
+  name: string;
+  kind: AssetLibraryKind;
+  sourceType: "local" | "url" | "inline";
+  sourceValue: string;
+  blobKey?: string;
+  width?: number;
+  height?: number;
+  mime?: string;
+  tags?: string[];
+  brandKitId?: ID;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface BrandKitPreset {
+  presetId: ID;
+  name: string;
+  style?: Partial<ElementStyle>;
+  meta?: Record<string, unknown>;
+}
+
+export interface BrandKit {
+  brandKitId: ID;
+  name: string;
+  colors: string[];
+  fontAssetIds: ID[];
+  logoAssetIds?: ID[];
+  presets?: BrandKitPreset[];
+  notes?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface FontAsset {
+  fontAssetId: ID;
+  family: string;
+  weight?: number | string;
+  style?: "normal" | "italic";
+  blobKey?: string;
+  sourceUrl?: string;
+  sourceValue?: string;
+  format?: string;
+  previewText?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DesignPageSafeZone {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export interface DesignPage {
+  pageId: ID;
+  name: string;
+  width: number;
+  height: number;
+  background?: string;
+  backgroundImage?: string;
+  safeZone?: DesignPageSafeZone;
+  guides?: DesignGuide[];
+}
+
+export interface DesignDocumentSettings {
+  gridSize: number;
+  snapToGrid: boolean;
+  showGrid: boolean;
+  showSafeZone: boolean;
+  showGuides: boolean;
+}
+
+interface DesignElementBase {
+  elementId: ID;
+  pageId: ID;
+  parentId?: ID;
+  children?: ID[];
+  name?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation?: number;
+  zIndex?: number;
+  locked?: boolean;
+  hidden?: boolean;
+  style?: ElementStyle;
+  binding?: DataBindingRef;
+  meta?: Record<string, unknown>;
+  assetId?: ID;
+}
+
+export interface DesignTextElement extends DesignElementBase {
+  kind: "text";
+  text: string;
+  textRuns?: DesignTextRun[];
+}
+
+export interface DesignImageElement extends DesignElementBase {
+  kind: "image";
+  src?: string;
+  crop?: ImageCrop;
+}
+
+export interface DesignShapeElement extends DesignElementBase {
+  kind: "shape";
+  shapeKind?: Slot["shapeKind"];
+  src?: string;
+  crop?: ImageCrop;
+  text?: string;
+  textRuns?: DesignTextRun[];
+}
+
+export interface DesignFrameElement extends DesignElementBase {
+  kind: "frame";
+  background?: string;
+  padding?: number;
+}
+
+export interface DesignGroupElement extends DesignElementBase {
+  kind: "group";
+}
+
+export interface DesignIconElement extends DesignElementBase {
+  kind: "icon";
+  iconName: string;
+  iconVariant?: "outline" | "solid" | "lucide" | "iconify";
+  iconColor?: string;
+  iconAssetId?: ID;
+  svgContent?: string;
+}
+
+export interface DesignSvgElement extends DesignElementBase {
+  kind: "svg";
+  svgContent: string;
+}
+
+export interface DesignTableCell {
+  cellId: ID;
+  text?: string;
+  style?: Partial<ElementStyle>;
+  colSpan?: number;
+  rowSpan?: number;
+}
+
+export interface DesignTableElement extends DesignElementBase {
+  kind: "table";
+  columns: number;
+  rows: number;
+  cells: DesignTableCell[];
+}
+
+export type DesignElement =
+  | DesignTextElement
+  | DesignImageElement
+  | DesignShapeElement
+  | DesignFrameElement
+  | DesignGroupElement
+  | DesignIconElement
+  | DesignSvgElement
+  | DesignTableElement;
+
+export interface DesignDocument {
+  designDocumentId: ID;
+  name: string;
+  mode: EditorMode;
+  pages: DesignPage[];
+  elements: DesignElement[];
+  activePageId: ID;
+  documentSettings?: DesignDocumentSettings;
+  brandKitId?: ID;
+  assetIds?: ID[];
+  sourcePageTemplateId?: ID;
+  sourceJobId?: ID;
+  createdAt: number;
+  updatedAt: number;
+  version: 1;
+}
+
+
+// ─── Reusable symbols / components ──────────────────────────────────────────
+// A SymbolDefinition is a named bundle of DesignElements the user can drop into
+// any page. Each time they insert it, we clone the elements and tag the root
+// group with `meta.symbolId` + `meta.symbolVersion` so the UI can show a "sync"
+// affordance when the original symbol is later updated.
+
+export interface SymbolDefinition {
+  symbolId: ID;
+  name: string;
+  description?: string;
+  /** Elements as stored in a DesignDocument. `pageId` is stripped on save. */
+  elements: DesignElement[];
+  /** Bounding width/height captured when saving — used for preview + placement. */
+  width: number;
+  height: number;
+  /** Monotonic version bumped every time the symbol is overwritten. */
+  version: number;
+  /** Preview PNG/dataURL captured at save time (optional). */
+  thumbnail?: string;
+  tags?: string[];
   createdAt: number;
   updatedAt: number;
 }

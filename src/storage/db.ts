@@ -1,4 +1,5 @@
 import Dexie, { type Table } from "dexie";
+import { nanoid } from "nanoid";
 import type {
   Project,
   Entity,
@@ -15,6 +16,7 @@ import type {
   GenerateBindingPreset,
   AppSettings,
   AnalysisRecord,
+  SymbolDefinition,
 } from "@/models";
 
 class CPGDatabase extends Dexie {
@@ -33,6 +35,7 @@ class CPGDatabase extends Dexie {
   generatePresets!: Table<GenerateBindingPreset, string>;
   settings!: Table<AppSettings & { id: string }, string>;
   analyses!: Table<AnalysisRecord, string>;
+  symbols!: Table<SymbolDefinition, string>;
 
   constructor() {
     super("ContentPackGenerator");
@@ -62,13 +65,15 @@ class CPGDatabase extends Dexie {
     this.version(5).stores({
       generatePresets: "presetId, name, mode, packTemplateId, updatedAt",
     });
+    this.version(6).stores({
+      symbols: "symbolId, name, updatedAt",
+    });
   }
 }
 
 export const db = new CPGDatabase();
 
 export async function saveBlob(blob: Blob, key?: string): Promise<string> {
-  const { nanoid } = await import("nanoid");
   const blobKey = key ?? nanoid();
   await db.blobs.put({
     blobKey,
@@ -102,5 +107,6 @@ export async function clearAll(): Promise<void> {
     db.generatePresets.clear(),
     db.analyses.clear(),
     db.settings.clear(),
+    db.symbols.clear(),
   ]);
 }

@@ -74,6 +74,7 @@ import {
 import type { Asset, Entity } from "@/models";
 import { db, saveBlob } from "@/storage/db";
 import { getBlobKeyFromSrc, makeIdbSrc } from "@/storage/imageSrc";
+import { resizeImageBlob } from "@/storage/imageResize";
 import { setLastActiveSheet } from "@/storage/lastSheet";
 import { getSettings } from "@/storage/settings";
 import { cn } from "@/lib/utils";
@@ -1308,7 +1309,8 @@ function DataPage() {
       const newAssets: Asset[] = [];
 
       for (const file of files) {
-        const blobKey = await saveBlob(file);
+        const resized = await resizeImageBlob(file);
+        const blobKey = await saveBlob(resized);
         newAssets.push({
           assetId: nanoid(),
           entityId,

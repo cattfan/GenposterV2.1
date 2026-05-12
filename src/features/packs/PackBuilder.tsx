@@ -26,10 +26,19 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { formatTemplateDisplayName } from "@/lib/templateNames";
 import type { PackTemplate, PageTemplate } from "@/models";
+import { CANVAS_PRESETS } from "./packTemplateUtils";
 import { PackPagePreview } from "./PackPagePreview";
 
 interface Props {
@@ -37,7 +46,7 @@ interface Props {
   allTemplates: PageTemplate[];
   onChange: (next: PackTemplate) => void;
   onDuplicate: () => void;
-  onCreatePage?: () => void;
+  onCreatePage?: (presetId?: string) => void;
   onCreateAiPage?: () => void;
   onDuplicatePage?: (template: PageTemplate) => void;
   onDeletePage?: (template: PageTemplate, index: number) => void;
@@ -316,10 +325,45 @@ export function PackBuilder({
                 </Button>
               ) : null}
               {onCreatePage ? (
-                <Button variant="outline" size="sm" onClick={onCreatePage}>
-                  <FilePlus2 data-icon="inline-start" />
-                  Trang mới
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm">
+                      <FilePlus2 data-icon="inline-start" />
+                      Trang mới
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-64">
+                    <DropdownMenuItem onSelect={() => onCreatePage()}>
+                      Mặc định (1080×1350)
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="text-[11px] uppercase tracking-wide">
+                      Mạng xã hội
+                    </DropdownMenuLabel>
+                    {CANVAS_PRESETS.filter(
+                      (preset) => preset.group === "social" || preset.group === "story",
+                    ).map((preset) => (
+                      <DropdownMenuItem
+                        key={preset.id}
+                        onSelect={() => onCreatePage(preset.id)}
+                      >
+                        {preset.label}
+                      </DropdownMenuItem>
+                    ))}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="text-[11px] uppercase tracking-wide">
+                      In / Print
+                    </DropdownMenuLabel>
+                    {CANVAS_PRESETS.filter((preset) => preset.group === "print").map((preset) => (
+                      <DropdownMenuItem
+                        key={preset.id}
+                        onSelect={() => onCreatePage(preset.id)}
+                      >
+                        {preset.label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               ) : null}
               {onDeletePack ? (
                 <Button

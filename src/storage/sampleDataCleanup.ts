@@ -4,6 +4,14 @@ import type { GenerationJob, ManualOverride, PackTemplate, PageTemplate } from "
 const SEED_FLAG = "cpg_seeded_v1";
 const CLEANUP_FLAG = "cpg_demo_data_removed_v1";
 
+// Demo cleanup is OFF by default. Early builds seeded some demo entities whose
+// names could collide with real user entities ("Cafe May Lang Thang", etc.);
+// running this heuristic on user data risks destroying legitimate records, so
+// we keep the function exported for explicit invocation but short-circuit by
+// default. Set this flag to `true` (or call cleanupDemoData({ force: true }))
+// only when you are sure the DB only holds demo seed content.
+const DEMO_CLEANUP_ENABLED = false;
+
 const DEMO_IMAGE_IDS = [
   "photo-1554118811-1e0d58224f24",
   "photo-1521017432531-fbd92d768814",
@@ -150,8 +158,13 @@ async function bulkDelete<T extends string>(ids: T[], deleteFn: (ids: T[]) => Pr
   if (ids.length > 0) await deleteFn(ids);
 }
 
-export async function cleanupDemoData(): Promise<DemoCleanupResult> {
+export async function cleanupDemoData(options?: { force?: boolean }): Promise<DemoCleanupResult> {
   const storage = localStore();
+  if (!options?.force && !DEMO_CLEANUP_ENABLED) {
+    // Mark as done so the app stops re-checking on every load.
+    storage?.setItem(CLEANUP_FLAG, "1");
+    return emptyResult();
+  }
   if (storage?.getItem(CLEANUP_FLAG) === "1") return emptyResult();
 
   const [projects, entities, assets, pages, packs, jobs, overrides] = await Promise.all([

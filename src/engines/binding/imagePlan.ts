@@ -3,6 +3,7 @@
 import type { Asset, AssetRole, Entity, PageTemplate, Slot } from "@/models";
 import { filterRenderableAssets, getAssetImageSource } from "./assetImage";
 import {
+  isEntityScopedImageBindingPath,
   isAssetRandomScopeBindingPath,
   parseAssetRandomScopeBindingPath,
   type AssetRandomScopeConfig,
@@ -20,9 +21,10 @@ export type SlotImagePlan = Map<string, PlannedImage>;
 type ImagePlanSlot = Slot & { originalSlotId?: string };
 
 function stableHash(input: string): number {
-  let hash = 0;
+  let hash = 2166136261;
   for (let index = 0; index < input.length; index += 1) {
-    hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
   }
   return hash;
 }
@@ -33,6 +35,10 @@ function isImageBindingSlot(slot: Slot): boolean {
     !!slot.bindingPath &&
     slot.bindingPath.startsWith("asset.")
   );
+}
+
+function requiresEntityScopedImage(bindingPath: string | undefined): boolean {
+  return isEntityScopedImageBindingPath(bindingPath);
 }
 
 function pickBest(pool: Asset[]): Asset | undefined {
@@ -143,18 +149,6 @@ function buildImagePlanForSlots(
     let fallback = false;
 
     if (bindingPath === "asset.random_global") {
-      const locked = findLockedAsset(renderableAssets, slot.staticImage);
-      if (locked) {
-        usedGlobalAssetIds.add(locked.assetId);
-        plan.set(slot.slotId, {
-          src: getAssetImageSource(locked) ?? locked.sourceValue,
-          assetId: locked.assetId,
-          entityId: locked.entityId,
-          fallback: false,
-        });
-        continue;
-      }
-
       const free = renderableAssets.filter((asset) => !usedGlobalAssetIds.has(asset.assetId));
       chosen = pickStableRandom(
         free.length > 0 ? free : renderableAssets,
@@ -196,6 +190,8 @@ function buildImagePlanForSlots(
       }
       continue;
     }
+
+    if (!requiresEntityScopedImage(bindingPath)) continue;
 
     const entity = resolveEntity(slot);
     if (!entity) continue;

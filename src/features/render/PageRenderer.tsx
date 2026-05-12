@@ -18,6 +18,7 @@ import {
   buildBorder,
   buildGradient,
   buildTextStyle,
+  isEntityScopedImageBindingPath,
   resolveImageBinding,
   resolveTextBinding,
   shapeBorderRadius,
@@ -31,9 +32,10 @@ import {
 } from "@/engines/binding/imagePlan";
 import { getAssetImageSource } from "@/engines/binding/assetImage";
 import { useResolvedImageSrc } from "@/storage/imageSrc";
-import { expandPageWithCardGroups } from "@/engines/binding/cardRepeater";
+import { expandPageWithCardGroups, type ExpandedSlot } from "@/engines/binding/cardRepeater";
 import { isDataGroupMarkerSlot } from "@/engines/binding/slotMarkers";
 import { renderRichTextRuns } from "@/features/editor/richText";
+import { CurvedText } from "@/features/editor/curvedText";
 import { mergeBindingSources } from "@/engines/binding/sourceContext";
 
 const IMAGE_PLACEHOLDER_BACKGROUND =
@@ -287,7 +289,7 @@ function SlotRenderer({
   hideImagePlaceholderText,
   renderGeneratedOverlay,
 }: {
-  slot: Slot;
+  slot: ExpandedSlot;
   scale: number;
   template: PageTemplate;
   entityMap: Map<string, Entity>;
@@ -327,10 +329,11 @@ function SlotRenderer({
     if (planned?.src) {
       shapeRawSrc = planned.src;
     } else if (slot.bindingPath) {
-      const result = resolveImageBinding(slot.bindingPath, entity, assets, shapeRawSrc, {
+      const imageEntity = isEntityScopedImageBindingPath(slot.bindingPath) ? entity : undefined;
+      const result = resolveImageBinding(slot.bindingPath, imageEntity, assets, shapeRawSrc, {
         entities: allEntities,
         source: slot.dataSourceId ? { id: slot.dataSourceId, kind: "sheet", label: slot.dataSourceId } : undefined,
-        seed: `${seedKey}:${slot.slotId}:shape`,
+        seed: `${seedKey}:${slot.originalSlotId ?? slot.slotId}:${slot.slotId}:shape`,
       });
       if (result.src) shapeRawSrc = result.src;
     }
@@ -348,10 +351,11 @@ function SlotRenderer({
       imageAssetIdLog = planned.assetId;
       imageEntityIdLog = planned.entityId;
     } else if (slot.bindingPath) {
-      const result = resolveImageBinding(slot.bindingPath, entity, assets, imageRawSrc, {
+      const imageEntity = isEntityScopedImageBindingPath(slot.bindingPath) ? entity : undefined;
+      const result = resolveImageBinding(slot.bindingPath, imageEntity, assets, imageRawSrc, {
         entities: allEntities,
         source: slot.dataSourceId ? { id: slot.dataSourceId, kind: "sheet", label: slot.dataSourceId } : undefined,
-        seed: `${seedKey}:${slot.slotId}:image`,
+        seed: `${seedKey}:${slot.originalSlotId ?? slot.slotId}:${slot.slotId}:image`,
       });
       if (result.src) {
         imageRawSrc = result.src;
@@ -578,24 +582,38 @@ function SlotRenderer({
         })
       : (slot.staticText ?? "Văn bản");
     const textCss = buildTextStyle(slot.style, scale);
+    const curve = slot.style?.textCurve ?? 0;
+    const hasRichRuns = (slot.textRuns?.length ?? 0) > 0 && !slot.bindingPath;
     return (
       <div
         style={{
           ...baseStyle,
           display: "flex",
           alignItems: textVerticalFlexAlign(slot.style),
+          justifyContent: Math.abs(curve) > 0.5 ? "center" : undefined,
           overflow: "hidden",
         }}
       >
-        <div style={{ ...textCss, width: "100%" }}>
-          {renderRichTextRuns({
-            text,
-            runs: slot.bindingPath ? undefined : slot.textRuns,
-            baseStyle: slot.style,
-            scale,
-            fallback: displayRenderedText(text),
-          })}
-        </div>
+        {Math.abs(curve) > 0.5 && !hasRichRuns ? (
+          <div style={{ ...textCss, width: "100%", textAlign: "center" }}>
+            <CurvedText
+              text={text ?? ""}
+              curveDegrees={curve}
+              fontSize={(slot.style?.fontSize ?? 24) * scale}
+              letterSpacing={(slot.style?.letterSpacing ?? 0) * scale}
+            />
+          </div>
+        ) : (
+          <div style={{ ...textCss, width: "100%" }}>
+            {renderRichTextRuns({
+              text,
+              runs: slot.bindingPath ? undefined : slot.textRuns,
+              baseStyle: slot.style,
+              scale,
+              fallback: displayRenderedText(text),
+            })}
+          </div>
+        )}
         <DebugBadge debug={debug} text="text" />
       </div>
     );

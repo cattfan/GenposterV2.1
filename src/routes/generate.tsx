@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { generatePackJob } from "@/engines/selection/generate";
 import { useJobStore } from "@/features/generate/jobStore";
@@ -63,10 +63,10 @@ import { buildEntityBindingTargets } from "@/engines/binding/cardRepeater";
 import { PageContainer, PageHeader } from "@/components/PageHeader";
 import { clonePageTemplate, createWorkingTemplate } from "@/features/generate/templateState";
 import {
-  buildPartnerWorkbookBlob,
-  buildTikTokCaptionBlob,
+  buildPublishBundle,
 } from "@/features/generate/exportArtifacts";
 import { applyFontVariantToTemplate } from "@/features/generate/fontVariation";
+import { designDocumentToPageTemplate } from "@/features/editor/designDocument";
 
 export const Route = createFileRoute("/generate")({
   component: GeneratePage,
@@ -83,10 +83,30 @@ interface EntityPreviewPage {
 
 function GeneratePage() {
   const packs = useLiveQuery(() => db.packTemplates.toArray(), []);
-  const tpls = useLiveQuery(() => db.pageTemplates.toArray(), []);
+  const storedTpls = useLiveQuery(() => db.pageTemplates.toArray(), []);
+  const designDocuments = useLiveQuery(() => db.designDocuments.toArray(), []);
   const entities = useLiveQuery(() => db.entities.toArray(), []);
   const assets = useLiveQuery(() => db.assets.toArray(), []);
   const overrides = useLiveQuery(() => db.overrides.toArray(), []);
+  const tpls = useMemo(() => {
+    if (!storedTpls) return undefined;
+    const documentsByTemplateId = new Map(
+      (designDocuments ?? [])
+        .filter((document) => document.mode === "template" && document.sourcePageTemplateId)
+        .map((document) => [document.sourcePageTemplateId!, document]),
+    );
+    for (const document of designDocuments ?? []) {
+      if (document.mode !== "template") continue;
+      if (!documentsByTemplateId.has(document.designDocumentId)) {
+        documentsByTemplateId.set(document.designDocumentId, document);
+      }
+    }
+    return storedTpls.map((template) => {
+      const document = documentsByTemplateId.get(template.pageTemplateId);
+      if (!document) return template;
+      return designDocumentToPageTemplate(document, template);
+    });
+  }, [storedTpls, designDocuments]);
 
   const [packId, setPackId] = useState<string | undefined>(undefined);
   const debug = false;
@@ -233,22 +253,22 @@ function GeneratePage() {
     maxPages,
   ]);
 
-  const buildOrderedEntityPool = (primaryEntityId: string | undefined): Entity[] => {
+  const buildOrderedEntityPool = useCallback((primaryEntityId: string | undefined): Entity[] => {
     if (!primaryEntityId) return filteredEntities;
     return [
       ...filteredEntities.filter((entity) => entity.entityId === primaryEntityId),
       ...filteredEntities.filter((entity) => entity.entityId !== primaryEntityId),
     ];
-  };
+  }, [filteredEntities]);
 
   const randomizedEntityOrder = useMemo(
-    () => buildEntityAllocationOrder(filteredEntities, prioritizePartner),
+    () => buildEntityAllocationOrder(filteredEntities, prioritizePartner, "generate-preview"),
     [filteredEntities, prioritizePartner],
   );
 
   const previewEntityPool = useMemo(
     () => buildOrderedEntityPool(previewEntityId),
-    [filteredEntities, previewEntityId],
+    [buildOrderedEntityPool, previewEntityId],
   );
 
   const activeTargetCount = useMemo(
@@ -319,7 +339,8 @@ function GeneratePage() {
   }, [
     entityPreviewTemplate,
     previewEntity,
-    filteredEntities,
+    buildOrderedEntityPool,
+    previewEntityId,
     partnerQuotaPerPage,
     onlyPartner,
     prioritizePartner,
@@ -342,7 +363,7 @@ function GeneratePage() {
   const selectedBindableSlots = selectedSlots.filter((slot) => getSlotBindMode(slot) !== null);
   const handleSelectSlot = (
     slotId: string | null,
-    mode: "replace" | "toggle" | "group" = "replace",
+    mode: "replace" | "toggle" | "group" | "replace-many" = "replace",
     relatedSlotIds: string[] = [],
   ) => {
     if (!slotId) {
@@ -350,6 +371,10 @@ function GeneratePage() {
       return;
     }
     setSelectedSlotIds((prev) => {
+      if (mode === "replace-many") {
+        const ids = relatedSlotIds.length > 0 ? relatedSlotIds : [slotId];
+        return Array.from(new Set(ids));
+      }
       if (mode === "toggle") {
         return prev.includes(slotId) ? prev.filter((id) => id !== slotId) : [...prev, slotId];
       }
@@ -360,8 +385,8 @@ function GeneratePage() {
         if (allSelected) return prev.filter((id) => !ids.includes(id));
         return Array.from(new Set([...prev, ...ids]));
       }
-      if (prev.includes(slotId)) return prev.filter((id) => id !== slotId);
-      return [slotId];
+      const ids = relatedSlotIds.length > 0 ? relatedSlotIds : [slotId];
+      return Array.from(new Set(ids));
     });
   };
   const applyBindingToSlots = (slots: Slot[], bindingPath: string | undefined) => {
@@ -625,8 +650,14 @@ function GeneratePage() {
     const sel = entityPages.filter((p) => p.selected);
     if (sel.length === 0) return toast.error("Chưa chọn trang nào");
     toast.info(`Đang xuất ${sel.length} trang...`);
-    const files: Array<{ name: string; blob: Blob }> = [];
-    for (const p of sel) {
+    const images: Array<{
+      fileName: string;
+      blob: Blob;
+      pageIndex: number;
+      templateId?: string;
+      templateName?: string;
+    }> = [];
+    for (const [idx, p] of sel.entries()) {
       const node = entityRefs.current.get(p.entityId);
       if (!node) continue;
       const ent = entities?.find((e) => e.entityId === p.entityId);
@@ -635,29 +666,33 @@ function GeneratePage() {
         .replace(/[^a-z0-9]+/g, "-")
         .slice(0, 40);
       const blob = await nodeToPngBlob(node, 2);
-      files.push({ name: `${slug || p.entityId}.png`, blob });
+      images.push({
+        fileName: `${slug || p.entityId}.png`,
+        blob,
+        pageIndex: idx,
+        templateId: entityPreviewTemplate.pageTemplateId,
+        templateName: entityPreviewTemplate.name,
+      });
     }
+    if (images.length === 0) return toast.error("Không tạo được ảnh để xuất");
     const exportPages = sel.map((page, index) => ({
+      pageIndex: index,
+      pageFile: images[index]?.fileName,
       pageName:
         entities?.find((entity) => entity.entityId === page.entityId)?.name ?? `Trang ${index + 1}`,
       entityId: page.entityId === "_static" ? undefined : page.entityId,
+      entityName: entities?.find((entity) => entity.entityId === page.entityId)?.name,
       items: page.items,
     }));
-    files.push({
-      name: "doitac.xlsx",
-      blob: buildPartnerWorkbookBlob({ pages: exportPages, entities: entities ?? [] }),
+    const bundle = await buildPublishBundle({
+      packName: entityPreviewTemplate.name,
+      pages: exportPages,
+      entities: entities ?? [],
+      images,
+      variantCount: 4,
     });
-    files.push({
-      name: "chu-thich.txt",
-      blob: await buildTikTokCaptionBlob({
-        packName: entityPreviewTemplate.name,
-        pages: exportPages,
-        entities: entities ?? [],
-        variantCount: 4,
-      }),
-    });
-    await downloadZip(files, `${entityPreviewTemplate.name}-du-lieu.zip`);
-    toast.success("Đã xuất ZIP");
+    await downloadZip(bundle.files, `${entityPreviewTemplate.name}-du-lieu.zip`);
+    toast.success(`Đã xuất ZIP · ${bundle.files.length} file`);
   };
 
   // Tính scale canvas tương tác theo container ~640px max

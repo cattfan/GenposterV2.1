@@ -382,21 +382,77 @@ export const FONT_CATEGORIES: FontCategory[] = ["Sans", "Serif", "Display", "Scr
 
 export const AI_POSTER_FONT_FAMILIES = FONTS.map((font) => font.family);
 
-/** Build URL Google Fonts duy nhất, gộp tất cả family với weight + italic đầy đủ. */
+/**
+ * Minimal font bundle loaded eagerly on every page (UI + a few designer favourites).
+ * Keep this list small — it is served on initial HTML render.
+ */
+export const CORE_FONT_FAMILIES = new Set<string>([
+  "Be Vietnam Pro",
+  "Inter",
+  "Poppins",
+  "Montserrat",
+  "Playfair Display",
+  "Lora",
+]);
+
+function buildFamilyQuery(font: FontDef): string {
+  const family = font.family.replace(/ /g, "+");
+  if (font.italic) {
+    const ital = font.weights
+      .map((w) => `0,${w}`)
+      .concat(font.weights.map((w) => `1,${w}`))
+      .join(";");
+    return `family=${family}:ital,wght@${ital}`;
+  }
+  return `family=${family}:wght@${font.weights.join(";")}`;
+}
+
+/** Google Fonts URL containing the full editor catalogue (heavy). */
 export function buildGoogleFontsUrl(): string {
-  const parts = FONTS.map((f) => {
-    const family = f.family.replace(/ /g, "+");
-    const weights = f.weights.join(";");
-    if (f.italic) {
-      const ital = f.weights
-        .map((w) => `0,${w}`)
-        .concat(f.weights.map((w) => `1,${w}`))
-        .join(";");
-      return `family=${family}:ital,wght@${ital}`;
-    }
-    return `family=${family}:wght@${weights}`;
-  });
-  return `https://fonts.googleapis.com/css2?${parts.join("&")}&display=swap`;
+  return `https://fonts.googleapis.com/css2?${FONTS.map(buildFamilyQuery).join("&")}&display=swap`;
+}
+
+/** Google Fonts URL for the `CORE_FONT_FAMILIES` subset — safe to preload eagerly. */
+export function buildCoreGoogleFontsUrl(): string {
+  const core = FONTS.filter((font) => CORE_FONT_FAMILIES.has(font.family));
+  if (core.length === 0) return "";
+  return `https://fonts.googleapis.com/css2?${core.map(buildFamilyQuery).join("&")}&display=swap`;
+}
+
+/** Google Fonts URL for every font NOT in the core set — loaded lazily in editor. */
+export function buildExtendedGoogleFontsUrl(): string {
+  const rest = FONTS.filter((font) => !CORE_FONT_FAMILIES.has(font.family));
+  if (rest.length === 0) return "";
+  return `https://fonts.googleapis.com/css2?${rest.map(buildFamilyQuery).join("&")}&display=swap`;
+}
+
+let extendedFontsInjected = false;
+
+/**
+ * Inject the extended font stylesheet into <head>. Safe to call repeatedly —
+ * idempotent and only runs on the client. Useful when opening a route that
+ * needs the full font catalogue (editor, font picker, …).
+ */
+export function ensureExtendedFontsLoaded(): void {
+  if (extendedFontsInjected || typeof document === "undefined") return;
+  const url = buildExtendedGoogleFontsUrl();
+  if (!url) {
+    extendedFontsInjected = true;
+    return;
+  }
+  const existing = document.querySelector<HTMLLinkElement>(
+    'link[data-cpg-font-bundle="extended"]',
+  );
+  if (existing) {
+    extendedFontsInjected = true;
+    return;
+  }
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = url;
+  link.dataset.cpgFontBundle = "extended";
+  document.head.appendChild(link);
+  extendedFontsInjected = true;
 }
 
 export function getFont(family?: string): FontDef | undefined {

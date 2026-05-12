@@ -164,6 +164,14 @@ function slotToElement(slot: Slot, pageId: string, canvas: CanvasSize): DesignEl
     },
   } satisfies Partial<DesignElement>;
 
+  if (slot.kind === "group") {
+    return {
+      ...common,
+      kind: "group",
+      children: [],
+    } as DesignElement;
+  }
+
   if (slot.kind === "text") {
     const element: DesignTextElement = {
       ...common,
@@ -216,6 +224,33 @@ function slotToElement(slot: Slot, pageId: string, canvas: CanvasSize): DesignEl
   return frame;
 }
 
+function restoreElementRelationships(elements: DesignElement[]): DesignElement[] {
+  const groupIds = new Set(
+    elements.filter((element) => element.kind === "group").map((element) => element.elementId),
+  );
+  if (groupIds.size === 0) return elements;
+
+  const childrenByGroup = new Map<string, string[]>();
+  const next = elements.map((element) => {
+    const legacyMeta = (element.meta?.legacy ?? {}) as Record<string, unknown>;
+    const groupId = typeof legacyMeta.groupId === "string" ? legacyMeta.groupId : undefined;
+    if (!groupId || !groupIds.has(groupId) || element.kind === "group") return element;
+    const current = childrenByGroup.get(groupId) ?? [];
+    current.push(element.elementId);
+    childrenByGroup.set(groupId, current);
+    return { ...element, parentId: groupId } as DesignElement;
+  });
+
+  return next.map((element) =>
+    element.kind === "group"
+      ? ({
+          ...element,
+          children: childrenByGroup.get(element.elementId) ?? [],
+        } as DesignElement)
+      : element,
+  );
+}
+
 function bindingRefToSlot(
   binding: DataBindingRef | undefined,
 ): Pick<Slot, "bindingPath" | "allowedAssetRoles" | "overflowRule" | "visibilityRule"> {
@@ -236,10 +271,24 @@ function bindingRefToSlot(
   };
 }
 
-function elementToSlot(element: DesignElement): Slot {
+function resolveElementGroupId(
+  element: DesignElement,
+  legacyMeta: Record<string, unknown>,
+  validGroupIds: Set<string>,
+): string | undefined {
+  if (element.kind === "group") return undefined;
+  if (element.parentId && validGroupIds.has(element.parentId)) return element.parentId;
+  const legacyGroupId = legacyMeta.groupId;
+  return typeof legacyGroupId === "string" && validGroupIds.has(legacyGroupId)
+    ? legacyGroupId
+    : undefined;
+}
+
+function elementToSlot(element: DesignElement, validGroupIds: Set<string> = new Set()): Slot {
   const legacyMeta = (element.meta?.legacy ?? {}) as Record<string, unknown>;
   const binding = bindingRefToSlot(element.binding);
   const style = clone(element.style ?? {});
+  const groupId = resolveElementGroupId(element, legacyMeta, validGroupIds);
   if (element.hidden) {
     style.hidden = true;
   }
@@ -256,7 +305,7 @@ function elementToSlot(element: DesignElement): Slot {
       rotation: element.rotation,
       zIndex: element.zIndex,
       locked: element.locked,
-      groupId: legacyMeta.groupId as string | undefined,
+      groupId,
       staticText: element.text,
       textRuns: element.textRuns ? clone(element.textRuns) : undefined,
       style,
@@ -276,7 +325,7 @@ function elementToSlot(element: DesignElement): Slot {
       rotation: element.rotation,
       zIndex: element.zIndex,
       locked: element.locked,
-      groupId: legacyMeta.groupId as string | undefined,
+      groupId,
       staticImage: element.src,
       crop: element.crop ? clone(element.crop) : undefined,
       isUploadedBackground: legacyMeta.isUploadedBackground as boolean | undefined,
@@ -297,7 +346,7 @@ function elementToSlot(element: DesignElement): Slot {
       rotation: element.rotation,
       zIndex: element.zIndex,
       locked: element.locked,
-      groupId: legacyMeta.groupId as string | undefined,
+      groupId,
       shapeKind: element.shapeKind,
       staticText: element.text,
       textRuns: element.textRuns ? clone(element.textRuns) : undefined,
@@ -308,9 +357,11 @@ function elementToSlot(element: DesignElement): Slot {
     };
   }
 
+  const slotKind = (legacyMeta.slotKind as Slot["kind"]) ?? (element.kind === "group" ? "group" : "section");
+
   return {
     slotId: element.elementId,
-    kind: (legacyMeta.slotKind as Slot["kind"]) ?? "section",
+    kind: slotKind,
     name: element.name,
     x: element.x,
     y: element.y,
@@ -319,7 +370,7 @@ function elementToSlot(element: DesignElement): Slot {
     rotation: element.rotation,
     zIndex: element.zIndex,
     locked: element.locked,
-    groupId: legacyMeta.groupId as string | undefined,
+    groupId,
     sectionRefId: legacyMeta.sectionRefId as string | undefined,
     style,
     ...binding,
@@ -356,12 +407,15 @@ export function pageTemplateToDesignDocument(
     name: template.name,
     canvas: template.canvas,
   });
+  const elements = restoreElementRelationships(
+    template.slots.map((slot) => slotToElement(slot, page.pageId, template.canvas)),
+  );
 
   return {
     designDocumentId: template.pageTemplateId,
     name: template.name,
     pages: [page],
-    elements: template.slots.map((slot) => slotToElement(slot, page.pageId, template.canvas)),
+    elements,
     activePageId: page.pageId,
     mode,
     sourcePageTemplateId: template.pageTemplateId,
@@ -383,6 +437,9 @@ export function designDocumentToPageTemplate(
     .filter((element) => element.pageId === activePage.pageId)
     .slice()
     .sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0));
+  const validGroupIds = new Set(
+    elements.filter((element) => element.kind === "group").map((element) => element.elementId),
+  );
 
   return {
     pageTemplateId: pageId,
@@ -394,7 +451,7 @@ export function designDocumentToPageTemplate(
       background: activePage.background,
       backgroundImage: activePage.backgroundImage,
     },
-    slots: elements.map(elementToSlot),
+    slots: elements.map((element) => elementToSlot(element, validGroupIds)),
     sections: collectSections(document, baseTemplate?.sections),
     stylePreset: baseTemplate?.stylePreset,
     validationRules: baseTemplate?.validationRules

@@ -411,19 +411,39 @@ function TemplatesPage() {
   const deletePack = async (pack: PackTemplate) => {
     const deletedPack = clonePackTemplate(pack);
     const wasActive = editing?.packTemplateId === pack.packTemplateId;
-    await db.packTemplates.delete(pack.packTemplateId);
+    // Snapshot page templates owned exclusively by this pack so we can both
+    // delete them atomically and restore on undo.
+    const orphanSnapshot: PageTemplate[] = [];
+    await db.transaction("rw", [db.packTemplates, db.pageTemplates], async () => {
+      await db.packTemplates.delete(pack.packTemplateId);
+      const remainingPacks = await db.packTemplates.toArray();
+      const stillReferenced = new Set(remainingPacks.flatMap((p) => p.orderedPages));
+      const orphanIds = pack.orderedPages.filter((id) => !stillReferenced.has(id));
+      if (orphanIds.length > 0) {
+        const orphanPages = await db.pageTemplates.bulkGet(orphanIds);
+        for (const orphan of orphanPages) {
+          if (orphan) orphanSnapshot.push(clonePageTemplate(orphan));
+        }
+        await db.pageTemplates.bulkDelete(orphanIds);
+      }
+    });
     if (wasActive) {
       setEditing(null);
       navigate({ to: "/templates", search: { open: undefined } });
     }
     toast.success("Đã xóa bộ khuôn", {
-      description: `"${formatTemplateDisplayName(pack.name, "Bộ khuôn")}" có thể khôi phục trong vài giây.`,
+      description: `"${formatTemplateDisplayName(pack.name, "Bộ khuôn")}" và ${orphanSnapshot.length} trang riêng đã bị xoá. Có thể khôi phục trong vài giây.`,
       duration: UNDO_TOAST_DURATION,
       action: {
         label: "Khôi phục",
         onClick: () => {
-          void db.packTemplates
-            .put(deletedPack)
+          void db
+            .transaction("rw", [db.packTemplates, db.pageTemplates], async () => {
+              await db.packTemplates.put(deletedPack);
+              if (orphanSnapshot.length > 0) {
+                await db.pageTemplates.bulkPut(orphanSnapshot);
+              }
+            })
             .then(() => {
               if (wasActive) {
                 setEditing(deletedPack);
@@ -500,10 +520,13 @@ function TemplatesPage() {
     }
   };
 
-  const createPageInPack = async () => {
+  const createPageInPack = async (presetId?: string) => {
     const pack = await ensureActivePack();
     const pageNumber = pack.orderedPages.length + 1;
-    const page = createBlankPageTemplate({ name: `Trang mới ${pageNumber}` });
+    const page = createBlankPageTemplate({
+      name: `Trang mới ${pageNumber}`,
+      presetId,
+    });
     const nextPack = appendPageToPack(pack, page.pageTemplateId);
     await db.transaction("rw", [db.pageTemplates, db.packTemplates], async () => {
       await db.pageTemplates.put(page);

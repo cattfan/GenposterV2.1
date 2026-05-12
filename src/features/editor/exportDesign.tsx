@@ -193,3 +193,53 @@ export async function exportDesignDocumentPdf(params: {
 export function exportDesignDocumentJson(document: DesignDocument, fileName?: string) {
   downloadJSON(document, `${(fileName ?? slugify(document.name)) || "design-document"}.json`);
 }
+
+
+// ─── Symbol thumbnail rendering ─────────────────────────────────────────────
+/**
+ * Render a bundle of DesignElements (symbol definition) off-screen and return
+ * a PNG data URL suitable for <img src>. Elements are expected to already be
+ * normalised to origin (0,0) via sanitizeAndCaptureBounds.
+ */
+export async function renderSymbolThumbnail(params: {
+  elements: DesignElement[];
+  width: number;
+  height: number;
+  maxEdge?: number;
+}): Promise<string | undefined> {
+  if (typeof document === "undefined") return undefined;
+  if (params.width <= 0 || params.height <= 0 || params.elements.length === 0) return undefined;
+
+  const maxEdge = params.maxEdge ?? 320;
+  const pixelRatio = Math.min(2, Math.max(1, maxEdge / Math.max(params.width, params.height)));
+
+  // Synthesize a throwaway page that wraps the symbol's bounding box.
+  const fakePageId = "symbol-thumbnail";
+  const pageElements: DesignElement[] = params.elements.map((element) => ({
+    ...element,
+    pageId: fakePageId,
+  }));
+  const page: DesignPage = {
+    pageId: fakePageId,
+    name: "symbol",
+    width: params.width,
+    height: params.height,
+    background: "transparent",
+    guides: [],
+  };
+
+  const { node, cleanup } = await renderPageNode(page, pageElements);
+  try {
+    const dataUrl = await toPng(node, {
+      pixelRatio,
+      cacheBust: true,
+      skipFonts: false,
+      backgroundColor: undefined,
+    });
+    return dataUrl;
+  } catch {
+    return undefined;
+  } finally {
+    cleanup();
+  }
+}

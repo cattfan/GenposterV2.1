@@ -41,6 +41,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import type { DesignShapeElement, DesignTextElement, ElementStyle } from "@/models";
 import type { TextSelectionRange } from "./richText";
+import { TEXT_EFFECT_PRESETS, buildTextEffectPatch, type TextEffectPreset } from "./textEffects";
 
 const FONT_SIZE_PRESETS = [10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 96, 120];
 const DEFAULT_STROKE_COLOR = "#ffffff";
@@ -65,6 +66,7 @@ const TEXT_TRANSFORM_OPTIONS: Array<{
 
 /** Check if there's a text selection inside a contentEditable */
 function hasSelection(): boolean {
+  if (typeof window === "undefined") return false;
   const sel = window.getSelection();
   return !!sel && !sel.isCollapsed && sel.rangeCount > 0;
 }
@@ -85,6 +87,29 @@ function styleNumber(
   max: number,
 ): number {
   return clampNumber(typeof value === "number" ? value : fallback, min, max);
+}
+
+function buildPreviewStyleForPreset(preset: TextEffectPreset): React.CSSProperties {
+  const s = preset.style;
+  const style: React.CSSProperties = {
+    color: s.color ?? "#0f172a",
+  };
+  if (s.gradientEnabled && s.gradientFrom && s.gradientTo) {
+    style.background = `linear-gradient(${s.gradientAngle ?? 135}deg, ${s.gradientFrom}, ${s.gradientTo})`;
+    style.WebkitBackgroundClip = "text";
+    style.backgroundClip = "text";
+    style.color = "transparent";
+  }
+  if (s.textShadowColor) {
+    const x = s.textShadowX ?? 0;
+    const y = s.textShadowY ?? 0;
+    const blur = s.textShadowBlur ?? 0;
+    style.textShadow = `${x}px ${y}px ${blur}px ${s.textShadowColor}`;
+  }
+  if (s.textStrokeColor && Number(s.textStrokeWidth ?? 0) > 0) {
+    (style as React.CSSProperties & { WebkitTextStroke?: string }).WebkitTextStroke = `${s.textStrokeWidth}px ${s.textStrokeColor}`;
+  }
+  return style;
 }
 
 function ToolbarColorInput({
@@ -120,6 +145,7 @@ function attrSelectorValue(value: string): string {
 }
 
 function getSelectionRangeForElement(elementId: string): TextSelectionRange | null {
+  if (typeof document === "undefined" || typeof window === "undefined") return null;
   const root = document.querySelector(
     `[data-rich-text-editor-id="${attrSelectorValue(elementId)}"]`,
   );
@@ -137,6 +163,7 @@ function getSelectionRangeForElement(elementId: string): TextSelectionRange | nu
 }
 
 function applyCssToSelection(patch: Partial<ElementStyle>): boolean {
+  if (typeof document === "undefined" || typeof window === "undefined") return false;
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
   const range = selection.getRangeAt(0);
@@ -369,7 +396,7 @@ export function TextToolbar({
 
   return (
     <div
-      className="pointer-events-auto absolute left-1/2 top-[-52px] z-50 flex w-max -translate-x-1/2 flex-nowrap items-center gap-0.5 overflow-visible whitespace-nowrap rounded-md bg-card/95 px-1 py-0.5 shadow-lg ring-1 ring-border/70"
+      className="pointer-events-auto absolute left-1/2 top-[-68px] z-50 flex w-max -translate-x-1/2 flex-nowrap items-center gap-0.5 overflow-visible whitespace-nowrap rounded-md bg-card/95 px-1 py-0.5 shadow-lg ring-1 ring-border/70"
       onPointerDown={(e) => {
         e.stopPropagation();
       }}
@@ -740,6 +767,113 @@ export function TextToolbar({
         <AlignEndHorizontal className="size-3.5" />
       </Button>
 
+      <div className="mx-0.5 h-5 w-px bg-border" />
+
+      {/* Vertical writing mode + curve controls */}
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            size="icon"
+            variant={
+              style.textLayout && style.textLayout !== "horizontal"
+                ? "default"
+                : Math.abs(style.textCurve ?? 0) > 0
+                  ? "default"
+                  : "ghost"
+            }
+            className="size-7"
+            aria-label="Hướng / cong chữ"
+            title="Hướng chữ và text curve"
+          >
+            <span className="text-[11px] font-bold leading-none">↕</span>
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-64 p-3" side="bottom" align="end">
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs font-medium">Hướng chữ</Label>
+              <div className="mt-1 grid grid-cols-3 gap-1">
+                <Button
+                  size="sm"
+                  variant={
+                    !style.textLayout || style.textLayout === "horizontal"
+                      ? "default"
+                      : "outline"
+                  }
+                  onClick={() => onUpdateStyle({ textLayout: "horizontal" })}
+                  className="h-7 text-xs"
+                >
+                  Ngang
+                </Button>
+                <Button
+                  size="sm"
+                  variant={style.textLayout === "vertical-rl" ? "default" : "outline"}
+                  onClick={() => onUpdateStyle({ textLayout: "vertical-rl" })}
+                  className="h-7 text-xs"
+                  title="Trên xuống, cột phải → trái"
+                >
+                  Dọc RL
+                </Button>
+                <Button
+                  size="sm"
+                  variant={style.textLayout === "vertical-lr" ? "default" : "outline"}
+                  onClick={() => onUpdateStyle({ textLayout: "vertical-lr" })}
+                  className="h-7 text-xs"
+                  title="Trên xuống, cột trái → phải"
+                >
+                  Dọc LR
+                </Button>
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-medium">Cong chữ</Label>
+                <span className="text-[11px] tabular-nums text-muted-foreground">
+                  {Math.round(style.textCurve ?? 0)}°
+                </span>
+              </div>
+              <Slider
+                value={[style.textCurve ?? 0]}
+                min={-170}
+                max={170}
+                step={5}
+                onValueChange={([value]) => onUpdateStyle({ textCurve: value })}
+                className="mt-1"
+              />
+              <div className="mt-1 flex justify-between gap-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 flex-1 text-[10px]"
+                  onClick={() => onUpdateStyle({ textCurve: -90 })}
+                >
+                  Cười
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 flex-1 text-[10px]"
+                  onClick={() => onUpdateStyle({ textCurve: 0 })}
+                >
+                  Phẳng
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 flex-1 text-[10px]"
+                  onClick={() => onUpdateStyle({ textCurve: 90 })}
+                >
+                  Khóc
+                </Button>
+              </div>
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                Dùng cho text ngắn, không tương thích với rich-text run riêng lẻ.
+              </p>
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
+
       {/* Color */}
       <div className="ml-0.5 flex items-center">
         <Label className="sr-only">Màu chữ</Label>
@@ -918,6 +1052,60 @@ export function TextToolbar({
               step={0.05}
               onValueChange={([value]) => onUpdateStyle({ opacity: value })}
             />
+          </div>
+        </PopoverContent>
+      </Popover>
+
+      <div className="mx-0.5 h-5 w-px bg-border" />
+
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="size-7"
+            aria-label="Hiệu ứng chữ"
+            title="Hiệu ứng chữ (neon, outline, gradient…)"
+          >
+            <Sparkles className="size-3.5" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-72 p-2" side="bottom" align="end">
+          <div className="mb-1 flex items-center justify-between px-1">
+            <Label className="text-xs font-medium">Hiệu ứng chữ</Label>
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateStyle(buildTextEffectPatch(TEXT_EFFECT_PRESETS[0]))
+              }
+              className="text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              Reset
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            {TEXT_EFFECT_PRESETS.filter((preset) => preset.id !== "none").map((preset) => {
+              const previewStyle = buildPreviewStyleForPreset(preset);
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => onUpdateStyle(buildTextEffectPatch(preset))}
+                  className="group flex flex-col items-start gap-1 rounded-md border bg-background px-2 py-1.5 text-left transition-colors hover:border-primary hover:bg-accent"
+                  title={preset.description}
+                >
+                  <span
+                    className="text-sm font-bold leading-tight"
+                    style={previewStyle}
+                  >
+                    Aa
+                  </span>
+                  <span className="truncate text-[10px] text-muted-foreground group-hover:text-foreground">
+                    {preset.label}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </PopoverContent>
       </Popover>

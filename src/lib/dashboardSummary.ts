@@ -1,4 +1,10 @@
-import type { Asset, Entity, Job, PackTemplate, PageTemplate } from "@/models";
+import type {
+  Asset,
+  Entity,
+  GenerationJob as Job,
+  PackTemplate,
+  PageTemplate,
+} from "@/models";
 import {
   getEntityImageReferencesWithAssets,
   getImageReferenceEntityIds,

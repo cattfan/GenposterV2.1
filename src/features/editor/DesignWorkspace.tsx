@@ -63,6 +63,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -102,6 +103,7 @@ import { LayoutGuides } from "@/features/render/LayoutGuides";
 import { PageRenderer } from "@/features/render/PageRenderer";
 import { db, saveBlob } from "@/storage/db";
 import { makeIdbSrc, resolveImageSrcAsync } from "@/storage/imageSrc";
+import { resizeImageBlob } from "@/storage/imageResize";
 import type {
   AssetItem,
   BrandKit,
@@ -116,9 +118,11 @@ import type {
   FontAsset,
   ImageCrop,
   PageTemplate,
+  SymbolDefinition,
 } from "@/models";
 import { DesignRenderer } from "./DesignRenderer";
-import { FONTS } from "./fonts";
+import { FONTS, ensureExtendedFontsLoaded } from "./fonts";
+import { usePageCommands, type CommandEntry } from "@/components/CommandPalette";
 import {
   getBuiltInIconSvg,
   getBuiltInAssetLibrary,
@@ -129,6 +133,15 @@ import {
 } from "./designAssets";
 import { useDesignEditor } from "./designStore";
 import type { CommitOptions } from "./designStore";
+import {
+  buildSymbolInstanceGroup,
+  deleteSymbol,
+  findSymbolInstances,
+  instantiateSymbolElements,
+  isInstanceOutdated,
+  sanitizeAndCaptureBounds,
+  saveSymbol,
+} from "./symbols";
 import { TextToolbar } from "./TextToolbar";
 import {
   applyTextRunStyle,
@@ -149,6 +162,7 @@ const EMPTY_ASSETS: AssetItem[] = [];
 const EMPTY_BRAND_KITS: BrandKit[] = [];
 const EMPTY_FONT_ASSETS: FontAsset[] = [];
 const EMPTY_PAGE_TEMPLATES: PageTemplate[] = [];
+const EMPTY_SYMBOLS: SymbolDefinition[] = [];
 const AUTOSAVE_DELAY_MS = 500;
 const ICON_PICKER_RESULT_LIMIT = 360;
 const LETTER_SPACING_MIN = -5;
@@ -757,14 +771,14 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function getMoveTargets(selected: DesignElement[]): string[] {
+function getMoveTargets(selected: DesignElement[], allElements: DesignElement[] = selected): string[] {
   const ids = new Set<string>();
   for (const element of selected) {
     ids.add(element.elementId);
   }
   for (const element of selected) {
     if (element.kind !== "group") continue;
-    getDescendantIds(selected, element.elementId).forEach((id) => ids.add(id));
+    getDescendantIds(allElements, element.elementId).forEach((id) => ids.add(id));
   }
   return Array.from(ids);
 }
@@ -1078,6 +1092,8 @@ export function DesignWorkspace({
   const [leftTab, setLeftTab] = useState("insert");
   const [rightTab, setRightTab] = useState("properties");
   const [assetSearch, setAssetSearch] = useState("");
+  const [symbolSearch, setSymbolSearch] = useState("");
+  const [symbolTagFilter, setSymbolTagFilter] = useState<string | null>(null);
   const [iconSearch, setIconSearch] = useState("");
   const deferredIconSearch = useDeferredValue(iconSearch);
   const [iconVariantFilter, setIconVariantFilter] = useState<IconVariantFilter>("all");
@@ -1143,15 +1159,47 @@ export function DesignWorkspace({
     () => db.fontAssets.orderBy("updatedAt").reverse().toArray(),
     [],
   );
+  const symbolsQuery = useLiveQuery(
+    () => db.symbols.orderBy("updatedAt").reverse().toArray(),
+    [],
+  );
   const assetLibrary = assetLibraryQuery ?? EMPTY_ASSETS;
   const brandKits = brandKitsQuery ?? EMPTY_BRAND_KITS;
   const fontAssets = fontAssetsQuery ?? EMPTY_FONT_ASSETS;
+  const symbols = symbolsQuery ?? EMPTY_SYMBOLS;
   const builtInAssets = useMemo(() => getBuiltInAssetLibrary(), []);
   const uploadedAssets = assetLibrary.filter((asset) => !isHeroiconAsset(asset));
   const iconAssets = useMemo(
     () => [...builtInAssets.filter(isHeroiconAsset), ...extendedIconAssets],
     [builtInAssets, extendedIconAssets],
   );
+
+  const symbolTagOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const symbol of symbols) {
+      for (const tag of symbol.tags ?? []) {
+        const clean = tag.trim();
+        if (clean) set.add(clean);
+      }
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "vi"));
+  }, [symbols]);
+
+  const filteredSymbols = useMemo(() => {
+    const query = symbolSearch.trim().toLowerCase();
+    return symbols.filter((symbol) => {
+      if (symbolTagFilter && !(symbol.tags ?? []).includes(symbolTagFilter)) return false;
+      if (!query) return true;
+      if (symbol.name.toLowerCase().includes(query)) return true;
+      if ((symbol.description ?? "").toLowerCase().includes(query)) return true;
+      return (symbol.tags ?? []).some((tag) => tag.toLowerCase().includes(query));
+    });
+  }, [symbols, symbolSearch, symbolTagFilter]);
+
+  // Editor needs the full Google Fonts catalogue for previews — load once per session.
+  useEffect(() => {
+    ensureExtendedFontsLoaded();
+  }, []);
 
   const clearElementPreviewState = useCallback(() => {
     resetPreviewMarkers(getDesignCanvasElement(stageWrapRef.current), { restoreTransform: true });
@@ -1330,6 +1378,20 @@ export function DesignWorkspace({
     };
   }, [autosave, documentSignature, queueAutosave]);
 
+  // Warn the user if they try to navigate away while a save is still in flight.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!autosave) return;
+    if (autosaveStatus !== "pending" && autosaveStatus !== "saving") return;
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // Legacy browsers require `returnValue` to be set to trigger the prompt.
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [autosave, autosaveStatus]);
+
   useEffect(() => {
     return () => {
       if (autosaveTimerRef.current) {
@@ -1358,6 +1420,44 @@ export function DesignWorkspace({
   const activePage = editor.activePage;
   const selected = editor.selectedElements;
   const primary = selected.at(-1) ?? null;
+
+  // Paste images from the OS clipboard into the canvas (Ctrl+V / long-press paste).
+  // Only reacts when focus is outside an input/textarea and the clipboard has image data.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPaste = (event: ClipboardEvent) => {
+      if (isEditableTarget(event.target)) return;
+      const items = event.clipboardData?.items;
+      if (!items) return;
+      const files: File[] = [];
+      for (const item of items) {
+        if (item.kind === "file" && item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) files.push(file);
+        }
+      }
+      if (files.length === 0) return;
+      event.preventDefault();
+      (async () => {
+        for (let i = 0; i < files.length; i++) {
+          await importImageFile(files[i], {
+            position: activePage
+              ? {
+                  x: activePage.width / 2 - 160 + i * 24,
+                  y: activePage.height / 2 - 160 + i * 24,
+                }
+              : undefined,
+          });
+        }
+        toast.success(files.length === 1 ? "Đã dán ảnh" : `Đã dán ${files.length} ảnh`);
+      })().catch((error) => {
+        toast.error(`Không dán được ảnh: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePage?.pageId, activePage?.width, activePage?.height]);
   const hasPackPages = packPages.length > 0;
   const zoom = editor.state.viewport.zoom;
   const currentBrandKit =
@@ -1388,6 +1488,129 @@ export function DesignWorkspace({
       );
     }
   };
+
+  // Contribute editor-specific commands into the global Ctrl+K palette.
+  usePageCommands(
+    useMemo<CommandEntry[]>(
+      () => [
+        {
+          id: "editor:save",
+          label: "Lưu thiết kế",
+          group: "Editor",
+          keywords: ["save", "luu"],
+          shortcut: "Ctrl+S",
+          icon: <Download className="size-4" />,
+          action: () => void handleSave(),
+        },
+        {
+          id: "editor:undo",
+          label: "Hoàn tác",
+          group: "Editor",
+          keywords: ["undo"],
+          shortcut: "Ctrl+Z",
+          icon: <Undo2 className="size-4" />,
+          action: () => editor.undo(),
+        },
+        {
+          id: "editor:redo",
+          label: "Làm lại",
+          group: "Editor",
+          keywords: ["redo"],
+          shortcut: "Ctrl+Shift+Z",
+          icon: <Redo2 className="size-4" />,
+          action: () => editor.redo(),
+        },
+        {
+          id: "editor:export-png",
+          label: "Xuất PNG",
+          group: "Editor",
+          keywords: ["export", "png"],
+          icon: <Download className="size-4" />,
+          action: () => void runExport("png"),
+        },
+        {
+          id: "editor:export-jpg",
+          label: "Xuất JPG",
+          group: "Editor",
+          keywords: ["export", "jpg"],
+          action: () => void runExport("jpg"),
+        },
+        {
+          id: "editor:export-svg",
+          label: "Xuất SVG",
+          group: "Editor",
+          keywords: ["export", "svg"],
+          action: () => void runExport("svg"),
+        },
+        {
+          id: "editor:export-pdf",
+          label: "Xuất PDF",
+          group: "Editor",
+          keywords: ["export", "pdf"],
+          action: () => void runExport("pdf"),
+        },
+        {
+          id: "editor:export-json",
+          label: "Xuất JSON",
+          group: "Editor",
+          keywords: ["export", "json"],
+          action: () => void runExport("json"),
+        },
+        {
+          id: "editor:save-symbol",
+          label: "Lưu selection thành symbol",
+          group: "Editor",
+          keywords: ["symbol", "save"],
+          icon: <Layers className="size-4" />,
+          action: () => void saveSelectionAsSymbol(),
+        },
+        {
+          id: "editor:group",
+          label: "Gom nhóm",
+          group: "Editor",
+          keywords: ["group"],
+          shortcut: "Ctrl+G",
+          action: () => editor.groupSelection(),
+        },
+        {
+          id: "editor:ungroup",
+          label: "Bỏ nhóm",
+          group: "Editor",
+          keywords: ["ungroup"],
+          shortcut: "Ctrl+Shift+G",
+          action: () => editor.ungroupSelection(),
+        },
+        {
+          id: "editor:toggle-grid",
+          label: editor.state.documentSettings.showGrid ? "Ẩn lưới" : "Hiện lưới",
+          group: "Editor",
+          keywords: ["grid", "luoi"],
+          icon: <Grid3X3 className="size-4" />,
+          action: () =>
+            editor.updateDocumentSettings({
+              showGrid: !editor.state.documentSettings.showGrid,
+            }),
+        },
+        {
+          id: "editor:toggle-safe-zone",
+          label: editor.state.documentSettings.showSafeZone
+            ? "Ẩn vùng an toàn"
+            : "Hiện vùng an toàn",
+          group: "Editor",
+          keywords: ["safe zone", "vung an toan"],
+          action: () =>
+            editor.updateDocumentSettings({
+              showSafeZone: !editor.state.documentSettings.showSafeZone,
+            }),
+        },
+      ],
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [
+        editor.state.documentSettings.showGrid,
+        editor.state.documentSettings.showSafeZone,
+      ],
+    ),
+  );
 
   const insertText = () => {
     if (!activePage) return;
@@ -1557,6 +1780,63 @@ export function DesignWorkspace({
     });
   };
 
+  // Import a File/Blob as an image asset (saves to Dexie + adds element).
+  // Reused by manual upload, drag-drop, and clipboard paste.
+  const importImageFile = async (
+    file: File | Blob,
+    options?: {
+      kind?: AssetItem["kind"];
+      position?: { x: number; y: number };
+      insert?: boolean;
+      name?: string;
+    },
+  ) => {
+    const kind = options?.kind ?? "image";
+    const needsResize = kind === "image" || kind === "logo";
+    const payload = needsResize ? await resizeImageBlob(file) : file;
+    const blobKey = await saveBlob(payload);
+    const fallbackName = file instanceof File ? file.name : "image";
+    const asset: AssetItem = {
+      assetId: nanoid(),
+      name: (options?.name ?? fallbackName).replace(/\.[^.]+$/, "") || "image",
+      kind,
+      sourceType: "local",
+      sourceValue: makeIdbSrc(blobKey),
+      blobKey,
+      mime: payload.type || file.type || "image/jpeg",
+      tags: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await db.assetLibrary.put(asset);
+    editor.setAssetIds([...editor.state.assetIds, asset.assetId]);
+
+    if (options?.insert !== false && kind !== "logo" && activePage) {
+      const width = 320;
+      const height = 320;
+      const fallbackX = (activePage.width - width) / 2;
+      const fallbackY = (activePage.height - height) / 2;
+      editor.insertElement({
+        elementId: nanoid(),
+        pageId: activePage.pageId,
+        kind: "image",
+        name: asset.name,
+        x: Math.round(options?.position?.x ?? fallbackX),
+        y: Math.round(options?.position?.y ?? fallbackY),
+        width,
+        height,
+        zIndex: editor.activeElements.length,
+        src: asset.sourceValue,
+        assetId: asset.assetId,
+        style: {
+          fit: "cover",
+          borderRadius: 24,
+        },
+      });
+    }
+    return asset;
+  };
+
   const uploadAsset = async (kind: AssetItem["kind"] = "image") => {
     const input = document.createElement("input");
     input.type = "file";
@@ -1564,22 +1844,27 @@ export function DesignWorkspace({
     input.onchange = async (event) => {
       const file = (event.target as HTMLInputElement).files?.[0];
       if (!file) return;
-      const blobKey = await saveBlob(file);
-      const asset: AssetItem = {
-        assetId: nanoid(),
-        name: file.name.replace(/\.[^.]+$/, ""),
-        kind,
-        sourceType: "local",
-        sourceValue: makeIdbSrc(blobKey),
-        blobKey,
-        mime: file.type,
-        tags: [],
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-      await db.assetLibrary.put(asset);
-      editor.setAssetIds([...editor.state.assetIds, asset.assetId]);
-      if (kind !== "logo") insertAsset(asset);
+      if (kind === "image" || kind === "logo") {
+        await importImageFile(file, { kind });
+      } else {
+        // Non-image kinds (svg/icon/etc): keep old behaviour without resize.
+        const blobKey = await saveBlob(file);
+        const asset: AssetItem = {
+          assetId: nanoid(),
+          name: file.name.replace(/\.[^.]+$/, ""),
+          kind,
+          sourceType: "local",
+          sourceValue: makeIdbSrc(blobKey),
+          blobKey,
+          mime: file.type,
+          tags: [],
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        await db.assetLibrary.put(asset);
+        editor.setAssetIds([...editor.state.assetIds, asset.assetId]);
+        insertAsset(asset);
+      }
       toast.success("Đã thêm asset");
     };
     input.click();
@@ -1589,6 +1874,149 @@ export function DesignWorkspace({
     await db.assetLibrary.delete(asset.assetId);
     editor.setAssetIds(editor.state.assetIds.filter((id) => id !== asset.assetId));
     toast.success(`Đã xoá asset "${asset.name}"`);
+  };
+
+  // ─── Symbols (reusable component bundles) ────────────────────────────────
+  const saveSelectionAsSymbol = async (name?: string, ids = editor.state.selection.ids) => {
+    if (!activePage) return;
+    const actionIds = getSelectionActionIds(ids);
+    const selection = getSelectedElementsByIds(editor.activeElements, actionIds);
+    if (selection.length === 0) {
+      toast.error("Chọn phần tử muốn lưu thành symbol");
+      return;
+    }
+    const existingSymbolId = (() => {
+      if (selection.length !== 1) return undefined;
+      const meta = selection[0]?.meta as Record<string, unknown> | undefined;
+      return typeof meta?.symbolId === "string" ? meta.symbolId : undefined;
+    })();
+    const existing = existingSymbolId ? await db.symbols.get(existingSymbolId) : undefined;
+    const defaultName = existing?.name ?? selection[0]?.name ?? "Symbol";
+    const nameInput =
+      typeof window !== "undefined" ? window.prompt("Tên symbol", name ?? defaultName) : defaultName;
+    if (nameInput == null) return;
+    const finalName = nameInput.trim() || defaultName;
+    try {
+      // Capture thumbnail (non-blocking — if it fails, symbol still saves without one).
+      let thumbnail: string | undefined;
+      try {
+        const normalized = sanitizeAndCaptureBounds(selection);
+        const { renderSymbolThumbnail } = await import("./exportDesign");
+        thumbnail = await renderSymbolThumbnail({
+          elements: normalized.elements,
+          width: normalized.width,
+          height: normalized.height,
+        });
+      } catch {
+        thumbnail = undefined;
+      }
+      const symbol = await saveSymbol({
+        name: finalName,
+        elements: selection,
+        symbolId: existing?.symbolId,
+        currentVersion: existing?.version,
+        thumbnail,
+      });
+      // Tag current selection as an instance of the saved symbol.
+      editor.updateElements(
+        selection.map((el) => el.elementId),
+        (element) => ({
+          meta: {
+            ...(element.meta ?? {}),
+            symbolId: symbol.symbolId,
+            symbolVersion: symbol.version,
+          },
+        }),
+        { history: true },
+      );
+      toast.success(
+        existing ? `Đã cập nhật symbol "${finalName}" (v${symbol.version})` : `Đã lưu symbol "${finalName}"`,
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Không lưu được symbol");
+    }
+  };
+
+  const insertSymbolInstance = (symbol: SymbolDefinition) => {
+    if (!activePage) return;
+    const offsetX = Math.max(0, (activePage.width - symbol.width) / 2);
+    const offsetY = Math.max(0, (activePage.height - symbol.height) / 2);
+    const zIndexStart = editor.activeElements.length;
+    const elements = instantiateSymbolElements(symbol, {
+      pageId: activePage.pageId,
+      offsetX,
+      offsetY,
+      zIndexStart,
+    });
+    // Wrap in a group so the instance can be moved as a unit.
+    const { group, children } = buildSymbolInstanceGroup(elements, symbol, activePage.pageId);
+    for (const child of children) editor.insertElement(child);
+    editor.insertElement(group);
+    editor.setSelection([group.elementId], group.elementId);
+    toast.success(`Đã thêm symbol "${symbol.name}"`);
+  };
+
+  const syncInstanceWithLatest = async (
+    instanceRoot: DesignElement,
+    symbol: SymbolDefinition,
+  ) => {
+    if (!activePage) return;
+    // Replace instance: delete current group + its descendants, then insert fresh copy at same position.
+    const rootMeta = instanceRoot.meta as Record<string, unknown> | undefined;
+    const keepX = instanceRoot.x;
+    const keepY = instanceRoot.y;
+    editor.deleteSelection([instanceRoot.elementId]);
+    const elements = instantiateSymbolElements(symbol, {
+      pageId: activePage.pageId,
+      offsetX: keepX,
+      offsetY: keepY,
+      zIndexStart: instanceRoot.zIndex ?? editor.activeElements.length,
+    });
+    const { group, children } = buildSymbolInstanceGroup(elements, symbol, activePage.pageId);
+    // Preserve legacy meta keys from the old instance except symbolVersion.
+    if (rootMeta) {
+      group.meta = {
+        ...rootMeta,
+        symbolId: symbol.symbolId,
+        symbolVersion: symbol.version,
+      };
+    }
+    for (const child of children) editor.insertElement(child);
+    editor.insertElement(group);
+    editor.setSelection([group.elementId], group.elementId);
+    toast.success(`Đã đồng bộ symbol "${symbol.name}" (v${symbol.version})`);
+  };
+
+  const removeSymbol = async (symbol: SymbolDefinition) => {
+    if (typeof window !== "undefined") {
+      const ok = window.confirm(
+        `Xoá symbol "${symbol.name}"? Các instance hiện có sẽ giữ nguyên nhưng không còn sync được nữa.`,
+      );
+      if (!ok) return;
+    }
+    try {
+      await deleteSymbol(symbol.symbolId);
+      toast.success(`Đã xoá symbol "${symbol.name}"`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Không xoá được symbol");
+    }
+  };
+
+  const editSymbolTags = async (symbol: SymbolDefinition) => {
+    if (typeof window === "undefined") return;
+    const current = (symbol.tags ?? []).join(", ");
+    const input = window.prompt(`Tag cho "${symbol.name}" (phân cách bằng dấu phẩy)`, current);
+    if (input == null) return;
+    const tags = input
+      .split(",")
+      .map((tag) => tag.trim().replace(/^#+/, ""))
+      .filter(Boolean);
+    try {
+      await db.symbols.put({ ...symbol, tags, updatedAt: Date.now() });
+      toast.success(`Đã cập nhật tag cho "${symbol.name}"`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Không cập nhật được tag");
+    }
   };
 
   const uploadFont = async () => {
@@ -1707,9 +2135,18 @@ export function DesignWorkspace({
     openPropertiesPanel();
   };
 
+  const setSelectionForElements = (ids: string[]) => {
+    editor.setSelection(ids, ids.at(-1) ?? null);
+  };
+
   const updatePrimaryElement = (patch: Partial<DesignElement>) => {
     if (!primary) return;
     editor.updateElements([primary.elementId], patch, { history: false });
+  };
+
+  const updatePrimaryElementWithDescendants = (patch: Partial<DesignElement>) => {
+    if (!primary) return;
+    editor.updateElements(getSelectionActionIds([primary.elementId]), patch, { history: false });
   };
 
   const updateElementStyle = (elementId: string, patch: Partial<ElementStyle>) => {
@@ -1886,6 +2323,11 @@ export function DesignWorkspace({
       if (mod && lower === "d") {
         event.preventDefault();
         currentEditor.duplicateSelection();
+        return;
+      }
+      if (mod && (event.key === "0" || event.code === "Digit0")) {
+        event.preventDefault();
+        handleResetZoom();
         return;
       }
       if (mod && lower === "g" && event.shiftKey) {
@@ -2180,6 +2622,7 @@ export function DesignWorkspace({
       : [element.elementId];
     const contextElements = getSelectedElementsByIds(editor.activeElements, contextIds);
     const hasContextSelection = contextElements.length > 0;
+    const contextActionIds = getSelectionActionIds(contextIds);
     const canGroup = contextElements.length > 1;
     const canUngroup = contextElements.some((item) => item.kind === "group");
     const showContextInfo = () => {
@@ -2192,6 +2635,7 @@ export function DesignWorkspace({
         ? `${label} · ${Math.round(bounds.width)}×${Math.round(bounds.height)}`
         : label;
       toast.message(info);
+      setSelectionForElements(contextIds);
       openPropertiesPanel();
     };
     return (
@@ -2296,7 +2740,7 @@ export function DesignWorkspace({
         <ContextMenuItem
           onSelect={() =>
             editor.updateElements(
-              [element.elementId],
+              contextActionIds,
               { locked: !element.locked },
               { history: false },
             )
@@ -2308,7 +2752,7 @@ export function DesignWorkspace({
         <ContextMenuItem
           onSelect={() =>
             editor.updateElements(
-              [element.elementId],
+              contextActionIds,
               { hidden: !element.hidden },
               { history: false },
             )
@@ -2321,7 +2765,7 @@ export function DesignWorkspace({
         <ContextMenuItem
           onSelect={() =>
             editor.updateElements(
-              [element.elementId],
+              contextActionIds,
               {
                 style: { ...(element.style ?? {}), flipH: !element.style?.flipH },
               } as Partial<DesignElement>,
@@ -2335,7 +2779,7 @@ export function DesignWorkspace({
         <ContextMenuItem
           onSelect={() =>
             editor.updateElements(
-              [element.elementId],
+              contextActionIds,
               {
                 style: { ...(element.style ?? {}), flipV: !element.style?.flipV },
               } as Partial<DesignElement>,
@@ -2346,14 +2790,54 @@ export function DesignWorkspace({
           <FlipVertical className="mr-2 size-4" />
           Lật dọc
         </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => void saveSelectionAsSymbol(undefined, contextIds)}>
+          <Layers className="mr-2 size-4" />
+          Lưu thành symbol
+        </ContextMenuItem>
         {element.kind === "image" ? (
-          <ContextMenuItem onSelect={() => setCropTargetId(element.elementId)}>
-            <ImageIcon className="mr-2 size-4" />
-            Cắt ảnh
-          </ContextMenuItem>
+          <>
+            <ContextMenuItem onSelect={() => setCropTargetId(element.elementId)}>
+              <ImageIcon className="mr-2 size-4" />
+              Cắt ảnh
+            </ContextMenuItem>
+            <ContextMenuItem
+              onSelect={() => {
+                const input = document.createElement("input");
+                input.type = "file";
+                input.accept = "image/*";
+                input.onchange = async (event) => {
+                  const file = (event.target as HTMLInputElement).files?.[0];
+                  if (!file) return;
+                  try {
+                    const asset = await importImageFile(file, { insert: false });
+                    editor.updateElements(
+                      [element.elementId],
+                      { src: asset.sourceValue, assetId: asset.assetId } as Partial<DesignElement>,
+                      { history: true },
+                    );
+                    toast.success(`Đã đổi ảnh "${element.name ?? ""}"`.trim());
+                  } catch (error) {
+                    toast.error(
+                      error instanceof Error ? error.message : "Đổi ảnh thất bại",
+                    );
+                  }
+                };
+                input.click();
+              }}
+            >
+              <Upload className="mr-2 size-4" />
+              Đổi ảnh khác
+            </ContextMenuItem>
+          </>
         ) : null}
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={openPropertiesPanel}>
+        <ContextMenuItem
+          onSelect={() => {
+            setSelectionForElements(contextIds);
+            openPropertiesPanel();
+          }}
+        >
           <PanelRight className="mr-2 size-4" />
           Mở thuộc tính
         </ContextMenuItem>
@@ -2981,7 +3465,9 @@ export function DesignWorkspace({
                   variant={primary?.hidden ? "default" : "ghost"}
                   className="size-8"
                   disabled={!primary}
-                  onClick={() => primary && updatePrimaryElement({ hidden: !primary.hidden })}
+                  onClick={() =>
+                    primary && updatePrimaryElementWithDescendants({ hidden: !primary.hidden })
+                  }
                 >
                   {primary?.hidden ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
                 </Button>
@@ -2995,7 +3481,9 @@ export function DesignWorkspace({
                   variant={primary?.locked ? "default" : "ghost"}
                   className="size-8"
                   disabled={!primary}
-                  onClick={() => primary && updatePrimaryElement({ locked: !primary.locked })}
+                  onClick={() =>
+                    primary && updatePrimaryElementWithDescendants({ locked: !primary.locked })
+                  }
                 >
                   {primary?.locked ? <LockOpen className="size-4" /> : <Lock className="size-4" />}
                 </Button>
@@ -3226,14 +3714,18 @@ export function DesignWorkspace({
                         <Button
                           size="sm"
                           variant={primary.hidden ? "default" : "outline"}
-                          onClick={() => updatePrimaryElement({ hidden: !primary.hidden })}
+                          onClick={() =>
+                            updatePrimaryElementWithDescendants({ hidden: !primary.hidden })
+                          }
                         >
                           {primary.hidden ? "Hiện" : "Ẩn"}
                         </Button>
                         <Button
                           size="sm"
                           variant={primary.locked ? "default" : "outline"}
-                          onClick={() => updatePrimaryElement({ locked: !primary.locked })}
+                          onClick={() =>
+                            updatePrimaryElementWithDescendants({ locked: !primary.locked })
+                          }
                         >
                           {primary.locked ? "Mở khóa" : "Khóa"}
                         </Button>
@@ -3714,6 +4206,195 @@ export function DesignWorkspace({
                     <div className="text-xs text-muted-foreground">
                       Tab này chỉ lưu assets mà người dùng tải lên.
                     </div>
+
+                    {/* Symbols library */}
+                    <div className="rounded-xl border bg-card p-3">
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-semibold">Symbols</div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          onClick={() => saveSelectionAsSymbol()}
+                          disabled={editor.selectedElements.length === 0}
+                          title="Lưu phần đang chọn thành symbol để tái sử dụng"
+                        >
+                          <Plus className="mr-1 size-3" />
+                          Lưu selection
+                        </Button>
+                      </div>
+                      {symbols.length > 0 ? (
+                        <div className="mt-2 space-y-1.5">
+                          <Input
+                            value={symbolSearch}
+                            onChange={(event) => setSymbolSearch(event.target.value)}
+                            placeholder="Tìm symbol theo tên hoặc tag"
+                            className="h-7 text-xs"
+                          />
+                          {symbolTagOptions.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setSymbolTagFilter(null)}
+                                className={cn(
+                                  "rounded-full border px-2 py-0.5 text-[10px] transition-colors",
+                                  symbolTagFilter == null
+                                    ? "border-primary bg-primary/10 text-primary"
+                                    : "border-border text-muted-foreground hover:border-primary/60",
+                                )}
+                              >
+                                Tất cả
+                              </button>
+                              {symbolTagOptions.map((tag) => (
+                                <button
+                                  key={tag}
+                                  type="button"
+                                  onClick={() =>
+                                    setSymbolTagFilter(symbolTagFilter === tag ? null : tag)
+                                  }
+                                  className={cn(
+                                    "rounded-full border px-2 py-0.5 text-[10px] transition-colors",
+                                    symbolTagFilter === tag
+                                      ? "border-primary bg-primary/10 text-primary"
+                                      : "border-border text-muted-foreground hover:border-primary/60",
+                                  )}
+                                >
+                                  #{tag}
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {symbols.length === 0 ? (
+                        <div className="mt-2 text-xs text-muted-foreground">
+                          Chưa có symbol. Chọn nhóm phần tử rồi bấm "Lưu selection" để tái sử dụng trên nhiều trang.
+                        </div>
+                      ) : filteredSymbols.length === 0 ? (
+                        <div className="mt-2 rounded border border-dashed px-2 py-3 text-center text-[11px] text-muted-foreground">
+                          Không có symbol khớp "{symbolSearch}"
+                          {symbolTagFilter ? ` + #${symbolTagFilter}` : ""}
+                        </div>
+                      ) : (
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          {filteredSymbols.map((symbol) => (
+                            <div
+                              key={symbol.symbolId}
+                              className="group relative rounded-lg border bg-background p-2 transition hover:border-primary"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => insertSymbolInstance(symbol)}
+                                className="flex w-full flex-col items-start text-left"
+                                title={`Thêm symbol "${symbol.name}"`}
+                              >
+                                <div
+                                  className="mb-1 flex aspect-video w-full items-center justify-center overflow-hidden rounded bg-muted/50 text-[10px] text-muted-foreground"
+                                  style={
+                                    symbol.thumbnail
+                                      ? {
+                                          backgroundImage: `url(${symbol.thumbnail})`,
+                                          backgroundSize: "contain",
+                                          backgroundRepeat: "no-repeat",
+                                          backgroundPosition: "center",
+                                        }
+                                      : undefined
+                                  }
+                                >
+                                  {!symbol.thumbnail
+                                    ? `${Math.round(symbol.width)}×${Math.round(symbol.height)}`
+                                    : null}
+                                </div>
+                                <div className="truncate text-xs font-medium">
+                                  {symbol.name}
+                                </div>
+                                <div className="text-[10px] text-muted-foreground">
+                                  v{symbol.version} · {symbol.elements.length} phần tử
+                                </div>
+                                {symbol.tags && symbol.tags.length > 0 ? (
+                                  <div className="mt-1 flex flex-wrap gap-0.5">
+                                    {symbol.tags.slice(0, 3).map((tag) => (
+                                      <span
+                                        key={tag}
+                                        className="rounded bg-muted px-1 text-[9px] text-muted-foreground"
+                                      >
+                                        #{tag}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </button>
+                              <div className="absolute right-1 top-1 hidden gap-0.5 group-hover:flex">
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void editSymbolTags(symbol);
+                                  }}
+                                  className="rounded border bg-background p-0.5 text-muted-foreground hover:border-primary hover:text-primary"
+                                  title="Sửa tag"
+                                >
+                                  <span className="text-[9px]">#</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void removeSymbol(symbol);
+                                  }}
+                                  className="rounded border bg-background p-0.5 text-muted-foreground hover:border-destructive hover:text-destructive"
+                                  title={`Xoá symbol "${symbol.name}"`}
+                                >
+                                  <Trash2 className="size-3" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {(() => {
+                        const instances = findSymbolInstances(editor.activeElements);
+                        if (instances.length === 0) return null;
+                        const outdated = instances
+                          .map((inst) => {
+                            const meta = inst.meta as Record<string, unknown> | undefined;
+                            const symbolId = meta?.symbolId as string | undefined;
+                            const symbol = symbols.find((s) => s.symbolId === symbolId);
+                            return { inst, symbol };
+                          })
+                          .filter(({ inst, symbol }) =>
+                            isInstanceOutdated(inst, symbol),
+                          );
+                        if (outdated.length === 0) return null;
+                        return (
+                          <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-50 p-2 text-xs dark:bg-amber-950/40">
+                            <div className="font-semibold text-amber-900 dark:text-amber-200">
+                              {outdated.length} instance chưa đồng bộ
+                            </div>
+                            <div className="mt-1 space-y-1">
+                              {outdated.map(({ inst, symbol }) =>
+                                symbol ? (
+                                  <button
+                                    key={inst.elementId}
+                                    type="button"
+                                    onClick={() => void syncInstanceWithLatest(inst, symbol)}
+                                    className="flex w-full items-center justify-between gap-2 rounded px-1 py-0.5 text-left hover:bg-amber-100 dark:hover:bg-amber-900/40"
+                                  >
+                                    <span className="truncate">
+                                      {inst.name ?? symbol.name}
+                                    </span>
+                                    <span className="text-[10px] text-amber-700 dark:text-amber-300">
+                                      → v{symbol.version}
+                                    </span>
+                                  </button>
+                                ) : null,
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+
                     {libraryAssets.length === 0 ? (
                       <div className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">
                         Chưa có asset nào được tải lên.
@@ -3895,6 +4576,38 @@ export function DesignWorkspace({
             className="design-stage-scroll min-h-0 min-w-0 overflow-auto px-8 pb-12 pt-24"
             onPointerDown={handleStageWrapPointerDown}
             onMouseMove={handleStageWrapMouseMove}
+            onDragOver={(event) => {
+              if (!Array.from(event.dataTransfer?.types ?? []).includes("Files")) return;
+              event.preventDefault();
+              if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+            }}
+            onDrop={async (event) => {
+              const files = Array.from(event.dataTransfer?.files ?? []).filter((file) =>
+                file.type.startsWith("image/"),
+              );
+              if (files.length === 0) return;
+              event.preventDefault();
+              const canvasEl = getDesignCanvasElement(stageWrapRef.current);
+              const point = getCanvasPoint(
+                canvasEl,
+                zoom,
+                event.clientX,
+                event.clientY,
+                0,
+                0,
+              );
+              for (let i = 0; i < files.length; i++) {
+                await importImageFile(files[i], {
+                  position: {
+                    x: point.x - 160 + i * 24,
+                    y: point.y - 160 + i * 24,
+                  },
+                });
+              }
+              toast.success(
+                files.length === 1 ? "Đã thêm 1 ảnh" : `Đã thêm ${files.length} ảnh`,
+              );
+            }}
           >
             <div
               ref={stagePanLayerRef}
@@ -3999,16 +4712,8 @@ export function DesignWorkspace({
                     );
                     setSpacingLines(computeSpacingLines(movedEl, others));
                     editor.updateElements(moveIds, (element) => ({
-                      x: clamp(
-                        (originById[element.elementId]?.x ?? element.x) + appliedDx,
-                        -activePage.width,
-                        activePage.width * 2,
-                      ),
-                      y: clamp(
-                        (originById[element.elementId]?.y ?? element.y) + appliedDy,
-                        -activePage.height,
-                        activePage.height * 2,
-                      ),
+                      x: (originById[element.elementId]?.x ?? element.x) + appliedDx,
+                      y: (originById[element.elementId]?.y ?? element.y) + appliedDy,
                     }));
                   }}
                   onMoveCommit={() => {
@@ -4265,6 +4970,49 @@ export function DesignWorkspace({
                             </Button>
                           </div>
                         </InspectorSection>
+
+                        {primary.binding?.path ? (
+                          <InspectorSection
+                            title="Data binding"
+                            action={
+                              <span className="rounded-md bg-amber-500/15 px-2 py-1 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                                Chỉ xem
+                              </span>
+                            }
+                          >
+                            <div className="space-y-2 text-xs">
+                              <div>
+                                <Label className="text-[11px] text-muted-foreground">
+                                  Binding path
+                                </Label>
+                                <div className="rounded bg-muted px-2 py-1 font-mono text-[11px]">
+                                  {primary.binding.path}
+                                </div>
+                              </div>
+                              {primary.binding.source ? (
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-muted-foreground">Nguồn</span>
+                                  <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] capitalize">
+                                    {primary.binding.source.replace(/_/g, " ")}
+                                  </span>
+                                </div>
+                              ) : null}
+                              {primary.binding.fallbackText ? (
+                                <div>
+                                  <Label className="text-[11px] text-muted-foreground">
+                                    Fallback text
+                                  </Label>
+                                  <div className="truncate rounded bg-muted px-2 py-1 text-[11px]">
+                                    {primary.binding.fallbackText}
+                                  </div>
+                                </div>
+                              ) : null}
+                              <p className="text-[10px] text-muted-foreground">
+                                Để đổi binding/dữ liệu, mở trang "Tạo nội dung".
+                              </p>
+                            </div>
+                          </InspectorSection>
+                        ) : null}
 
                         {primary.kind === "text" ? (
                           <InspectorSection title="Chữ">

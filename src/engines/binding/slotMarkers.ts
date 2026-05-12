@@ -12,5 +12,11 @@ function normalizeMarkerText(value: string | undefined): string {
 export function isDataGroupMarkerSlot(slot: Slot): boolean {
   if (slot.kind !== "text") return false;
   const text = normalizeMarkerText(slot.staticText ?? slot.name);
-  return text === "nhom" || /^nhom\s*\d+$/.test(text);
+  const compactText = text.replace(/\s+/g, "");
+  return (
+    text === "nhom" ||
+    /^nhom\s*\d+$/.test(text) ||
+    compactText === "nhom" ||
+    /^nhom\d+$/.test(compactText)
+  );
 }

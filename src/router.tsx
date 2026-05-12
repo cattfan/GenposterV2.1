@@ -59,7 +59,10 @@ export const getRouter = () => {
     routeTree,
     context: {},
     scrollRestoration: true,
-    defaultPreloadStaleTime: 0,
+    // Cache preloaded loaders for 30s so hovering/focusing links doesn't refetch
+    // every time. Set to 0 previously, which caused repeated loader calls for
+    // expensive routes like /generate.
+    defaultPreloadStaleTime: 30_000,
     defaultErrorComponent: DefaultErrorComponent,
   });
 

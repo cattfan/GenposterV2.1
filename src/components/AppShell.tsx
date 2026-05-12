@@ -1,10 +1,24 @@
 import { Link, useLocation } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { Home, Package, Database, Sparkles, History, Settings, Palette, Menu } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Home,
+  Package,
+  Database,
+  Sparkles,
+  History,
+  Settings,
+  Palette,
+  Menu,
+  Moon,
+  Sun,
+  Command as CommandIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { cleanupDemoData } from "@/storage/sampleDataCleanup";
-import { toast } from "sonner";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { initThemeOnce, useTheme } from "@/hooks/useTheme";
+import { GlobalCommandPaletteHost } from "@/components/CommandPalette";
+
+const SIDEBAR_COLLAPSED_KEY = "cpg_sidebar_collapsed";
 
 type NavItem = {
   to: string;
@@ -124,34 +138,56 @@ function NavLinks({
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const location = useLocation();
+  // `mounted` gates client-only state to avoid SSR/CSR hydration mismatch.
+  // During SSR + first client paint: render the stable default (collapsed=false).
+  // After mount: hydrate collapsed state from localStorage.
+  const [mounted, setMounted] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { mode: themeMode, toggle: toggleTheme, effective: effectiveTheme } = useTheme();
+
+  const effectiveCollapsed = mounted && collapsed;
+  const themeIsSystem = mounted && themeMode === "system";
+
+  // Apply persisted theme ASAP (before React effects) to minimise flash-of-wrong-theme.
+  useEffect(() => {
+    initThemeOnce();
+  }, []);
+
+  // Load persisted collapsed state after mount (client-only).
+  useEffect(() => {
+    try {
+      if (typeof window !== "undefined") {
+        setCollapsed(window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1");
+      }
+    } catch {
+      /* ignore storage errors (private mode, quota, etc.) */
+    }
+    setMounted(true);
+  }, []);
+
+  // Persist collapsed state after user toggles (skip initial hydration write).
+  useEffect(() => {
+    if (!mounted || typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [mounted, collapsed]);
 
   useEffect(() => {
     setMobileOpen(false);
   }, [location.pathname]);
 
-  useEffect(() => {
-    (async () => {
-      const result = await cleanupDemoData();
-      if (result.total > 0) {
-        toast.success("Đã xóa dữ liệu mẫu.");
-      }
-    })().catch((error) => {
-      toast.error(
-        `Không thể xóa dữ liệu mẫu: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
-  }, []);
-
-  const activeLabel = getActiveLabel(location.pathname);
+  const activeLabel = useMemo(() => getActiveLabel(location.pathname), [location.pathname]);
 
   return (
     <div className="flex h-screen bg-background text-foreground">
       <aside
         className={cn(
           "hidden md:flex shrink-0 border-r border-sidebar-border bg-sidebar text-sidebar-foreground flex-col transition-[width] duration-200",
-          collapsed ? "w-16" : "w-64",
+          effectiveCollapsed ? "w-16" : "w-64",
         )}
       >
         <button
@@ -159,20 +195,95 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           onClick={() => setCollapsed((value) => !value)}
           className={cn(
             "flex border-b border-sidebar-border py-4 text-left transition-colors hover:bg-sidebar-accent/60",
-            collapsed ? "justify-center px-2" : "items-center gap-2 px-4",
+            effectiveCollapsed ? "justify-center px-2" : "items-center gap-2 px-4",
           )}
-          title={collapsed ? "Mở rộng sidebar" : "Thu gọn sidebar"}
-          aria-label={collapsed ? "Mở rộng sidebar" : "Thu gọn sidebar"}
+          title={effectiveCollapsed ? "Mở rộng sidebar" : "Thu gọn sidebar"}
+          aria-label={effectiveCollapsed ? "Mở rộng sidebar" : "Thu gọn sidebar"}
         >
           <BrandMark className="size-9 shrink-0" />
-          {!collapsed && (
+          {!effectiveCollapsed && (
             <div className="min-w-0">
               <div className="truncate text-sm font-bold leading-tight">GenPoster</div>
             </div>
           )}
         </button>
 
-        <NavLinks collapsed={collapsed} pathname={location.pathname} />
+        <NavLinks collapsed={effectiveCollapsed} pathname={location.pathname} />
+
+        <div
+          className={cn(
+            "border-t border-sidebar-border",
+            effectiveCollapsed ? "p-2" : "p-3 space-y-1",
+          )}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              // Dispatch a synthetic Ctrl+K so GlobalCommandPaletteHost opens.
+              if (typeof window !== "undefined") {
+                window.dispatchEvent(
+                  new KeyboardEvent("keydown", {
+                    key: "k",
+                    ctrlKey: true,
+                    bubbles: true,
+                  }),
+                );
+              }
+            }}
+            className={cn(
+              "flex w-full items-center rounded-md px-2 py-2 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
+              effectiveCollapsed ? "justify-center" : "gap-2",
+            )}
+            title="Command palette (Ctrl+K)"
+            aria-label="Command palette"
+          >
+            <CommandIcon className="size-4 shrink-0" />
+            {!effectiveCollapsed && (
+              <span className="flex flex-1 items-center justify-between truncate">
+                <span>Tìm lệnh</span>
+                <kbd className="rounded border bg-sidebar-accent/40 px-1.5 py-0.5 text-[10px] font-mono text-sidebar-foreground/70">
+                  Ctrl K
+                </kbd>
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className={cn(
+              "flex w-full items-center rounded-md px-2 py-2 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
+              effectiveCollapsed ? "justify-center" : "gap-2",
+            )}
+            title={
+              mounted
+                ? effectiveTheme === "dark"
+                  ? "Đổi sang sáng"
+                  : "Đổi sang tối"
+                : "Đổi theme"
+            }
+            aria-label="Đổi theme"
+          >
+            {mounted && effectiveTheme === "dark" ? (
+              <Sun className="size-4 shrink-0" />
+            ) : (
+              <Moon className="size-4 shrink-0" />
+            )}
+            {!effectiveCollapsed && (
+              <span className="truncate">
+                {mounted
+                  ? effectiveTheme === "dark"
+                    ? "Chế độ sáng"
+                    : "Chế độ tối"
+                  : "Theme"}
+                {themeIsSystem ? (
+                  <span className="ml-1 text-[10px] text-sidebar-foreground/60">
+                    (tự động)
+                  </span>
+                ) : null}
+              </span>
+            )}
+          </button>
+        </div>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -201,14 +312,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </div>
             </SheetContent>
           </Sheet>
-          <Link to="/" className="flex items-center gap-2 min-w-0">
+          <Link to="/" className="flex items-center gap-2 min-w-0 flex-1">
             <BrandMark className="size-7" />
             <div className="min-w-0 text-sm font-semibold truncate">{activeLabel}</div>
           </Link>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="rounded-md p-2 hover:bg-accent"
+            aria-label="Đổi theme"
+            title="Đổi theme"
+          >
+            {mounted && effectiveTheme === "dark" ? (
+              <Sun className="size-5" />
+            ) : (
+              <Moon className="size-5" />
+            )}
+          </button>
         </header>
 
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
+      <GlobalCommandPaletteHost />
     </div>
   );
 }

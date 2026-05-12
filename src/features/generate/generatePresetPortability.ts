@@ -135,6 +135,19 @@ function clonePresetForImport(
   Object.entries(preset.bindOverrides ?? {}).forEach(([pageId, overrides]) => {
     bindOverrides[pageIdMap.get(pageId) ?? pageId] = { ...overrides };
   });
+  const pageTemplateDrafts: GenerateBindingPreset["pageTemplateDrafts"] = {};
+  Object.entries(preset.pageTemplateDrafts ?? {}).forEach(([pageId, draft]) => {
+    const mappedPageId = pageIdMap.get(pageId) ?? pageId;
+    pageTemplateDrafts[mappedPageId] = {
+      ...structuredClone(draft),
+      pageTemplateId: mappedPageId,
+      slots: draft.slots.map((slot) => ({
+        ...structuredClone(slot),
+        pageId: slot.pageId === pageId ? mappedPageId : slot.pageId,
+      })),
+      updatedAt: now,
+    };
+  });
   const generateConfig = structuredClone(preset.generateConfig);
   if (generateConfig.pageConfigs) {
     generateConfig.pageConfigs = Object.fromEntries(
@@ -154,6 +167,7 @@ function clonePresetForImport(
       : undefined,
     pageTemplateIds: preset.pageTemplateIds.map((id) => pageIdMap.get(id) ?? id),
     bindOverrides,
+    pageTemplateDrafts: Object.keys(pageTemplateDrafts).length > 0 ? pageTemplateDrafts : undefined,
     generateConfig,
     createdAt: nextId === preset.presetId ? preset.createdAt : now,
     updatedAt: now,

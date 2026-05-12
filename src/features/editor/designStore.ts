@@ -189,7 +189,7 @@ function cloneDesignElements(elements: DesignElement[]): DesignElement[] {
     name: "copy",
     pages: [],
     elements,
-    activePageId: undefined,
+    activePageId: "",
     mode: "design",
     createdAt: 0,
     updatedAt: 0,
@@ -604,6 +604,7 @@ export function useDesignEditor(document: DesignDocument) {
           name: "dup",
           pages: [page],
           elements: [],
+          activePageId: page.pageId,
           mode: "design",
           createdAt: 0,
           updatedAt: 0,
@@ -796,7 +797,10 @@ export function useDesignEditor(document: DesignDocument) {
   const orderSelection = useCallback(
     (mode: "forward" | "backward" | "front" | "back", ids?: string[]) => {
       setState((prev) => {
-        const targetIds = uniqueElementIds(ids ?? prev.selection.ids);
+        const rootIds = uniqueElementIds(ids ?? prev.selection.ids);
+        const targetIds = getElementsWithDescendantsByIds(prev, rootIds).map(
+          (element) => element.elementId,
+        );
         if (targetIds.length === 0) return prev;
         const current = materializeDesignDocument(prev);
         const next = cloneDesignDocument(current);
@@ -822,8 +826,8 @@ export function useDesignEditor(document: DesignDocument) {
           ids
             ? {
                 nextSelection: {
-                  ids: targetIds,
-                  primaryId: targetIds.at(-1) ?? null,
+                  ids: rootIds,
+                  primaryId: rootIds.at(-1) ?? null,
                 },
               }
             : undefined,

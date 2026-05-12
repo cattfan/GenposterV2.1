@@ -37,11 +37,5 @@ export default defineConfig({
       port: 9090,
       strictPort: true,
     },
-    test: {
-      environment: "node",
-      globals: true,
-      include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
-      exclude: ["src/routes/*.tsx", "src/routes/*.ts"],
-    },
   },
 });

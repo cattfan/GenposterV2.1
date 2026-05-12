@@ -4,6 +4,7 @@ import type { PageTemplate } from "@/models";
 
 export interface EntityBindBatchState {
   usedEntityIds: Set<string>;
+  usedEntityKeys?: Set<string>;
 }
 
 export interface AllocateEntityBindingsResult {
@@ -16,7 +17,33 @@ function sortByName(entities: Entity[]): Entity[] {
   return entities.slice().sort((a, b) => a.name.localeCompare(b.name, "vi"));
 }
 
-function sortPartnersByPriority(entities: Entity[]): Entity[] {
+function stableHash(input: string): number {
+  let hash = 0;
+  for (let index = 0; index < input.length; index += 1) {
+    hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
+
+function createSeededRandom(seed: string): () => number {
+  let state = stableHash(seed) || 1;
+  return () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+}
+
+function shuffleWithSeed<T>(items: T[], seed: string): T[] {
+  const next = items.slice();
+  const random = createSeededRandom(seed);
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
+  }
+  return next;
+}
+
+function sortPartnersByPriority(entities: Entity[], seed?: string): Entity[] {
   const buckets = new Map<number, Entity[]>();
   for (const entity of entities) {
     const priority = Number(entity.partnerPriority ?? 0);
@@ -27,38 +54,83 @@ function sortPartnersByPriority(entities: Entity[]): Entity[] {
 
   return Array.from(buckets.entries())
     .sort((a, b) => b[0] - a[0])
-    .flatMap(([, bucket]) => sortByName(bucket));
+    .flatMap(([priority, bucket]) =>
+      seed ? shuffleWithSeed(bucket, `${seed}:partner:${priority}`) : sortByName(bucket),
+    );
 }
 
+function normalizeEntityKeyPart(value: unknown): string {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\u0111/gi, "d")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+export function entityContentKey(entity: Entity): string {
+  const name = normalizeEntityKeyPart(entity.name);
+  const address = normalizeEntityKeyPart(entity.address ?? entity.metadata?.address);
+  const sheet = normalizeEntityKeyPart(entity.sheetName);
+  if (name) return `${sheet}|${name}`;
+  if (address) return `${sheet}|address:${address}`;
+  return entity.entityId;
+}
+
+/**
+ * Returns entities in allocation order.
+ * - `prioritizePartner: true` → partners first (by descending priority, randomised within bucket), then others randomised.
+ * - `prioritizePartner: false` → all entities mixed and randomised.
+ * - `seed` omitted → legacy deterministic alphabetical order (kept for tests/backwards compat).
+ */
 export function buildEntityAllocationOrder(
   entities: Entity[],
   prioritizePartner: boolean,
+  seed?: string,
 ): Entity[] {
-  const partners = sortPartnersByPriority(entities.filter((entity) => entity.partnerFlag));
-  const others = sortByName(entities.filter((entity) => !entity.partnerFlag));
-  return prioritizePartner ? [...partners, ...others] : sortByName([...partners, ...others]);
+  const partners = entities.filter((entity) => entity.partnerFlag);
+  const others = entities.filter((entity) => !entity.partnerFlag);
+
+  if (!seed) {
+    const partnersSorted = sortPartnersByPriority(partners);
+    const othersSorted = sortByName(others);
+    return prioritizePartner
+      ? [...partnersSorted, ...othersSorted]
+      : sortByName([...partnersSorted, ...othersSorted]);
+  }
+
+  const partnersOrdered = prioritizePartner
+    ? sortPartnersByPriority(partners, seed)
+    : shuffleWithSeed(partners, `${seed}:partners`);
+  const othersOrdered = shuffleWithSeed(others, `${seed}:others`);
+  return prioritizePartner
+    ? [...partnersOrdered, ...othersOrdered]
+    : shuffleWithSeed([...partnersOrdered, ...othersOrdered], `${seed}:combined`);
 }
 
 function pickEntityFromList(
   candidates: Entity[],
-  pageUsedIds: Set<string>,
+  pageUsedKeys: Set<string>,
   batchState: EntityBindBatchState,
-  unusedFirst: boolean,
 ): Entity | undefined {
-  const filtered = candidates.filter((entity) => !pageUsedIds.has(entity.entityId));
-  if (unusedFirst) {
-    return filtered.find((entity) => !batchState.usedEntityIds.has(entity.entityId));
-  }
-  return filtered[0];
+  const batchUsedKeys = batchState.usedEntityKeys;
+  const filtered = candidates.filter((entity) => !pageUsedKeys.has(entityContentKey(entity)));
+  return filtered.find(
+    (entity) =>
+      !batchState.usedEntityIds.has(entity.entityId) &&
+      !batchUsedKeys?.has(entityContentKey(entity)),
+  );
 }
 
 function pickEntityByPartnerMode(params: {
   candidates: Entity[];
-  pageUsedIds: Set<string>;
+  pageUsedKeys: Set<string>;
   batchState: EntityBindBatchState;
   partnerMode: "partner" | "non-partner" | "any";
 }): Entity | undefined {
-  const { candidates, pageUsedIds, batchState, partnerMode } = params;
+  const { candidates, pageUsedKeys, batchState, partnerMode } = params;
   const pool =
     partnerMode === "partner"
       ? candidates.filter((entity) => entity.partnerFlag)
@@ -66,10 +138,7 @@ function pickEntityByPartnerMode(params: {
         ? candidates.filter((entity) => !entity.partnerFlag)
         : candidates;
 
-  return (
-    pickEntityFromList(pool, pageUsedIds, batchState, true) ??
-    pickEntityFromList(pool, pageUsedIds, batchState, false)
-  );
+  return pickEntityFromList(pool, pageUsedKeys, batchState);
 }
 
 export function allocateEntityBindingsForTemplate(params: {
@@ -90,6 +159,7 @@ export function allocateEntityBindingsForTemplate(params: {
 
   const clampedQuota = Math.max(0, Math.min(Math.floor(partnerQuota || 0), targets.length));
   const pageUsedIds = new Set<string>();
+  const pageUsedKeys = new Set<string>();
   const assignments = new Map<string, Entity | null>();
   let remainingPartnerQuota = clampedQuota;
 
@@ -104,6 +174,7 @@ export function allocateEntityBindingsForTemplate(params: {
     if (ownerTarget && canAssignOwnerWithoutBreakingQuota) {
       assignments.set(ownerTarget.targetId, pageOwner);
       pageUsedIds.add(pageOwner.entityId);
+      pageUsedKeys.add(entityContentKey(pageOwner));
       if (pageOwner.partnerFlag) remainingPartnerQuota -= 1;
     }
   }
@@ -116,7 +187,7 @@ export function allocateEntityBindingsForTemplate(params: {
 
     let chosen = pickEntityByPartnerMode({
       candidates: target.candidateEntities,
-      pageUsedIds,
+      pageUsedKeys,
       batchState,
       partnerMode: remainingPartnerQuota > 0 ? "partner" : "any",
     });
@@ -127,7 +198,7 @@ export function allocateEntityBindingsForTemplate(params: {
       );
       chosen = pickEntityByPartnerMode({
         candidates: target.candidateEntities,
-        pageUsedIds,
+        pageUsedKeys,
         batchState,
         partnerMode: "any",
       });
@@ -143,6 +214,7 @@ export function allocateEntityBindingsForTemplate(params: {
 
     assignments.set(target.targetId, chosen);
     pageUsedIds.add(chosen.entityId);
+    pageUsedKeys.add(entityContentKey(chosen));
     if (chosen.partnerFlag && remainingPartnerQuota > 0) {
       remainingPartnerQuota -= 1;
     }
@@ -169,6 +241,10 @@ export function allocateEntityBindingsForTemplate(params: {
 
   for (const entityId of pageUsedIds) {
     batchState.usedEntityIds.add(entityId);
+  }
+  if (!batchState.usedEntityKeys) batchState.usedEntityKeys = new Set<string>();
+  for (const entityKey of pageUsedKeys) {
+    batchState.usedEntityKeys.add(entityKey);
   }
 
   return { items, assignedEntities, warnings };
