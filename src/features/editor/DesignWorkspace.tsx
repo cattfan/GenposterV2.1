@@ -6886,15 +6886,29 @@ function NumberField({
 }) {
   const factor = Math.pow(10, precision);
   const displayValue = Number.isFinite(value) ? Math.round(value * factor) / factor : 0;
-  const parseValue = (input: string) => Number(input) || 0;
+  const parseValue = (input: string) => {
+    // Hỗ trợ công thức cơ bản: 100+20, 50*2, 200/2
+    const trimmed = input.trim();
+    if (!trimmed) return 0;
+    // Nếu chỉ chứa số + toán tử an toàn thì evaluate
+    if (/^[\d+\-*/.()\s]+$/.test(trimmed) && /[+\-*/]/.test(trimmed)) {
+      try {
+        const result = Function(`"use strict"; return (${trimmed});`)();
+        if (typeof result === "number" && Number.isFinite(result)) return result;
+      } catch {
+        /* fall through to Number() */
+      }
+    }
+    return Number(trimmed) || 0;
+  };
   return (
     <div className="flex flex-col gap-1">
       <Label className="text-[11px] font-medium text-muted-foreground">{label}</Label>
       <div className="relative">
         <Input
-          type="number"
+          type="text"
+          inputMode="decimal"
           value={displayValue}
-          step={precision > 0 ? 1 / factor : 1}
           className="h-8 pr-8 text-xs tabular-nums"
           onChange={(event) => onChange(parseValue(event.target.value))}
           onBlur={(event) => onCommit?.(parseValue(event.target.value))}
@@ -6902,8 +6916,20 @@ function NumberField({
             if (event.key === "Enter") {
               onCommit?.(parseValue(event.currentTarget.value));
               event.currentTarget.blur();
+              return;
+            }
+            if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+              event.preventDefault();
+              const direction = event.key === "ArrowUp" ? 1 : -1;
+              let step = 1;
+              if (event.shiftKey) step = 10;
+              else if (event.altKey && precision > 0) step = 1 / factor;
+              const next = displayValue + direction * step;
+              onChange(next);
+              onCommit?.(next);
             }
           }}
+          onFocus={(event) => event.currentTarget.select()}
         />
         {suffix ? (
           <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
