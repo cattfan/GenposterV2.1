@@ -26,6 +26,7 @@ import {
   Trash2,
   Undo2,
   Redo2,
+  MousePointerClick,
   Play as PlayIcon,
 } from "lucide-react";
 import type {
@@ -114,6 +115,7 @@ import {
 } from "@/features/generate/generatePresetPortability";
 import { formatTemplateDisplayName } from "@/lib/templateNames";
 import { usePageCommands, type CommandEntry } from "@/components/CommandPalette";
+import { EmptyState } from "@/components/ux";
 
 type Filter = "all" | "selected" | "errors" | "partner";
 type SurfaceSelectionRect = { left: number; top: number; width: number; height: number };
@@ -3088,9 +3090,12 @@ export function PackTabContent({
               </CardHeader>
               <CardContent className="space-y-3 pt-3 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pr-3">
                 {selectedSlots.length === 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    Chọn 1 hoặc nhiều khối trên vùng thiết kế để gán trường và nguồn dữ liệu.
-                  </p>
+                  <EmptyState
+                    icon={<MousePointerClick />}
+                    title="Chưa chọn khối"
+                    description="Bấm vào một khối trên vùng thiết kế để gán trường dữ liệu."
+                    compact
+                  />
                 )}
                 {selectedSlots.length > 0 && selectedBindableSlots.length === 0 && (
                   <div className="rounded-md border border-dashed bg-muted/30 p-3 space-y-1">

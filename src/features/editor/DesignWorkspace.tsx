@@ -64,6 +64,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { EmptyState } from "@/components/ux";
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -5666,9 +5667,12 @@ export function DesignWorkspace({
                         </div>
                       </div>
                     ) : (
-                      <div className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">
-                        Chọn một đối tượng để chỉnh thuộc tính.
-                      </div>
+                      <EmptyState
+                        icon={<MousePointer2 />}
+                        title="Chưa chọn đối tượng"
+                        description="Bấm vào một khối trên canvas để chỉnh thuộc tính. Giữ Shift để chọn nhiều khối."
+                        compact
+                      />
                     )}
                   </div>
                 </TabsContent>
@@ -6716,20 +6720,68 @@ function InspectorSection({
   title,
   action,
   children,
+  defaultOpen = true,
+  storageKey,
 }: {
   title: string;
   action?: ReactNode;
   children: ReactNode;
+  /** Mặc định mở khi chưa có state lưu. */
+  defaultOpen?: boolean;
+  /**
+   * Nếu có, lưu trạng thái open/close trong localStorage theo key.
+   * Nếu không có, tự sinh từ title.
+   */
+  storageKey?: string;
 }) {
+  // Ký tự safe cho key
+  const resolvedKey = storageKey ?? title.replace(/\s+/g, "_").toLowerCase();
+  const [open, setOpen] = useState(defaultOpen);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(`ux:inspector-section:${resolvedKey}`);
+      if (raw === "1") setOpen(true);
+      else if (raw === "0") setOpen(false);
+    } catch {
+      /* ignore */
+    }
+    setMounted(true);
+  }, [resolvedKey]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    try {
+      localStorage.setItem(
+        `ux:inspector-section:${resolvedKey}`,
+        open ? "1" : "0",
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [mounted, resolvedKey, open]);
+
   return (
-    <section className="rounded-xl border bg-card p-3">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          {title}
-        </Label>
+    <section className="rounded-xl border bg-card">
+      <div className="flex items-center justify-between gap-2 px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="group flex min-w-0 flex-1 items-center gap-1.5 text-left transition-colors hover:opacity-80 focus:outline-none focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2 rounded"
+          title={open ? "Thu gọn" : "Mở rộng"}
+        >
+          <ChevronDown
+            className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`}
+          />
+          <Label className="pointer-events-none text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {title}
+          </Label>
+        </button>
         {action}
       </div>
-      <div className="flex flex-col gap-3">{children}</div>
+      {open && <div className="flex flex-col gap-3 px-3 pb-3">{children}</div>}
     </section>
   );
 }
