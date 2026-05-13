@@ -6103,6 +6103,16 @@ function DesignStage({
                   gridSize={documentGridSize}
                 />
               </div>
+              {/* Center cross guides - luôn hiện */}
+              <LayoutGuides
+                width={page.width}
+                height={page.height}
+                scale={scale}
+                showBleed={false}
+                showTrim={false}
+                showSafeZone={false}
+                showCenter
+              />
               {showSafeZone ? (
                 <LayoutGuides
                   width={page.width}
@@ -6111,6 +6121,7 @@ function DesignStage({
                   showBleed={false}
                   showTrim={false}
                   showSafeZone
+                  showCenter={false}
                 />
               ) : null}
 
