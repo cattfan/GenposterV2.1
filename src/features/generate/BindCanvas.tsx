@@ -1184,14 +1184,17 @@ function BindSlot({
   const transform = (rot + flip).trim() || undefined;
   const hasBinding = !!slot.bindingPath;
   const isSelectable = isCanvasSelectableSlot(slot, template);
+  const isBackground = isLikelyGeneratePageBackgroundSlot(slot, template);
 
-  const outline = selected
-    ? "1px solid hsl(var(--primary) / 0.72)"
-    : hasBinding
-      ? "2px dashed hsl(var(--primary) / 0.6)"
-      : showSafeFrame && isSelectable
-        ? "1px dashed hsl(var(--border))"
-        : "1px dashed transparent";
+  const outline = isBackground
+    ? "none"
+    : selected
+      ? "1px solid hsl(var(--primary) / 0.72)"
+      : hasBinding
+        ? "2px dashed hsl(var(--primary) / 0.6)"
+        : showSafeFrame && isSelectable
+          ? "1px dashed hsl(var(--border))"
+          : "1px dashed transparent";
 
   const baseStyle: React.CSSProperties = {
     position: "absolute",
