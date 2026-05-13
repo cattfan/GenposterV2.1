@@ -12,6 +12,7 @@ import {
   AlignStartHorizontal,
   Blend,
   Bold,
+  ChevronDown,
   Circle,
   Eye,
   Italic,
@@ -692,15 +693,50 @@ export function TextToolbar({
           onKeyDown={(e) => {
             if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
           }}
-          list="font-size-presets"
-          className="h-7 w-[56px] border-x border-y-0 bg-transparent px-1.5 text-center text-xs tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          className="h-7 w-[44px] border-x border-y-0 bg-transparent px-1 text-center text-xs tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
           aria-label="Cỡ chữ"
         />
-        <datalist id="font-size-presets">
-          {fontSizeOptions.map((size) => (
-            <option key={size} value={size} />
-          ))}
-        </datalist>
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-7 rounded-none border-r"
+              aria-label="Chọn cỡ chữ có sẵn"
+              title="Chọn cỡ chữ có sẵn"
+            >
+              <ChevronDown className="size-3" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            className="w-20 p-1"
+            align="center"
+            onOpenAutoFocus={(event) => event.preventDefault()}
+          >
+            <div className="max-h-64 overflow-y-auto">
+              {fontSizeOptions.map((size) => (
+                <button
+                  key={size}
+                  type="button"
+                  onClick={(e) => {
+                    updateFontSize(size);
+                    // Close popover by blurring
+                    const btn = e.currentTarget.closest("[data-radix-popper-content-wrapper]");
+                    btn?.querySelector<HTMLButtonElement>("[data-state='open']")?.click();
+                    (document.activeElement as HTMLElement | null)?.blur();
+                  }}
+                  className={`w-full rounded px-2 py-1 text-center text-xs tabular-nums transition-colors hover:bg-accent ${
+                    size === Math.round(fontSize)
+                      ? "bg-primary/10 font-semibold text-primary"
+                      : ""
+                  }`}
+                >
+                  {size}
+                </button>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
         <Button
           size="icon"
           variant="ghost"
