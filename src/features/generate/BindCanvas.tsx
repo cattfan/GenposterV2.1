@@ -423,7 +423,7 @@ function isDataBindableSlot(slot: Slot, template?: PageTemplate): boolean {
 
 function isCanvasSelectableSlot(slot: Slot, template: PageTemplate): boolean {
   if (isDataGroupMarkerSlot(slot)) return false;
-  if (isLikelyGeneratePageBackgroundSlot(slot, template)) return true;
+  if (isLikelyGeneratePageBackgroundSlot(slot, template)) return false;
   return isDataBindableSlot(slot, template) || slot.kind === "section" || slot.kind === "group";
 }
 
