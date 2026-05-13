@@ -631,7 +631,7 @@ function SettingsPage() {
               onChange={(e) =>
                 setS({
                   ...s,
-                  defaultCanvas: { ...s.defaultCanvas, width: Number(e.target.value) || 1080 },
+                  defaultCanvas: { ...s.defaultCanvas, width: Number(e.target.value) || 1588 },
                 })
               }
             />
@@ -644,7 +644,7 @@ function SettingsPage() {
               onChange={(e) =>
                 setS({
                   ...s,
-                  defaultCanvas: { ...s.defaultCanvas, height: Number(e.target.value) || 1350 },
+                  defaultCanvas: { ...s.defaultCanvas, height: Number(e.target.value) || 2248 },
                 })
               }
             />

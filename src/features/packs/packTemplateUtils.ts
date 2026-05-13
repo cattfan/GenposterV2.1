@@ -18,6 +18,7 @@ export const CANVAS_PRESETS: ReadonlyArray<{
   height: number;
   defaultPageType?: PageType;
 }> = [
+  { id: "poster-custom-portrait", label: "Poster dọc (1588×2248)", group: "print", width: 1588, height: 2248 },
   { id: "ig-post-square", label: "Instagram / Facebook vuông (1080×1080)", group: "social", width: 1080, height: 1080 },
   { id: "ig-post-portrait", label: "Instagram dọc 4:5 (1080×1350)", group: "social", width: 1080, height: 1350 },
   { id: "fb-post", label: "Facebook post (1200×900)", group: "social", width: 1200, height: 900 },
@@ -59,8 +60,8 @@ export function createBlankPageTemplate(
   const now = Date.now();
   const preset = input.presetId ? getCanvasPresetById(input.presetId) : undefined;
   const canvas: CanvasSize = {
-    width: input.canvas?.width ?? preset?.width ?? 1080,
-    height: input.canvas?.height ?? preset?.height ?? 1350,
+    width: input.canvas?.width ?? preset?.width ?? 1588,
+    height: input.canvas?.height ?? preset?.height ?? 2248,
     background: input.canvas?.background ?? "#ffffff",
     backgroundImage: input.canvas?.backgroundImage,
   };

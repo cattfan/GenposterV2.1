@@ -334,7 +334,7 @@ export function PackBuilder({
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-64">
                     <DropdownMenuItem onSelect={() => onCreatePage()}>
-                      Mặc định (1080×1350)
+                      Mặc định (1588×2248)
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel className="text-[11px] uppercase tracking-wide">
