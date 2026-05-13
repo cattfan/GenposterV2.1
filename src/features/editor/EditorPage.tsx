@@ -2,11 +2,18 @@ import { useMemo } from "react";
 import { Link, useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 import { ArrowLeft } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DesignWorkspace } from "./DesignWorkspace";
 import { designDocumentToPageTemplate, pageTemplateToDesignDocument } from "./designDocument";
 import type { PageTemplate } from "@/models";
 import { db } from "@/storage/db";
+import {
+  appendPageToPack,
+  createBlankPageTemplate,
+  duplicatePageTemplate,
+} from "@/features/packs/packTemplateUtils";
+import { clonePageTemplate } from "@/features/generate/templateState";
 
 export function EditorPage() {
   const { id } = useParams({ from: "/templates/$id/edit" });
@@ -80,6 +87,106 @@ export function EditorPage() {
           search: { packId },
         });
       }}
+      onCreatePackPage={
+        packId
+          ? async () => {
+              const pack = await db.packTemplates.get(packId);
+              if (!pack) return;
+              const pageNumber = pack.orderedPages.length + 1;
+              const newPage = createBlankPageTemplate({ name: `Trang mới ${pageNumber}` });
+              const nextPack = appendPageToPack(pack, newPage.pageTemplateId);
+              await db.transaction(
+                "rw",
+                [db.pageTemplates, db.packTemplates],
+                async () => {
+                  await db.pageTemplates.put(newPage);
+                  await db.packTemplates.put(nextPack);
+                },
+              );
+              toast.success(`Đã thêm ${newPage.name}`);
+              void navigate({
+                to: "/templates/$id/edit",
+                params: { id: newPage.pageTemplateId },
+                search: { packId },
+              });
+            }
+          : undefined
+      }
+      onDuplicatePackPage={
+        packId
+          ? async (pageTemplateId) => {
+              const pack = await db.packTemplates.get(packId);
+              const source = await db.pageTemplates.get(pageTemplateId);
+              if (!pack || !source) return;
+              const dup = duplicatePageTemplate(source);
+              const nextPack = appendPageToPack(pack, dup.pageTemplateId);
+              await db.transaction(
+                "rw",
+                [db.pageTemplates, db.packTemplates],
+                async () => {
+                  await db.pageTemplates.put(dup);
+                  await db.packTemplates.put(nextPack);
+                },
+              );
+              toast.success(`Đã nhân bản ${source.name}`);
+              void navigate({
+                to: "/templates/$id/edit",
+                params: { id: dup.pageTemplateId },
+                search: { packId },
+              });
+            }
+          : undefined
+      }
+      onDeletePackPage={
+        packId
+          ? async (pageTemplateId) => {
+              const pack = await db.packTemplates.get(packId);
+              if (!pack) return;
+              if (pack.orderedPages.length <= 1) {
+                toast.error("Không thể xóa trang cuối cùng trong bộ");
+                return;
+              }
+              const target = await db.pageTemplates.get(pageTemplateId);
+              if (!target) return;
+              const nextPack = {
+                ...pack,
+                orderedPages: pack.orderedPages.filter((id) => id !== pageTemplateId),
+                requiredPages: pack.requiredPages.filter((id) => id !== pageTemplateId),
+                optionalPages: pack.optionalPages.filter((id) => id !== pageTemplateId),
+                updatedAt: Date.now(),
+              };
+              // Move to another page before deleting
+              const nextPageId =
+                nextPack.orderedPages[0] ?? pack.orderedPages.find((id) => id !== pageTemplateId);
+              await db.transaction(
+                "rw",
+                [db.pageTemplates, db.packTemplates, db.designDocuments],
+                async () => {
+                  await db.pageTemplates.delete(pageTemplateId);
+                  await db.packTemplates.put(nextPack);
+                  // Also clean up any design document linked to this page
+                  const linkedDocs = await db.designDocuments
+                    .where("sourcePageTemplateId")
+                    .equals(pageTemplateId)
+                    .toArray();
+                  for (const doc of linkedDocs) {
+                    await db.designDocuments.delete(doc.designDocumentId);
+                  }
+                  // Keep a clone in case of snapshot references
+                  void clonePageTemplate(target);
+                },
+              );
+              toast.success(`Đã xóa ${target.name}`);
+              if (nextPageId && nextPageId !== pageTemplateId) {
+                void navigate({
+                  to: "/templates/$id/edit",
+                  params: { id: nextPageId },
+                  search: { packId },
+                });
+              }
+            }
+          : undefined
+      }
       onClose={backToTemplates}
       onSave={async (nextDocument) => {
         const nextTemplate = designDocumentToPageTemplate(nextDocument, template);

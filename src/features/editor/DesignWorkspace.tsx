@@ -1066,6 +1066,9 @@ export function DesignWorkspace({
   packPages = EMPTY_PAGE_TEMPLATES,
   activeTemplateId,
   onOpenTemplatePage,
+  onCreatePackPage,
+  onDuplicatePackPage,
+  onDeletePackPage,
 }: {
   initialDocument: DesignDocument;
   mode?: WorkspaceMode;
@@ -1079,6 +1082,9 @@ export function DesignWorkspace({
   packPages?: PageTemplate[];
   activeTemplateId?: string;
   onOpenTemplatePage?: (pageTemplateId: string) => void;
+  onCreatePackPage?: () => void | Promise<void>;
+  onDuplicatePackPage?: (pageTemplateId: string) => void | Promise<void>;
+  onDeletePackPage?: (pageTemplateId: string) => void | Promise<void>;
 }) {
   const workspaceDocument = useMemo(
     () => ({
@@ -4201,15 +4207,65 @@ export function DesignWorkspace({
                       <Input
                         value={assetSearch}
                         onChange={(event) => setAssetSearch(event.target.value)}
-                        placeholder="Tìm asset đã tải lên"
+                        placeholder="Gõ 'home', 'location', 'food'... để tìm biểu tượng và ảnh"
                       />
-                      <Button variant="outline" onClick={() => uploadAsset("image")}>
+                      <Button
+                        variant="outline"
+                        onClick={() => uploadAsset("image")}
+                        title="Tải ảnh lên"
+                      >
                         <Upload className="size-4" />
                       </Button>
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      Tab này chỉ lưu assets mà người dùng tải lên.
+                      Tìm biểu tượng có sẵn hoặc ảnh bạn đã tải lên.
                     </div>
+
+                    {/* Icon search results inline (Canva-style) */}
+                    {assetSearch.trim().length > 0
+                      ? (() => {
+                          const query = normalizeIconSearch(assetSearch.trim());
+                          const matched = iconAssets.filter((asset) => {
+                            const haystack =
+                              asset.searchText ??
+                              normalizeIconSearch([asset.name, ...(asset.tags ?? [])].join(" "));
+                            return haystack.includes(query);
+                          });
+                          const visible = matched.slice(0, 36);
+                          if (visible.length === 0) return null;
+                          return (
+                            <div className="rounded-xl border bg-card p-3">
+                              <div className="mb-2 flex items-center justify-between">
+                                <div className="text-xs font-semibold uppercase text-muted-foreground">
+                                  Biểu tượng phù hợp
+                                </div>
+                                <span className="text-[11px] tabular-nums text-muted-foreground">
+                                  {matched.length > visible.length
+                                    ? `${visible.length}/${matched.length}`
+                                    : matched.length}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-6 gap-1.5">
+                                {visible.map((asset) => (
+                                  <button
+                                    key={asset.assetId}
+                                    type="button"
+                                    className="flex aspect-square items-center justify-center rounded-md border bg-background transition hover:border-primary/50 hover:bg-muted"
+                                    title={asset.name}
+                                    aria-label={`Thêm ${asset.name}`}
+                                    onClick={() => {
+                                      setSelectedIconId(asset.assetId);
+                                      insertAsset(asset);
+                                    }}
+                                  >
+                                    <IconAssetGlyph asset={asset} className="block size-5" />
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()
+                      : null}
 
                     {/* Symbols library */}
                     <div className="rounded-xl border bg-card p-3">
@@ -4462,6 +4518,15 @@ export function DesignWorkspace({
                         <Plus className="mr-2 size-4" /> Thêm trang
                       </Button>
                     ) : null}
+                    {hasPackPages && onCreatePackPage ? (
+                      <Button
+                        className="w-full justify-start"
+                        variant="outline"
+                        onClick={() => void onCreatePackPage()}
+                      >
+                        <Plus className="mr-2 size-4" /> Thêm trang vào bộ
+                      </Button>
+                    ) : null}
                     {hasPackPages
                       ? packPages.map((pageTemplate, index) => {
                           const selectedPage =
@@ -4472,37 +4537,78 @@ export function DesignWorkspace({
                             90 / pageTemplate.canvas.height,
                           );
                           return (
-                            <button
+                            <div
                               key={pageTemplate.pageTemplateId}
-                              type="button"
-                              className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition hover:border-primary/60 hover:bg-muted/40 ${
-                                selectedPage ? "border-primary bg-primary/5" : "bg-card"
+                              className={`rounded-xl border p-3 transition ${
+                                selectedPage
+                                  ? "border-primary bg-primary/5"
+                                  : "bg-card hover:border-primary/60 hover:bg-muted/40"
                               }`}
-                              onClick={() => {
-                                if (selectedPage) return;
-                                onOpenTemplatePage?.(pageTemplate.pageTemplateId);
-                              }}
                             >
-                              <div className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-xs font-semibold text-primary">
-                                {index + 1}
-                              </div>
-                              <div className="shrink-0 overflow-hidden rounded-md border bg-background shadow-sm">
-                                <PageRenderer
-                                  template={pageTemplate}
-                                  entities={[]}
-                                  assets={[]}
-                                  scale={previewScale}
-                                />
-                              </div>
-                              <div className="min-w-0 flex-1">
-                                <div className="truncate text-sm font-semibold">
-                                  {pageTemplate.name}
+                              <button
+                                type="button"
+                                className="flex w-full items-center gap-3 text-left"
+                                onClick={() => {
+                                  if (selectedPage) return;
+                                  onOpenTemplatePage?.(pageTemplate.pageTemplateId);
+                                }}
+                              >
+                                <div className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-xs font-semibold text-primary">
+                                  {index + 1}
                                 </div>
-                                <div className="text-xs text-muted-foreground">
-                                  {pageTemplate.canvas.width} x {pageTemplate.canvas.height}
+                                <div className="shrink-0 overflow-hidden rounded-md border bg-background shadow-sm">
+                                  <PageRenderer
+                                    template={pageTemplate}
+                                    entities={[]}
+                                    assets={[]}
+                                    scale={previewScale}
+                                  />
                                 </div>
-                              </div>
-                            </button>
+                                <div className="min-w-0 flex-1">
+                                  <div className="truncate text-sm font-semibold">
+                                    {pageTemplate.name}
+                                  </div>
+                                  <div className="text-xs text-muted-foreground">
+                                    {pageTemplate.canvas.width} x {pageTemplate.canvas.height}
+                                  </div>
+                                </div>
+                              </button>
+                              {(onDuplicatePackPage || onDeletePackPage) && (
+                                <div className="mt-2 flex gap-1">
+                                  {onDuplicatePackPage ? (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 flex-1 text-xs"
+                                      onClick={() =>
+                                        void onDuplicatePackPage(pageTemplate.pageTemplateId)
+                                      }
+                                      title="Nhân bản trang này vào bộ"
+                                    >
+                                      <Copy className="mr-1 size-3" /> Nhân bản
+                                    </Button>
+                                  ) : null}
+                                  {onDeletePackPage ? (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 flex-1 text-xs text-destructive hover:bg-destructive/10"
+                                      onClick={() =>
+                                        void onDeletePackPage(pageTemplate.pageTemplateId)
+                                      }
+                                      disabled={packPages.length <= 1}
+                                      title={
+                                        packPages.length <= 1
+                                          ? "Không thể xóa trang cuối cùng"
+                                          : "Xóa trang khỏi bộ"
+                                      }
+                                    >
+                                      <Trash2 className="mr-1 size-3" /> Xóa
+                                    </Button>
+                                  ) : null}
+                                </div>
+                              )}
+                            </div>
                           );
                         })
                       : editor.state.pageOrder.map((pageId, index) => {
