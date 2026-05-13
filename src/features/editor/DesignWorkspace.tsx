@@ -3069,14 +3069,8 @@ export function DesignWorkspace({
     <TooltipProvider delayDuration={250}>
       <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
         {headerLeading ? (
-          <div className="flex min-h-[60px] items-center gap-2 border-b px-4 py-3">
+          <div className="flex min-h-[54px] items-center gap-2 border-b px-4 py-2">
             <div className="flex shrink-0 items-center">{headerLeading}</div>
-            <Input
-              value={editor.document.name}
-              onChange={(event) => editor.setName(event.target.value)}
-              className="h-8 w-[220px] shrink-0"
-              aria-label="Tên design"
-            />
             {renderWorkspaceActions("ml-auto")}
           </div>
         ) : null}
