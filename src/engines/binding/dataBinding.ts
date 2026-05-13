@@ -31,6 +31,7 @@ export const ENTITY_COMPOSE_BINDING_PREFIX = "entity.compose:";
 
 export const TEXT_BINDING_OPTIONS: BindingFieldOption[] = [
   { value: "", label: "Cố định (nội dung tĩnh)", group: "Cố định" },
+  { value: "ai.rewrite", label: "AI viết lại (mỗi bộ khác nhau)", group: "Cố định" },
   { value: "entity.name", label: "Tên", group: "Dữ liệu" },
   { value: "entity.address", label: "Địa chỉ", group: "Dữ liệu" },
   { value: "entity.phone", label: "Số điện thoại", group: "Dữ liệu" },
@@ -354,6 +355,10 @@ export function isEntityListBindingPath(bindingPath: string | undefined): boolea
   return !!bindingPath && bindingPath.startsWith(ENTITY_LIST_BINDING_PREFIX);
 }
 
+export function isAiRewriteBindingPath(bindingPath: string | undefined): boolean {
+  return bindingPath === "ai.rewrite";
+}
+
 export function isEntityComposeBindingPath(bindingPath: string | undefined): boolean {
   return !!bindingPath && bindingPath.startsWith(ENTITY_COMPOSE_BINDING_PREFIX);
 }
@@ -619,6 +624,8 @@ export function resolveTextBinding(
   options?: ResolveTextBindingOptions,
 ): string {
   if (!bindingPath) return fallback ?? "";
+  // AI rewrite: trả về staticText gốc (AI sẽ viết lại ở tầng generate)
+  if (isAiRewriteBindingPath(bindingPath)) return fallback ?? "";
   const scoped = parseEntityScopedTextBindingPath(bindingPath);
   const effectivePath = scoped?.path ?? bindingPath;
   const sourceEntities = options?.source
