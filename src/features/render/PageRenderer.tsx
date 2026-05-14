@@ -509,12 +509,6 @@ function SlotRenderer({
       return null;
     }
 
-    // Thumbnail preview: ẩn placeholder stripes cho slot THẬT SỰ trống
-    // Nếu có imageRawSrc (idb:// đang resolve) → giữ div transparent chờ ảnh hiện
-    if (hideEmptyImages && !usableSrc && !imageRawSrc) {
-      return null;
-    }
-
     return (
       <div
         style={{
@@ -554,12 +548,15 @@ function SlotRenderer({
               }}
             />
           )
-        ) : hideEmptyImages ? null : (
+        ) : (
           <div
             style={{
               width: "100%",
               height: "100%",
-              background: IMAGE_PLACEHOLDER_BACKGROUND,
+              background: hideEmptyImages
+                ? "rgba(226,232,240,0.5)"
+                : IMAGE_PLACEHOLDER_BACKGROUND,
+              border: hideEmptyImages ? "1px dashed rgba(148,163,184,0.6)" : undefined,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
