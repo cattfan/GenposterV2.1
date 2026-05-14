@@ -509,10 +509,9 @@ function SlotRenderer({
       return null;
     }
 
-    // Thumbnail preview: ẩn placeholder stripes
-    // - Không có nguồn ảnh nào → ẩn hoàn toàn
-    // - Có nguồn idb:// đang chờ resolve → ẩn stripes, chờ resolve xong sẽ re-render hiện ảnh
-    if (hideEmptyImages && !usableSrc) {
+    // Thumbnail preview: ẩn placeholder stripes cho slot THẬT SỰ trống
+    // Nếu có imageRawSrc (idb:// đang resolve) → giữ div transparent chờ ảnh hiện
+    if (hideEmptyImages && !usableSrc && !imageRawSrc) {
       return null;
     }
 
@@ -555,7 +554,7 @@ function SlotRenderer({
               }}
             />
           )
-        ) : (
+        ) : hideEmptyImages ? null : (
           <div
             style={{
               width: "100%",
