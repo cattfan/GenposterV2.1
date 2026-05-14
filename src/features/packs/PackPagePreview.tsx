@@ -9,19 +9,36 @@ import { designDocumentToPageTemplate } from "@/features/editor/designDocument";
 
 /**
  * Lấy template hiệu quả nhất: ưu tiên designDocument (chứa content mới nhất từ editor),
- * fallback về pageTemplate gốc. Nếu designDocument có nhiều element hơn thì dùng nó.
+ * fallback về pageTemplate gốc.
  */
 function pickEffectiveTemplate(
   tpl: PageTemplate,
   linkedDoc: DesignDocument | undefined,
 ): PageTemplate {
-  if (!linkedDoc) return tpl;
+  if (!linkedDoc) {
+    if (import.meta.env.DEV && tpl.slots.length === 0) {
+      console.debug("[PackPagePreview] no linkedDoc, tpl has 0 slots:", tpl.pageTemplateId);
+    }
+    return tpl;
+  }
   try {
     const fromDoc = designDocumentToPageTemplate(linkedDoc, tpl);
+    if (import.meta.env.DEV) {
+      console.debug(
+        "[PackPagePreview]",
+        tpl.pageTemplateId,
+        "tpl.slots:", tpl.slots.length,
+        "fromDoc.slots:", fromDoc.slots.length,
+        "elements:", linkedDoc.elements.length,
+      );
+    }
     // Ưu tiên bản có nhiều slot hơn (tránh trường hợp doc cũ/rỗng ghi đè template mới)
     if (fromDoc.slots.length >= tpl.slots.length) return fromDoc;
     return tpl;
-  } catch {
+  } catch (err) {
+    if (import.meta.env.DEV) {
+      console.error("[PackPagePreview] conversion error:", err);
+    }
     return tpl;
   }
 }
@@ -41,7 +58,7 @@ export function PackPagePreview({ tpl }: { tpl: PageTemplate }) {
         .where("sourcePageTemplateId")
         .equals(tpl.pageTemplateId)
         .first();
-      return linked ?? null; // null = không tìm thấy (phân biệt với undefined = đang load)
+      return linked ?? null;
     },
     [tpl.pageTemplateId],
   );
@@ -64,14 +81,21 @@ export function PackPagePreview({ tpl }: { tpl: PageTemplate }) {
   }, []);
 
   const { width: cw, height: ch } = effectiveTemplate.canvas;
-  const scale =
-    viewport.width && viewport.height ? Math.min(viewport.width / cw, viewport.height / ch) : 0;
-  const renderedWidth = cw * scale;
-  const renderedHeight = ch * scale;
-  const left = (viewport.width - renderedWidth) / 2;
-  const top = (viewport.height - renderedHeight) / 2;
 
-  const hasVisibleSlots = effectiveTemplate.slots.some((s) => !s.style?.hidden);
+  // Render ở scale lớn hơn (min 0.18) rồi CSS transform scale-down
+  // Giúp text/shape vẫn nhìn thấy ở thumbnail nhỏ
+  const fitScale =
+    viewport.width && viewport.height ? Math.min(viewport.width / cw, viewport.height / ch) : 0;
+  const renderScale = Math.max(fitScale, 0.18);
+  const cssScale = fitScale > 0 ? fitScale / renderScale : 0;
+  const renderedWidth = cw * renderScale;
+  const renderedHeight = ch * renderScale;
+  const displayWidth = renderedWidth * cssScale;
+  const displayHeight = renderedHeight * cssScale;
+  const left = (viewport.width - displayWidth) / 2;
+  const top = (viewport.height - displayHeight) / 2;
+
+  const hasAnySlots = effectiveTemplate.slots.length > 0;
 
   return (
     <div
@@ -79,26 +103,36 @@ export function PackPagePreview({ tpl }: { tpl: PageTemplate }) {
       className="absolute inset-0 overflow-hidden"
       style={{ background: effectiveTemplate.canvas.background ?? "#fff" }}
     >
-      {scale > 0 && hasVisibleSlots ? (
+      {fitScale > 0 && hasAnySlots ? (
         <div
           style={{
             position: "absolute",
             left,
             top,
-            width: renderedWidth,
-            height: renderedHeight,
+            width: displayWidth,
+            height: displayHeight,
+            overflow: "hidden",
             pointerEvents: "none",
           }}
         >
-          <PageRenderer
-            template={effectiveTemplate}
-            entities={[]}
-            assets={[]}
-            scale={scale}
-            hideImagePlaceholderText
-          />
+          <div
+            style={{
+              width: renderedWidth,
+              height: renderedHeight,
+              transform: cssScale < 1 ? `scale(${cssScale})` : undefined,
+              transformOrigin: "top left",
+            }}
+          >
+            <PageRenderer
+              template={effectiveTemplate}
+              entities={[]}
+              assets={[]}
+              scale={renderScale}
+              hideImagePlaceholderText
+            />
+          </div>
         </div>
-      ) : scale > 0 && !hasVisibleSlots ? (
+      ) : fitScale > 0 && !hasAnySlots ? (
         <div className="absolute inset-0 grid place-items-center">
           <span className="text-[9px] text-muted-foreground/60">Trang trống</span>
         </div>
