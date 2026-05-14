@@ -1185,6 +1185,7 @@ export function PackTabContent({
     });
     if (writableSlots.length === 0) return;
     writableSlots.forEach((slot) => setBinding(pageTemplateId, slot.slotId, bindingPath));
+    const isAiRewrite = bindingPath === "ai.rewrite";
     commitPreviewPageDrafts((prev) => {
       const current = prev[pageTemplateId];
       if (!current) return prev;
@@ -1195,7 +1196,8 @@ export function PackTabContent({
         return {
           ...slot,
           bindingPath: bindingPath || undefined,
-          staticText: bindingPath ? undefined : slot.staticText,
+          // AI rewrite cần giữ staticText (câu gốc) để viết lại
+          staticText: isAiRewrite ? slot.staticText : (bindingPath ? undefined : slot.staticText),
           dataSourceConfig: bindingPath ? slot.dataSourceConfig : undefined,
         };
       });
@@ -3400,6 +3402,11 @@ export function PackTabContent({
                             </Select>
                             {textSlotFieldBindingValue(slot) !== "_static" &&
                               slot.bindingPath !== "ai.rewrite" &&
+                              // Chỉ hiện source controls cho slot đầu tiên trong data group
+                              (!slot.dataGroupId ||
+                                sortedSelectedTextSlots.findIndex(
+                                  (s) => s.dataGroupId === slot.dataGroupId,
+                                ) === index) &&
                               renderSlotSourceControls(slot)}
                           </div>
                         ))}
