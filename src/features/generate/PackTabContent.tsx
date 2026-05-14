@@ -2212,16 +2212,26 @@ export function PackTabContent({
     // AI rewrite: tìm slots có binding "ai.rewrite" và tạo variations
     // Scan từ workingTemplate (đã merge drafts) thay vì pageTemplatesForGenerate gốc
     const isAiRewriteSlot = (slot: { bindingPath?: string; staticText?: string }) =>
-      (slot.bindingPath === "ai.rewrite" || slot.bindingPath === "entity.metadata.ai.rewrite") &&
-      slot.staticText?.trim();
+      slot.bindingPath === "ai.rewrite" || slot.bindingPath === "entity.metadata.ai.rewrite";
     const aiRewriteSlots = job.pages.flatMap((page) => {
       const tpl = page.workingTemplate ?? pageTemplatesForGenerate.find(
         (t) => t.pageTemplateId === page.pageTemplateId,
       );
       if (!tpl) return [];
+      // Template gốc để fallback lấy staticText
+      const baseTpl = pageTemplatesForGenerate.find(
+        (t) => t.pageTemplateId === page.pageTemplateId,
+      );
       return tpl.slots
         .filter((slot) => isAiRewriteSlot(slot))
-        .map((slot) => ({ pageTemplateId: tpl.pageTemplateId, slotId: slot.slotId, text: slot.staticText! }));
+        .map((slot) => {
+          // Lấy staticText từ slot hiện tại, fallback về template gốc
+          const text = slot.staticText?.trim()
+            || baseTpl?.slots.find((s) => s.slotId === slot.slotId)?.staticText?.trim()
+            || "";
+          return { pageTemplateId: tpl.pageTemplateId, slotId: slot.slotId, text };
+        })
+        .filter((item) => item.text.length > 0);
     });
     // Deduplicate by slotId+text
     const uniqueAiSlots = Array.from(
@@ -2258,12 +2268,20 @@ export function PackTabContent({
             (t) => t.pageTemplateId === page.pageTemplateId,
           );
           if (!tpl) return page;
+          const baseTpl = pageTemplatesForGenerate.find(
+            (t) => t.pageTemplateId === page.pageTemplateId,
+          );
           const hasAiSlot = tpl.slots.some((s) => isAiRewriteSlot(s));
           if (!hasAiSlot) return page;
           const nextTemplate = JSON.parse(JSON.stringify(tpl)) as typeof tpl;
           nextTemplate.slots = nextTemplate.slots.map((slot) => {
             if (!isAiRewriteSlot(slot)) return slot;
-            const variations = variationsMap.get(slot.staticText!);
+            // Lấy text gốc để lookup variations
+            const originalText = slot.staticText?.trim()
+              || baseTpl?.slots.find((s) => s.slotId === slot.slotId)?.staticText?.trim()
+              || "";
+            if (!originalText) return slot;
+            const variations = variationsMap.get(originalText);
             if (!variations || variations.length === 0) return slot;
             return {
               ...slot,
