@@ -742,7 +742,6 @@ function GeneratePage() {
       <PageHeader
         icon={<Sparkles className="size-5" />}
         title="Tạo nội dung"
-        description="Đổ dữ liệu thực từ entity vào khuôn mẫu để tạo bộ ảnh hàng loạt."
       />
 
       <PackTabContent

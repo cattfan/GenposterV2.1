@@ -338,7 +338,7 @@ export function PackTabContent({
 }: Props) {
   const [prioritizePartner, setPrioritizePartner] = useState(true);
   const [onlyPartner, setOnlyPartner] = useState(false);
-  const [partnerQuotaPerPage, setPartnerQuotaPerPage] = useState<number>(0);
+  const [partnerQuotaPerPage, setPartnerQuotaPerPage] = useState<number>(1);
   const [maxEntities, setMaxEntities] = useState<number>(5);
   const [pageConfigs, setPageConfigs] = useState<Record<string, GeneratePageConfig>>({});
   const [varyFontsFromSecondBundle, setVaryFontsFromSecondBundle] = useState(false);
@@ -500,7 +500,7 @@ export function PackTabContent({
       filterPhongCach: ALL_VALUE,
       prioritizePartner,
       onlyPartner,
-      partnerQuotaPerPage: onlyPartner ? Number.MAX_SAFE_INTEGER : Math.max(0, partnerQuotaPerPage),
+      partnerQuotaPerPage: onlyPartner ? Number.MAX_SAFE_INTEGER : Math.max(1, partnerQuotaPerPage),
       maxEntities: normalizeCount(maxEntities, 5),
     }),
     [
@@ -609,7 +609,7 @@ export function PackTabContent({
     if (patch.prioritizePartner != null) setPrioritizePartner(patch.prioritizePartner);
     if (patch.onlyPartner != null) setOnlyPartner(patch.onlyPartner);
     if (patch.partnerQuotaPerPage != null) {
-      setPartnerQuotaPerPage(Math.max(0, Math.floor(patch.partnerQuotaPerPage)));
+      setPartnerQuotaPerPage(Math.max(1, Math.floor(patch.partnerQuotaPerPage)));
     }
     if (patch.maxEntities != null) setMaxEntities(normalizeCount(patch.maxEntities, maxEntities));
   };
@@ -917,24 +917,26 @@ export function PackTabContent({
         .sort((a, b) => a.y - b.y || a.x - b.x || a.slotId.localeCompare(b.slotId)),
     [selectedImageSlots],
   );
+  const selectedGroupIds = Array.from(
+    new Set(
+      selectedBindableSlots
+        .map((slot) => slot.groupId)
+        .filter((groupId): groupId is string => !!groupId),
+    ),
+  );
   const textSlotBindingValue = (slot: Slot) =>
     parseEntityListBindingPath(slot.bindingPath)
       ? "__list"
       : getEntityScopedTextBindingBasePath(slot.bindingPath) || "_static";
   const textSlotFieldBindingValue = (slot: Slot) =>
     getEntityScopedTextBindingBasePath(slot.bindingPath) || "_static";
-  const textSlotSourceValue = (slot: Slot) =>
-    slot.dataSourceConfig?.selectedSheet ??
-    parseEntityScopedTextBindingPath(slot.bindingPath)?.sheetName ??
-    ALL_VALUE;
   const slotSourceConfig = (slot: Slot): ResolvedGeneratePageConfig => ({
     ...activeGenerateConfig,
     selectedSheet: slot.dataSourceConfig?.selectedSheet ?? ALL_VALUE,
     filterMoHinh: slot.dataSourceConfig?.filterMoHinh ?? ALL_VALUE,
     filterPhongCach: slot.dataSourceConfig?.filterPhongCach ?? ALL_VALUE,
   });
-  const slotMoHinhOptions = (slot: Slot) => {
-    const source = slotSourceConfig(slot);
+  const sourceMoHinhOptions = (source: ResolvedGeneratePageConfig) => {
     const set = new Set<string>();
     entities.forEach((entity) => {
       if (entity.status !== "active") return;
@@ -943,8 +945,7 @@ export function PackTabContent({
     });
     return Array.from(set).sort((a, b) => a.localeCompare(b, "vi"));
   };
-  const slotPhongCachOptions = (slot: Slot) => {
-    const source = slotSourceConfig(slot);
+  const sourcePhongCachOptions = (source: ResolvedGeneratePageConfig) => {
     const set = new Set<string>();
     entities.forEach((entity) => {
       if (entity.status !== "active") return;
@@ -995,6 +996,40 @@ export function PackTabContent({
     if (/^image$/i.test(value)) return "Ảnh";
     return value;
   };
+  const sharedSourceSlots = useMemo(() => {
+    if (selectedBindableSlots.length <= 1) return [];
+    if (selectedDataGroupIds.length === 1) {
+      const [dataGroupId] = selectedDataGroupIds;
+      return selectedBindableSlots.filter((slot) => slot.dataGroupId === dataGroupId);
+    }
+    if (selectedGroupIds.length === 1) {
+      const [groupId] = selectedGroupIds;
+      return selectedBindableSlots.filter((slot) => slot.groupId === groupId);
+    }
+    return [];
+  }, [selectedBindableSlots, selectedDataGroupIds, selectedGroupIds]);
+  const sharedSourceConfig = useMemo<ResolvedGeneratePageConfig | null>(() => {
+    if (sharedSourceSlots.length <= 1) return null;
+    const configs = sharedSourceSlots.map((slot) => slotSourceConfig(slot));
+    const sharedValue = (
+      key: keyof Pick<ResolvedGeneratePageConfig, "selectedSheet" | "filterMoHinh" | "filterPhongCach">,
+    ) => {
+      const values = Array.from(new Set(configs.map((config) => config[key])));
+      return values.length === 1 ? values[0] : ALL_VALUE;
+    };
+    return {
+      ...activeGenerateConfig,
+      selectedSheet: sharedValue("selectedSheet") ?? ALL_VALUE,
+      filterMoHinh: sharedValue("filterMoHinh") ?? ALL_VALUE,
+      filterPhongCach: sharedValue("filterPhongCach") ?? ALL_VALUE,
+    };
+  }, [activeGenerateConfig, sharedSourceSlots]);
+  const shouldShowSharedSourceControls =
+    sharedSourceSlots.length > 1 &&
+    sharedSourceSlots.some((slot) => {
+      const textBindingValue = textSlotFieldBindingValue(slot);
+      return textBindingValue !== "_static" || slot.bindingPath === "asset.random";
+    });
   const textSlotLabel = (slot: Slot, index: number) =>
     normalizeSlotLabel(
       slot.name?.trim() ||
@@ -1232,10 +1267,20 @@ export function PackTabContent({
     const dataGroupIds = new Set(
       slots.map((slot) => slot.dataGroupId).filter((id): id is string => !!id),
     );
+    const groupIds = new Set(
+      slots.map((slot) => slot.groupId).filter((id): id is string => !!id),
+    );
     const targetIds = new Set(baseIds);
     if (dataGroupIds.size > 0) {
       for (const s of effectiveActive.slots) {
-        if (s.dataGroupId && dataGroupIds.has(s.dataGroupId)) {
+        if (getSlotBindMode(s) !== null && s.dataGroupId && dataGroupIds.has(s.dataGroupId)) {
+          targetIds.add(s.slotId);
+        }
+      }
+    }
+    if (groupIds.size > 0) {
+      for (const s of effectiveActive.slots) {
+        if (getSlotBindMode(s) !== null && s.groupId && groupIds.has(s.groupId)) {
           targetIds.add(s.slotId);
         }
       }
@@ -1628,19 +1673,30 @@ export function PackTabContent({
     };
     applyBindingToSlots([slot], activePage.pageTemplateId, buildAssetRandomScopeBindingPath(next));
   };
-  const renderSlotSourceControls = (slot: Slot) => {
-    const sourceConfig = slotSourceConfig(slot);
-    const moOptions = slotMoHinhOptions(slot);
-    const phongOptions = slotPhongCachOptions(slot);
+  const renderSourceControls = (
+    slots: Slot[],
+    sourceConfig: ResolvedGeneratePageConfig,
+    options?: { title?: string; description?: string },
+  ) => {
+    const moOptions = sourceMoHinhOptions(sourceConfig);
+    const phongOptions = sourcePhongCachOptions(sourceConfig);
     return (
       <div className="grid gap-2 rounded-md border bg-background/70 p-2">
+        {options?.title && (
+          <div className="text-xs font-medium">{options.title}</div>
+        )}
+        {options?.description && (
+          <div className="text-[11px] leading-snug text-muted-foreground">
+            {options.description}
+          </div>
+        )}
         <div>
-          <Label className="text-xs">Nguồn dữ liệu</Label>
+          <Label className="text-xs">
+            {slots.length > 1 ? "Nguồn dữ liệu của cụm" : "Nguồn dữ liệu"}
+          </Label>
           <Select
-            value={textSlotSourceValue(slot)}
-            onValueChange={(sheetName) =>
-              applySlotSourcePatch([slot], { selectedSheet: sheetName })
-            }
+            value={sourceConfig.selectedSheet}
+            onValueChange={(sheetName) => applySlotSourcePatch(slots, { selectedSheet: sheetName })}
           >
             <SelectTrigger className="h-8">
               <SelectValue />
@@ -1659,7 +1715,7 @@ export function PackTabContent({
           <Label className="text-xs">Mô hình</Label>
           <Select
             value={sourceConfig.filterMoHinh}
-            onValueChange={(value) => applySlotSourcePatch([slot], { filterMoHinh: value })}
+            onValueChange={(value) => applySlotSourcePatch(slots, { filterMoHinh: value })}
             disabled={moOptions.length === 0}
           >
             <SelectTrigger className="h-8" disabled={moOptions.length === 0}>
@@ -1679,7 +1735,7 @@ export function PackTabContent({
           <Label className="text-xs">Phong cách</Label>
           <Select
             value={sourceConfig.filterPhongCach}
-            onValueChange={(value) => applySlotSourcePatch([slot], { filterPhongCach: value })}
+            onValueChange={(value) => applySlotSourcePatch(slots, { filterPhongCach: value })}
             disabled={phongOptions.length === 0}
           >
             <SelectTrigger className="h-8" disabled={phongOptions.length === 0}>
@@ -1972,7 +2028,9 @@ export function PackTabContent({
     }
     if (cfg.prioritizePartner != null) setPrioritizePartner(cfg.prioritizePartner);
     if (cfg.onlyPartner != null) setOnlyPartner(cfg.onlyPartner);
-    if (cfg.partnerQuotaPerPage != null) setPartnerQuotaPerPage(cfg.partnerQuotaPerPage);
+    if (cfg.partnerQuotaPerPage != null) {
+      setPartnerQuotaPerPage(Math.max(1, cfg.partnerQuotaPerPage));
+    }
     if (cfg.batchCount != null) setMaxEntities(cfg.batchCount);
     else if (cfg.maxEntities != null) setMaxEntities(cfg.maxEntities);
     if (cfg.varyFontsFromSecondBundle != null) {
@@ -2939,69 +2997,72 @@ export function PackTabContent({
                   </div>
                 </div>
 
-                <details className="rounded-lg border bg-muted/10 p-3 text-sm">
-                  <summary className="cursor-pointer font-medium">Nâng cao</summary>
-                  <div className="mt-3 space-y-3">
-                    <label className="flex items-center gap-2 text-sm">
-                      <Checkbox
-                        checked={activeGenerateConfig.prioritizePartner}
-                        onCheckedChange={(v) =>
-                          updateActiveGenerateConfig({ prioritizePartner: v === true })
-                        }
-                      />
-                      Ưu tiên dữ liệu đối tác
-                    </label>
-                    <label className="flex items-center gap-2 text-sm">
-                      <Checkbox
-                        checked={activeGenerateConfig.onlyPartner}
-                        onCheckedChange={(v) =>
-                          updateActiveGenerateConfig({ onlyPartner: v === true })
-                        }
-                      />
-                      Chỉ dùng dữ liệu đối tác
-                    </label>
-
-                    <div>
-                      <Label className="text-xs">Số đối tác / trang</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={Math.max(0, activeTargetCount)}
-                        value={
-                          activeGenerateConfig.onlyPartner
-                            ? 0
-                            : activeGenerateConfig.partnerQuotaPerPage
-                        }
-                        disabled={activeGenerateConfig.onlyPartner}
-                        onChange={(e) =>
-                          updateActiveGenerateConfig({
-                            partnerQuotaPerPage: Math.max(0, Number(e.target.value) || 0),
-                          })
-                        }
-                      />
-                      <p className="text-[11px] text-muted-foreground mt-1">
-                        {activeGenerateConfig.onlyPartner
-                          ? "Đang chỉ dùng dữ liệu đối tác nên không cần giới hạn thêm."
-                          : `Trang hiện tại có tối đa ${activeTargetCount} khung nhận dữ liệu.`}
-                      </p>
-                    </div>
-
-                    <label className="flex cursor-pointer items-start gap-2 rounded-md border bg-background/60 p-2 text-sm">
-                      <Checkbox
-                        checked={varyFontsFromSecondBundle}
-                        onCheckedChange={(checked) =>
-                          setVaryFontsFromSecondBundle(checked === true)
-                        }
-                        className="mt-0.5"
-                      />
-                      <span className="min-w-0">
-                        <span className="block font-medium">
-                          Biến thể font nghệ thuật từ bộ thứ 2
-                        </span>
+                <div className="rounded-lg border bg-muted/10 p-3 text-sm space-y-3">
+                  <label className="flex items-start gap-2 text-sm">
+                    <Checkbox
+                      checked={activeGenerateConfig.prioritizePartner}
+                      onCheckedChange={(v) =>
+                        updateActiveGenerateConfig({ prioritizePartner: v === true })
+                      }
+                      className="mt-0.5"
+                    />
+                    <span className="min-w-0">
+                      <span className="block font-medium">Ưu tiên dữ liệu đối tác</span>
+                      <span className="block text-[11px] text-muted-foreground">
+                        Bật: ưu tiên xếp dữ liệu đối tác lên trước. Tắt: lấy ngẫu nhiên từ toàn bộ dữ liệu phù hợp.
                       </span>
-                    </label>
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={activeGenerateConfig.onlyPartner}
+                      onCheckedChange={(v) =>
+                        updateActiveGenerateConfig({ onlyPartner: v === true })
+                      }
+                    />
+                    Chỉ dùng dữ liệu đối tác
+                  </label>
+
+                  <div>
+                    <Label className="text-xs">Số đối tác / trang</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={Math.max(1, activeTargetCount)}
+                      value={
+                        activeGenerateConfig.onlyPartner
+                          ? activeTargetCount || 1
+                          : activeGenerateConfig.partnerQuotaPerPage
+                      }
+                      disabled={activeGenerateConfig.onlyPartner}
+                      onChange={(e) =>
+                        updateActiveGenerateConfig({
+                          partnerQuotaPerPage: Math.max(0, Number(e.target.value) || 0),
+                        })
+                      }
+                    />
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      {activeGenerateConfig.onlyPartner
+                        ? "Đang chỉ dùng dữ liệu đối tác cho toàn bộ khung."
+                        : "Mặc định 1 trang là 1 đối tác."}
+                    </p>
                   </div>
-                </details>
+
+                  <label className="flex cursor-pointer items-start gap-2 rounded-md border bg-background/60 p-2 text-sm">
+                    <Checkbox
+                      checked={varyFontsFromSecondBundle}
+                      onCheckedChange={(checked) =>
+                        setVaryFontsFromSecondBundle(checked === true)
+                      }
+                      className="mt-0.5"
+                    />
+                    <span className="min-w-0">
+                      <span className="block font-medium">
+                        Biến thể font nghệ thuật từ bộ thứ 2
+                      </span>
+                    </span>
+                  </label>
+                </div>
 
                 <div className="border-t pt-3 space-y-1.5 text-xs text-muted-foreground">
                   <div className="flex justify-between">
@@ -3064,7 +3125,9 @@ export function PackTabContent({
             {/* Cột 2: Canvas bind từng page */}
             <Card className="col-span-12 lg:col-span-6 min-w-0 overflow-hidden">
               <CardHeader className="pb-2">
-                <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 overflow-hidden">
+                <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 overflow-hidden rounded-lg border bg-muted/20 px-3 py-2">
+                  <div className="text-xs font-medium text-muted-foreground">Canvas</div>
+                  <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 overflow-hidden">
                   <Button
                     size="sm"
                     variant="outline"
@@ -3106,47 +3169,11 @@ export function PackTabContent({
                     title="Bật/tắt khung an toàn và đường căn chỉnh"
                   >
                     <Eye className="size-3 mr-1" />
-                    <span className="hidden xl:inline">Đường căn chỉnh: </span>
-                    {showSafeFrame ? "Bật" : "Tắt"}
+                    <span className="hidden xl:inline">Đường căn chỉnh</span>
+                    <span className="xl:hidden">Căn chỉnh</span>
+                    <span className="ml-1">{showSafeFrame ? "Bật" : "Tắt"}</span>
                   </Button>
-                  {filteredEntities.length > 0 ? (
-                    <div className="flex min-w-0 max-w-full shrink items-center gap-1">
-                      <span className="hidden text-[11px] text-muted-foreground xl:inline">
-                        Preview:
-                      </span>
-                      <Select
-                        value={previewEntityId ?? ""}
-                        onValueChange={(value) => setPreviewEntityId(value || undefined)}
-                      >
-                        <SelectTrigger className="h-7 w-[136px] min-w-0 text-xs xl:w-[160px]">
-                          <SelectValue placeholder="Chọn entity..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {filteredEntities.slice(0, 200).map((item) => (
-                            <SelectItem key={item.entityId} value={item.entityId}>
-                              <span className="flex items-center gap-1">
-                                {item.partnerFlag ? (
-                                  <span className="text-amber-500">★</span>
-                                ) : null}
-                                <span className="truncate">{item.name}</span>
-                                {item.sheetName ? (
-                                  <span className="ml-1 text-[10px] text-muted-foreground">
-                                    ({item.sheetName})
-                                  </span>
-                                ) : null}
-                              </span>
-                            </SelectItem>
-                          ))}
-                          {filteredEntities.length > 200 ? (
-                            <div className="px-2 py-1 text-[10px] text-muted-foreground">
-                              Hiển thị 200/{filteredEntities.length} — lọc thêm theo từng khối
-                              lọc dữ liệu.
-                            </div>
-                          ) : null}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  ) : null}
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -3239,28 +3266,6 @@ export function PackTabContent({
                       />
                     )}
 
-                    {activePage &&
-                      ((packOv[activePage.pageTemplateId] &&
-                        Object.keys(packOv[activePage.pageTemplateId]).length > 0) ||
-                        previewPageDrafts[activePage.pageTemplateId]) && (
-                        <div className="flex justify-end">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => {
-                              resetPage(activePage.pageTemplateId);
-                              commitPreviewPageDrafts((prev) => {
-                                const next = { ...prev };
-                                delete next[activePage.pageTemplateId];
-                                return next;
-                              }, { history: false });
-                            }}
-                            className="h-8 text-xs"
-                          >
-                            <Link2Off className="size-3 mr-1" /> Xoá liên kết trang này
-                          </Button>
-                        </div>
-                      )}
                   </>
                 )}
               </CardContent>
@@ -3401,6 +3406,15 @@ export function PackTabContent({
                         )}
                       </div>
                     </div>
+                    {shouldShowSharedSourceControls && sharedSourceConfig && (
+                      <div className="space-y-2">
+                        <Label className="text-xs">Nguồn dữ liệu của cụm</Label>
+                        {renderSourceControls(sharedSourceSlots, sharedSourceConfig, {
+                          description:
+                            "Cấu hình này áp dụng cho toàn bộ thuộc tính đã liên kết trong cụm đang chọn.",
+                        })}
+                      </div>
+                    )}
                     {sortedSelectedTextSlots.length > 0 && (
                       <div className="space-y-2">
                         <Label className="text-xs">
@@ -3443,14 +3457,10 @@ export function PackTabContent({
                                 })}
                               </SelectContent>
                             </Select>
-                            {textSlotFieldBindingValue(slot) !== "_static" &&
+                            {!shouldShowSharedSourceControls &&
+                              textSlotFieldBindingValue(slot) !== "_static" &&
                               slot.bindingPath !== "ai.rewrite" &&
-                              // Chỉ hiện source controls cho slot đầu tiên trong data group
-                              (!slot.dataGroupId ||
-                                sortedSelectedTextSlots.findIndex(
-                                  (s) => s.dataGroupId === slot.dataGroupId,
-                                ) === index) &&
-                              renderSlotSourceControls(slot)}
+                              renderSourceControls([slot], slotSourceConfig(slot))}
                           </div>
                         ))}
                       </div>
