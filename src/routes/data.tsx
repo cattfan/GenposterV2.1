@@ -36,7 +36,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -86,6 +91,19 @@ export const Route = createFileRoute("/data")({
 
 const EMPTY_ENTITIES: Entity[] = [];
 const EMPTY_ASSETS: Asset[] = [];
+
+/** Helper hiển thị badge số bước + tiêu đề ngắn cho trang Dữ liệu. */
+function SectionHeader({ step, title }: { step: number; title: string }) {
+  return (
+    <div className="mb-3 flex items-center gap-3">
+      <span className="flex size-7 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
+        {step}
+      </span>
+      <h2 className="text-lg font-semibold">{title}</h2>
+    </div>
+  );
+}
+
 type DataTab = "import" | "images" | "entities" | "assets";
 
 function normalizeDataTab(value: unknown): DataTab {
@@ -1052,7 +1070,8 @@ function DataPage() {
   const [sheetUrl, setSheetUrl] = useState("");
   const [sheetName, setSheetName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [activeTab, setActiveTab] = useState<DataTab>(requestedTab);
+  // Ref tới section "Bước 2: Tải ảnh" để scroll smooth sau khi import xong.
+  const step2Ref = useRef<HTMLElement | null>(null);
   const [driveCheckBusy, setDriveCheckBusy] = useState(false);
   const [driveCheckDone, setDriveCheckDone] = useState(0);
   const [driveCheckTotal, setDriveCheckTotal] = useState(0);
@@ -1269,7 +1288,9 @@ function DataPage() {
   );
 
   useEffect(() => {
-    setActiveTab(requestedTab);
+    // search param ?tab=... được giữ trong route schema để không break URL cũ
+    // nhưng UI mới không có tab nữa — bỏ qua giá trị.
+    void requestedTab;
   }, [requestedTab]);
 
   const activateWorkbookSheet = (
@@ -1756,17 +1777,14 @@ function DataPage() {
     setMappingsBySheet({});
     setIncludedSheets({});
     if (totalImageReferenceEntities > 0) {
-      setActiveTab("images");
+      // Scroll xuống section "Bước 2: Tải ảnh" để user thấy bước tiếp theo.
+      step2Ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       toast.info(
         "Đã chuyển sang Tải ảnh. Hãy tải ảnh từ link trong sheet, hoặc chọn thư mục ảnh từ máy nếu cần dự phòng.",
         {
           duration: 7000,
         },
       );
-    } else if (totalAssets > 0) {
-      setActiveTab("assets");
-    } else {
-      setActiveTab("entities");
     }
   };
 
@@ -1775,7 +1793,6 @@ function DataPage() {
       <PageHeader
         icon={<Database />}
         title="Dữ liệu"
-        description="Nhập entity và ảnh từ Google Sheet, CSV, hoặc upload trực tiếp."
       />
 
       <div className="mb-4 flex flex-col gap-4">
@@ -1787,24 +1804,14 @@ function DataPage() {
         </div>
       </div>
 
-      <Tabs
-        value={activeTab}
-        onValueChange={(value) => setActiveTab(normalizeDataTab(value))}
-        className="flex flex-col gap-4"
-      >
-        <TabsList className="w-fit">
-          <TabsTrigger value="import">Nhập dữ liệu</TabsTrigger>
-          <TabsTrigger value="images">Tải ảnh ({driveDownloadCandidateCount})</TabsTrigger>
-          <TabsTrigger value="entities">Dữ liệu ({entities.length})</TabsTrigger>
-          <TabsTrigger value="assets">Ảnh ({assets.filter(isUsableImageAsset).length})</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="import" className="mt-0 flex flex-col gap-4">
+      <div className="flex flex-col gap-6">
+        <section>
+          <SectionHeader step={1} title="Nhập dữ liệu" />
+          <div className="flex flex-col gap-4">
           <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
             <Card>
               <CardHeader>
-                <CardTitle>Bước 1: Chọn nguồn dữ liệu</CardTitle>
-                <CardDescription>Dán link Google Sheet hoặc chọn file Excel/CSV từ máy.</CardDescription>
+                <CardTitle>Chọn nguồn</CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-4">
                 <div className="flex flex-wrap items-center gap-2">
@@ -1845,7 +1852,7 @@ function DataPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Bước 2: Kiểm tra trước khi nhập</CardTitle>
+                <CardTitle>Xem trước</CardTitle>
                 <CardDescription>
                   {parsed
                     ? `${parsed.rows.length} dòng, ${parsed.headers.length} cột`
@@ -2251,13 +2258,21 @@ function DataPage() {
               </CardContent>
             </Card>
           )}
-        </TabsContent>
 
-        <TabsContent value="images" className="mt-0">
+          </div>
+        </section>
+
+        <section ref={step2Ref}>
+          <SectionHeader step={2} title="Tải ảnh" />
           <BulkImageUpload />
-        </TabsContent>
+        </section>
 
-        <TabsContent value="entities" className="mt-0">
+        <Accordion type="multiple" className="border-t pt-4">
+          <AccordionItem value="entities">
+            <AccordionTrigger>
+              Xem dữ liệu đã nhập ({entities.length})
+            </AccordionTrigger>
+            <AccordionContent>
           <Card>
             <CardHeader>
               <CardTitle>Dữ liệu đã nhập</CardTitle>
@@ -2309,9 +2324,14 @@ function DataPage() {
               )}
             </CardContent>
           </Card>
-        </TabsContent>
+            </AccordionContent>
+          </AccordionItem>
 
-        <TabsContent value="assets" className="mt-0">
+          <AccordionItem value="assets">
+            <AccordionTrigger>
+              Xem ảnh đã có ({assets.filter(isUsableImageAsset).length})
+            </AccordionTrigger>
+            <AccordionContent>
           <div className="flex flex-col gap-4">
             <input
               ref={assetUploadInputRef}
@@ -2439,8 +2459,10 @@ function DataPage() {
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
-        </TabsContent>
-      </Tabs>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
+      </div>
     </PageContainer>
   );
 }
