@@ -124,6 +124,100 @@ function providerError(status: number, text: string) {
   return `AI loi ${status}: ${text.slice(0, 600)}`;
 }
 
+/**
+ * Parse response từ provider AI. Hỗ trợ 2 dạng:
+ * 1. JSON thuần (OpenAI standard non-streaming)
+ * 2. SSE streaming `data: {...}\n\ndata: {...}\n\ndata: [DONE]\n\n` —
+ *    nhiều gateway (custom proxies, OpenRouter tự bật streaming) trả về
+ *    dạng này dù request không bật stream. Gom toàn bộ delta.content
+ *    thành 1 message hoàn chỉnh.
+ *
+ * Trả về null nếu không parse được.
+ */
+function parseAiResponse(rawText: string): OpenAiCompatResponse | null {
+  const trimmed = rawText.trim();
+  if (!trimmed) return null;
+
+  // Trường hợp 1: JSON object thuần.
+  if (trimmed.startsWith("{")) {
+    try {
+      return JSON.parse(trimmed) as OpenAiCompatResponse;
+    } catch {
+      return null;
+    }
+  }
+
+  // Trường hợp 2: SSE streaming. Mỗi event "data: <json>\n\n".
+  if (!trimmed.startsWith("data:")) return null;
+
+  let mergedContent = "";
+  let mergedToolCallArgs = "";
+  let toolCallSeen = false;
+  let lastChunkChoice: NonNullable<OpenAiCompatResponse["choices"]>[number] | null = null;
+
+  const events = trimmed.split(/\r?\n\r?\n/);
+  for (const event of events) {
+    const dataLines = event
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim());
+    if (dataLines.length === 0) continue;
+    const payload = dataLines.join("\n").trim();
+    if (!payload || payload === "[DONE]") continue;
+
+    let chunk: unknown;
+    try {
+      chunk = JSON.parse(payload);
+    } catch {
+      continue;
+    }
+    if (!isRecord(chunk)) continue;
+    const choices = chunk.choices;
+    if (!Array.isArray(choices) || choices.length === 0) continue;
+    const choice = choices[0];
+    if (!isRecord(choice)) continue;
+
+    // OpenAI streaming: choice.delta.content
+    const delta = choice.delta;
+    if (isRecord(delta)) {
+      const content = delta.content;
+      if (typeof content === "string") mergedContent += content;
+      const toolCalls = delta.tool_calls;
+      if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+        toolCallSeen = true;
+        for (const tc of toolCalls) {
+          if (!isRecord(tc)) continue;
+          const fn = tc.function;
+          if (isRecord(fn) && typeof fn.arguments === "string") {
+            mergedToolCallArgs += fn.arguments;
+          }
+        }
+      }
+    }
+    // Một số provider trả message luôn (không phải delta).
+    const message = choice.message;
+    if (isRecord(message) && typeof message.content === "string") {
+      mergedContent += message.content;
+    }
+    lastChunkChoice = choice as NonNullable<OpenAiCompatResponse["choices"]>[number];
+  }
+
+  if (!lastChunkChoice && !mergedContent && !toolCallSeen) return null;
+
+  return {
+    choices: [
+      {
+        message: {
+          content: mergedContent || null,
+          tool_calls: toolCallSeen
+            ? [{ function: { arguments: mergedToolCallArgs } }]
+            : undefined,
+        },
+      },
+    ],
+  };
+}
+
 export const callAiServer = createServerFn({ method: "POST" })
   .inputValidator(validateAiServerInput)
   .handler(async ({ data }) => {
@@ -151,6 +245,9 @@ export const callAiServer = createServerFn({ method: "POST" })
       model,
       messages: data.messages,
       temperature: data.temperature ?? 0.3,
+      // Một số gateway (OpenRouter, custom proxies) mặc định trả SSE streaming
+      // dù không yêu cầu. Nói rõ stream:false để buộc server gom thành 1 JSON.
+      stream: false,
     };
     if (data.tools) body.tools = data.tools;
     if (data.tool_choice) body.tool_choice = data.tool_choice;
@@ -171,7 +268,16 @@ export const callAiServer = createServerFn({ method: "POST" })
         return { ok: false as const, status: res.status, error: providerError(res.status, text) };
       }
 
-      const json = (await res.json()) as OpenAiCompatResponse;
+      const rawText = await res.text();
+      const json = parseAiResponse(rawText);
+      if (!json) {
+        return {
+          ok: false as const,
+          status: res.status,
+          error: `AI tra ve dinh dang la: ${rawText.slice(0, 300)}. Kiem tra provider co tra non-streaming JSON.`,
+        };
+      }
+
       const choice = json.choices?.[0]?.message;
       let toolArgs: JsonValue | null = null;
       const argStr = choice?.tool_calls?.[0]?.function?.arguments;
