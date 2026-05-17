@@ -1072,6 +1072,12 @@ function DataPage() {
   const [busy, setBusy] = useState(false);
   // Ref tới section "Bước 2: Tải ảnh" để scroll smooth sau khi import xong.
   const step2Ref = useRef<HTMLElement | null>(null);
+
+  // Pagination cho 2 accordion preview ở cuối trang.
+  const ENTITY_PAGE_SIZE = 50;
+  const ASSET_GROUP_PAGE_SIZE = 10;
+  const [entityPage, setEntityPage] = useState(0);
+  const [assetGroupPage, setAssetGroupPage] = useState(0);
   const [driveCheckBusy, setDriveCheckBusy] = useState(false);
   const [driveCheckDone, setDriveCheckDone] = useState(0);
   const [driveCheckTotal, setDriveCheckTotal] = useState(0);
@@ -2289,6 +2295,7 @@ function DataPage() {
                   />
                 </div>
               ) : (
+                <>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -2301,7 +2308,9 @@ function DataPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {entities.map((entity) => (
+                    {entities
+                      .slice(entityPage * ENTITY_PAGE_SIZE, (entityPage + 1) * ENTITY_PAGE_SIZE)
+                      .map((entity) => (
                       <TableRow key={entity.entityId}>
                         <TableCell className="font-medium">{entity.name}</TableCell>
                         <TableCell>
@@ -2321,6 +2330,39 @@ function DataPage() {
                     ))}
                   </TableBody>
                 </Table>
+                {entities.length > ENTITY_PAGE_SIZE && (
+                  <div className="flex items-center justify-between gap-2 border-t bg-muted/30 px-4 py-2 text-xs">
+                    <span className="text-muted-foreground">
+                      Trang {entityPage + 1}/{Math.ceil(entities.length / ENTITY_PAGE_SIZE)} ·{" "}
+                      {entityPage * ENTITY_PAGE_SIZE + 1}-
+                      {Math.min((entityPage + 1) * ENTITY_PAGE_SIZE, entities.length)} của{" "}
+                      {entities.length}
+                    </span>
+                    <div className="flex gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setEntityPage((p) => Math.max(0, p - 1))}
+                        disabled={entityPage === 0}
+                      >
+                        Trước
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          setEntityPage((p) =>
+                            Math.min(Math.ceil(entities.length / ENTITY_PAGE_SIZE) - 1, p + 1),
+                          )
+                        }
+                        disabled={(entityPage + 1) * ENTITY_PAGE_SIZE >= entities.length}
+                      >
+                        Sau
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                </>
               )}
             </CardContent>
           </Card>
@@ -2385,7 +2427,13 @@ function DataPage() {
                 </CardContent>
               </Card>
             ) : (
-              assetGroups.map((group) => (
+              <>
+              {assetGroups
+                .slice(
+                  assetGroupPage * ASSET_GROUP_PAGE_SIZE,
+                  (assetGroupPage + 1) * ASSET_GROUP_PAGE_SIZE,
+                )
+                .map((group) => (
                 <Card key={group.entity?.entityId ?? group.entityId} className="overflow-hidden">
                   <CardHeader className="border-b p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2428,7 +2476,49 @@ function DataPage() {
                     </div>
                   </CardContent>
                 </Card>
-              ))
+              ))}
+              {assetGroups.length > ASSET_GROUP_PAGE_SIZE && (
+                <div className="flex items-center justify-between gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs">
+                  <span className="text-muted-foreground">
+                    Trang {assetGroupPage + 1}/
+                    {Math.ceil(assetGroups.length / ASSET_GROUP_PAGE_SIZE)} ·{" "}
+                    {assetGroupPage * ASSET_GROUP_PAGE_SIZE + 1}-
+                    {Math.min(
+                      (assetGroupPage + 1) * ASSET_GROUP_PAGE_SIZE,
+                      assetGroups.length,
+                    )}{" "}
+                    của {assetGroups.length}
+                  </span>
+                  <div className="flex gap-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setAssetGroupPage((p) => Math.max(0, p - 1))}
+                      disabled={assetGroupPage === 0}
+                    >
+                      Trước
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        setAssetGroupPage((p) =>
+                          Math.min(
+                            Math.ceil(assetGroups.length / ASSET_GROUP_PAGE_SIZE) - 1,
+                            p + 1,
+                          ),
+                        )
+                      }
+                      disabled={
+                        (assetGroupPage + 1) * ASSET_GROUP_PAGE_SIZE >= assetGroups.length
+                      }
+                    >
+                      Sau
+                    </Button>
+                  </div>
+                </div>
+              )}
+              </>
             )}
           </div>
 

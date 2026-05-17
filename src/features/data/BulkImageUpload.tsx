@@ -936,12 +936,7 @@ export function BulkImageUpload() {
     <div className="flex flex-col gap-4">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         <Card>
-          <CardHeader className="pb-3">
-            <CardTitle>Bước 3: Tải ảnh vào dữ liệu</CardTitle>
-            <CardDescription>
-              Sheet là nguồn chính. App tải ảnh từ link/folder trong sheet về data/images; chọn ảnh từ máy chỉ là dự phòng.
-            </CardDescription>
-          </CardHeader>
+          <CardHeader className="pb-3" />
           <CardContent className="flex flex-col gap-4">
             <input
               ref={(node) => {
@@ -992,18 +987,11 @@ export function BulkImageUpload() {
             </div>
 
             <div className="rounded-lg border bg-muted/20 p-4">
-              <div className="mb-3 flex flex-col gap-1">
-                <Label>Thư mục Drive gốc (tuỳ chọn)</Label>
-                <p className="text-xs text-muted-foreground">
-                  Không bắt buộc. Nếu chưa có Drive public, cứ chọn thư mục ảnh từ máy ở trên.
-                  Chỉ dán mục này khi muốn app tự tải ảnh từ Google Drive.
-                </p>
-              </div>
               <div className="flex flex-col gap-2 sm:flex-row">
                 <Input
                   value={driveRootUrl}
                   onChange={(event) => setDriveRootUrl(event.target.value)}
-                  placeholder="https://drive.google.com/drive/folders/..."
+                  placeholder="Thư mục Drive gốc (tuỳ chọn) — https://drive.google.com/drive/folders/..."
                 />
                 <Button type="button" variant="outline" onClick={() => void saveDriveRoot()}>
                   Lưu
@@ -1089,12 +1077,7 @@ export function BulkImageUpload() {
               >
                 <Download /> {driveCheckpoint && driveCheckpoint.status !== "done" ? "Tải tiếp" : "Tải ảnh từ link trong sheet"} ({driveRunCandidateCount})
               </Button>
-              {shouldHighlightDriveDownload && (
-                <div className="mt-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-primary">
-                  Có {driveImportCandidates.length} quán có tên folder/link ảnh trong sheet. App sẽ tải ảnh về
-                  thư mục data/images và không đưa ảnh lên git.
-                </div>
-              )}
+              {shouldHighlightDriveDownload && null}
             </div>
 
             {matching && (
