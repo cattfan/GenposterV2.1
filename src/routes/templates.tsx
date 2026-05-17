@@ -820,13 +820,9 @@ function TemplatesPage() {
               <FileDown className="size-4 mr-2" /> Xuất bộ
             </Button>
           )}
-          {/* AI tạo ảnh từ combo - tạm tắt do feature đang lỗi (xem Milestone A plan).
-              Giữ nguyên onPickComboImages/startCombo để bật lại sau. */}
-          {/*
           <Button variant="outline" onClick={onPickComboImages} disabled={aiBusy}>
             <Layers className="size-4 mr-2" /> AI tạo ảnh
           </Button>
-          */}
           <Button onClick={createNewPack}>
             <Plus className="size-4 mr-2" /> Tạo bộ mới
           </Button>
@@ -1018,7 +1014,7 @@ function TemplatesPage() {
                 onChange={setEditing}
                 onDuplicate={duplicatePack}
                 onCreatePage={createPageInPack}
-                /* onCreateAiPage tạm tắt — xem Milestone A plan, AI gen ảnh đang lỗi. */
+                onCreateAiPage={onPickAiImage}
                 onDuplicatePage={duplicatePageInPack}
                 onDeletePage={deletePageFromPack}
                 onRenamePage={renamePageTemplate}

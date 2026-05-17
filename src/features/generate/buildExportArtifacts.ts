@@ -14,6 +14,7 @@ import type { Entity, GenerationJob, RenderedItem } from "@/models";
 import { nodeToPngBlob } from "@/features/render/exportPng";
 import {
   buildFallbackCaptionBlob,
+  buildTikTokCaptionBlob,
   buildPartnerWorkbookBlob,
   type ExportPageEntityData,
 } from "@/features/generate/exportArtifacts";
@@ -127,13 +128,30 @@ export async function assembleBundleArtifacts(
       blob: entry.blob,
     }));
 
-    const captionBlob = buildFallbackCaptionBlob({
-      packName: input.packName,
-      bundleLabel: bundle.bundleLabel,
-      pages: pageBlobs.map((entry) => entry.pageData),
-      entities: input.entities,
-      variantCount: 3,
-    });
+    // Caption: ưu tiên AI (15s timeout), fallback local nếu AI fail/timeout.
+    let captionBlob: Blob;
+    try {
+      captionBlob = await Promise.race([
+        buildTikTokCaptionBlob({
+          packName: input.packName,
+          bundleLabel: bundle.bundleLabel,
+          pages: pageBlobs.map((entry) => entry.pageData),
+          entities: input.entities,
+          variantCount: 3,
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("ai-caption-timeout")), 15_000),
+        ),
+      ]);
+    } catch {
+      captionBlob = buildFallbackCaptionBlob({
+        packName: input.packName,
+        bundleLabel: bundle.bundleLabel,
+        pages: pageBlobs.map((entry) => entry.pageData),
+        entities: input.entities,
+        variantCount: 3,
+      });
+    }
     files.push({ name: "caption.txt", blob: captionBlob });
 
     const xlsxBlob = buildPartnerWorkbookBlob({

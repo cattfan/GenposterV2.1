@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import type { Entity, RenderedItem } from "@/models";
+import { callAi } from "@/features/ai/aiClient";
 
 export interface ExportPageEntityData {
   pageFile?: string;
@@ -52,10 +53,124 @@ export async function buildTikTokCaptionBlob(input: {
   entities: Entity[];
   variantCount?: number;
 }): Promise<Blob> {
-  // AI caption tạm tắt (xem Milestone A plan): API gọi AI hay treo/timeout 15s
-  // mỗi bundle, nhiều khi sinh trùng nội dung. Dùng fallback local cho ổn định.
-  // Giữ async signature để các caller hiện tại không phải sửa.
-  return buildFallbackCaptionBlob(input);
+  // Gọi AI thật để sinh caption. Caller chịu trách nhiệm wrap timeout (xem
+  // PackTabContent.exportZip / exportBundleZip với Promise.race).
+  // Nếu AI fail/timeout, caller catch và fallback sang buildFallbackCaptionBlob.
+  const text = await buildTikTokCaptionText(input);
+  return new Blob([text], { type: "text/plain;charset=utf-8" });
+}
+
+/**
+ * Build text caption: ưu tiên AI, fallback sang local templates nếu AI fail.
+ */
+export async function buildTikTokCaptionText(input: {
+  packName: string;
+  bundleLabel?: string;
+  pages: ExportPageEntityData[];
+  entities: Entity[];
+  variantCount?: number;
+}): Promise<string> {
+  const usedEntities = collectUsedEntities(input.pages, input.entities);
+  const variantCount = 1;
+  const aiVariants = await requestAiCaptions({
+    packName: input.packName,
+    bundleLabel: input.bundleLabel,
+    entities: usedEntities,
+    variantCount,
+  });
+  const variants =
+    aiVariants.length > 0
+      ? aiVariants
+      : buildFallbackCaptions(input.packName, input.bundleLabel, usedEntities, variantCount);
+  return variants
+    .slice(0, variantCount)
+    .map((variant) => formatCaptionVariant(variant, 1, input.bundleLabel))
+    .join("\n");
+}
+
+async function requestAiCaptions(input: {
+  packName: string;
+  bundleLabel?: string;
+  entities: Entity[];
+  variantCount: number;
+}): Promise<CaptionVariant[]> {
+  const payload = {
+    packName: input.packName,
+    bundleLabel: input.bundleLabel,
+    variantCount: input.variantCount,
+    fixedHashtags: FIXED_HASHTAGS,
+    entities: input.entities.slice(0, 30).map((entity) => ({
+      name: entity.name,
+      address: entity.address,
+      categoryMain: entity.categoryMain,
+      categorySub: entity.categorySub,
+      style: entity.style,
+      priceRange: entity.priceRange,
+      openingHours: entity.openingHours,
+      seoKeywords: entity.seoKeywords,
+      metadata: entity.metadata,
+      partnerFlag: entity.partnerFlag,
+    })),
+  };
+
+  try {
+    const result = await callAi({
+      messages: [
+        {
+          role: "system",
+          content:
+            "Bạn viết chú thích TikTok tiếng Việt cho bộ ảnh du lịch Đà Lạt. " +
+            "Chỉ dùng dữ liệu được đưa vào, không bịa tên, địa chỉ, giá hoặc ưu đãi. " +
+            "Trả về JSON object duy nhất theo schema: " +
+            '{"captions":[{"headline":"...","body":"...","hashtags":["#..."]}]}. ' +
+            "Mỗi headline phải VIẾT HOA, giật gân, dưới 90 ký tự. " +
+            "Mỗi body tối đa 300 ký tự, có từ khóa SEO liên quan. " +
+            "Mỗi hashtags đúng 5 hashtag: #riviudalat, #dalat, #dalatreview và 2 hashtag viết liền không dấu.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify(payload, null, 2),
+        },
+      ],
+      temperature: 0.75,
+    });
+    if (!result.ok) return [];
+    return parseAiCaptionJson(result.content ?? "", input.entities).slice(0, input.variantCount);
+  } catch {
+    return [];
+  }
+}
+
+function parseAiCaptionJson(raw: string, entities: Entity[]): CaptionVariant[] {
+  const jsonText = extractJson(raw);
+  if (!jsonText) return [];
+  try {
+    const parsed = JSON.parse(jsonText) as {
+      captions?: Array<{ headline?: unknown; body?: unknown; hashtags?: unknown }>;
+    };
+    return (parsed.captions ?? [])
+      .map((caption) =>
+        normalizeCaptionVariant(
+          String(caption.headline ?? ""),
+          String(caption.body ?? ""),
+          Array.isArray(caption.hashtags) ? caption.hashtags.map(String) : [],
+          entities,
+        ),
+      )
+      .filter((caption) => caption.headline && caption.body);
+  } catch {
+    return [];
+  }
+}
+
+function extractJson(raw: string): string | null {
+  const trimmed = raw.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+  if (fenced) return fenced;
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start >= 0 && end > start) return trimmed.slice(start, end + 1);
+  return null;
 }
 
 /**
