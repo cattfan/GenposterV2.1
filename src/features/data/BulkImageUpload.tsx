@@ -370,6 +370,94 @@ export function BulkImageUpload() {
     );
   };
 
+  /**
+   * Upload thẳng vào DB không qua bước preview/review. Trước đây user phải
+   * click vào từng dòng pending để xác nhận, giờ chọn folder/file là upload
+   * luôn. Match auto-assign entity; ảnh không match được sẽ skip + cảnh báo.
+   */
+  const directUpload = async (next: PendingFile[]) => {
+    const autoAssigned =
+      entities.length === 1
+        ? next.map((item) => ({ ...item, manualEntityId: item.manualEntityId ?? entities[0].entityId }))
+        : next;
+
+    const matchedItems = autoAssigned.filter((item) => item.manualEntityId);
+    const skipped = autoAssigned.length - matchedItems.length;
+
+    if (matchedItems.length === 0) {
+      if (skipped > 0) {
+        toast.error(
+          `Không khớp được ảnh nào với quán đã có (${skipped} ảnh). Đặt tên file khớp tên quán hoặc xếp ảnh vào thư mục có tên quán.`,
+        );
+      }
+      return;
+    }
+
+    setBusy(true);
+    const total = matchedItems.length;
+    const progress = createProgressToast({
+      initialLabel: `Đang tải ${total} ảnh lên server...`,
+      total,
+    });
+    let completed = 0;
+    let failed = 0;
+    const newAssets: Asset[] = [];
+
+    const CONCURRENCY = 6;
+    const worker = async (item: PendingFile) => {
+      try {
+        const resized = await resizeImageBlob(item.file);
+        const blobKey = await saveBlob(resized);
+        newAssets.push({
+          assetId: nanoid(),
+          entityId: item.manualEntityId!,
+          sourceType: "local",
+          sourceValue: makeIdbSrc(blobKey),
+          blobKey,
+          role: item.role === "cover" ? "generic" : item.role,
+          isCover: false,
+          qualityScore: 80,
+          status: "ok",
+        });
+      } catch (err) {
+        failed += 1;
+        console.warn("[directUpload] Failed:", item.file.name, err);
+      } finally {
+        completed += 1;
+        progress.update(completed, "Đang tải ảnh lên server...");
+      }
+    };
+
+    try {
+      for (let i = 0; i < matchedItems.length; i += CONCURRENCY) {
+        const batch = matchedItems.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(worker));
+      }
+
+      if (newAssets.length > 0) {
+        progress.update(total, "Đang lưu vào database...");
+        await db.assets.bulkPut(newAssets);
+      }
+
+      const entityCount = new Set(newAssets.map((asset) => asset.entityId)).size;
+      const skipMsg = skipped > 0 ? ` · bỏ qua ${skipped} ảnh không khớp quán` : "";
+      const failMsg = failed > 0 ? ` · ${failed} ảnh lỗi` : "";
+      if (newAssets.length > 0) {
+        progress.success(
+          `Đã nhập ${newAssets.length}/${total} ảnh vào ${entityCount} quán${failMsg}${skipMsg}`,
+        );
+      } else {
+        progress.error(`Không nhập được ảnh nào (${failed} lỗi)${skipMsg}`);
+      }
+      // Reset pending state cũ phòng trường hợp user mix flow.
+      setPending([]);
+    } catch (error) {
+      progress.error("Lỗi khi tải ảnh: " + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     if (entities.length === 0) {
@@ -390,7 +478,7 @@ export function BulkImageUpload() {
               : undefined,
         }));
       const next = await buildPendingFiles(items, entities);
-      finishImportPrep(next);
+      await directUpload(next);
     } finally {
       setMatching(false);
     }
@@ -415,7 +503,7 @@ export function BulkImageUpload() {
       const handle = await picker.showDirectoryPicker();
       const files = await collectDirectoryFiles(handle, handle.name);
       const next = await buildPendingFiles(files, entities);
-      finishImportPrep(next);
+      await directUpload(next);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       toast.error(
