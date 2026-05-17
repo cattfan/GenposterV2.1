@@ -39,8 +39,11 @@ import { CurvedText } from "@/features/editor/curvedText";
 import { mergeBindingSources } from "@/engines/binding/sourceContext";
 import { isGeneratedCoverBackgroundSlotFromTemplate } from "@/features/generate/backgroundGuards";
 
+// Placeholder cho slot ảnh chưa có nguồn — phải khớp 100% với DesignRenderer
+// (editor) để preview pack & editor nhìn giống nhau. Sọc chéo 8/16px,
+// màu xanh nhạt 8% trên transparent.
 const IMAGE_PLACEHOLDER_BACKGROUND =
-  "repeating-linear-gradient(135deg, rgba(59,130,246,0.08) 0, rgba(59,130,246,0.08) 14px, #f8fafc 14px, #f8fafc 28px)";
+  "repeating-linear-gradient(135deg, rgba(59,130,246,0.08) 0, rgba(59,130,246,0.08) 8px, transparent 8px, transparent 16px)";
 
 interface Props {
   template: PageTemplate;
@@ -547,14 +550,13 @@ function SlotRenderer({
                 ? "rgba(226,232,240,0.5)"
                 : IMAGE_PLACEHOLDER_BACKGROUND,
               border: hideEmptyImages ? "1px dashed rgba(148,163,184,0.6)" : undefined,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
+              display: "grid",
+              placeItems: "center",
               color: "rgba(71,85,105,0.6)",
-              fontSize: 10 * scale,
+              fontSize: 12 * scale,
             }}
           >
-            {hideImagePlaceholderText ? null : "(chưa có ảnh)"}
+            {hideImagePlaceholderText ? null : "Image"}
           </div>
         )}
         {slot.style?.overlayColor && (

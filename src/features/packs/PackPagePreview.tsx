@@ -129,7 +129,6 @@ export function PackPagePreview({ tpl }: { tpl: PageTemplate }) {
               entities={[]}
               assets={[]}
               scale={renderScale}
-              hideImagePlaceholderText
             />
           </div>
         </div>
