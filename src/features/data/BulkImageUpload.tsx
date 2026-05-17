@@ -287,6 +287,18 @@ export function BulkImageUpload() {
   const [pending, setPending] = useState<PendingFile[]>([]);
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState(false);
+
+  // Cảnh báo khi user đóng tab/refresh giữa lúc upload. Tránh mất tiến độ.
+  useEffect(() => {
+    if (!busy && !matching) return;
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // Modern browsers ignore the message, just need to set returnValue.
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [busy, matching]);
   const [driveBusy, setDriveBusy] = useState(false);
   const [driveRootUrl, setDriveRootUrl] = useState("");
   const [driveEntityLimit, setDriveEntityLimit] = useState(DEFAULT_DRIVE_ENTITY_LIMIT);
@@ -403,7 +415,9 @@ export function BulkImageUpload() {
     let failed = 0;
     const newAssets: Asset[] = [];
 
-    const CONCURRENCY = 6;
+    // Concurrency 10 cho local backend (network không phải bottleneck).
+    // Tăng tiếp lên 12-16 sẽ saturate Multer/disk write trên Windows.
+    const CONCURRENCY = 10;
     const worker = async (item: PendingFile) => {
       try {
         const resized = await resizeImageBlob(item.file);
@@ -436,7 +450,12 @@ export function BulkImageUpload() {
 
       if (newAssets.length > 0) {
         progress.update(total, "Đang lưu vào database...");
-        await db.assets.bulkPut(newAssets);
+        // Chunk bulkPut thành batches 200 để JSON payload không vượt body
+        // limit khi user upload >2000 ảnh (mỗi asset row ~500 bytes).
+        const CHUNK_SIZE = 200;
+        for (let i = 0; i < newAssets.length; i += CHUNK_SIZE) {
+          await db.assets.bulkPut(newAssets.slice(i, i + CHUNK_SIZE));
+        }
       }
 
       const entityCount = new Set(newAssets.map((asset) => asset.entityId)).size;
@@ -573,11 +592,11 @@ export function BulkImageUpload() {
     const failedItems: Array<{ name: string; reason: string }> = [];
 
     /**
-     * Pool pattern với concurrency 6: balance giữa nhanh và không bão hoà
+     * Pool pattern với concurrency 10: balance giữa nhanh và không bão hoà
      * mạng/CPU. Trước đây vòng `for` tuần tự khiến UI đơ với 50+ ảnh.
      * Resize song song trước khi upload để giảm payload (5-10MB -> ~500KB).
      */
-    const CONCURRENCY = 6;
+    const CONCURRENCY = 10;
 
     const worker = async (item: (typeof ready)[number]) => {
       try {

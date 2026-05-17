@@ -75,6 +75,14 @@ export async function resizeImageBlob(input: File | Blob, options: ResizeOptions
   const mime = input.type?.toLowerCase();
   if (!mime || !RESIZABLE_MIME.has(mime)) return input;
 
+  // Fast path: file đã nhỏ hơn threshold (default 2MB) -> skip cả decode +
+  // canvas resize. Tiết kiệm 200-500ms/ảnh khi user upload folder ảnh phone
+  // (đa số ảnh phone đã ~500KB-1.5MB sau khi auto-compress).
+  // Trade-off: ảnh có dimension cực to nhưng size nhỏ (PNG ít chi tiết)
+  // sẽ không được resize. Acceptable vì backend SQLite không có size limit
+  // strict cho blob.
+  if (input.size <= threshold) return input;
+
   try {
     const img = await loadImageFromBlob(input);
     const natural = Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height);
