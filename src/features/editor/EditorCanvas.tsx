@@ -2,6 +2,10 @@ import { useRef, useCallback, useState } from "react";
 import { X, ImageIcon, Layers as LayersIcon } from "lucide-react";
 import type { PageTemplate, Slot } from "@/models";
 import {
+  isGeneratedBackgroundOverlaySlot,
+  isGeneratedCoverBackgroundSlotFromTemplate,
+} from "@/features/generate/backgroundGuards";
+import {
   buildBoxShadow,
   buildCssFilter,
   buildFlipTransform,
@@ -40,27 +44,12 @@ export function NumField({
   );
 }
 
-function isGeneratedCoverBackgroundSlot(slot: Slot, template: PageTemplate): boolean {
-  if (slot.kind !== "image" || slot.bindingPath !== "asset.cover") return false;
-  const name = (slot.name ?? "").toLowerCase();
-  const coversCanvas =
-    slot.x <= template.canvas.width * 0.05 &&
-    slot.y <= template.canvas.height * 0.05 &&
-    slot.width >= template.canvas.width * 0.84 &&
-    slot.height >= template.canvas.height * 0.84;
-  return slot.isUploadedBackground || name.includes("mood_background") || coversCanvas;
-}
-
-function isGeneratedBackgroundOverlaySlot(slot: Slot): boolean {
-  return slot.kind === "shape" && slot.name === "mood_background_overlay";
-}
-
 function canvasStaticImage(slot: Slot, template: PageTemplate): string | undefined {
-  return isGeneratedCoverBackgroundSlot(slot, template) ? undefined : slot.staticImage;
+  return isGeneratedCoverBackgroundSlotFromTemplate(slot, template) ? undefined : slot.staticImage;
 }
 
 function shouldHideGeneratedCoverBackground(slot: Slot, template: PageTemplate): boolean {
-  return isGeneratedCoverBackgroundSlot(slot, template) && !canvasStaticImage(slot, template);
+  return isGeneratedCoverBackgroundSlotFromTemplate(slot, template) && !canvasStaticImage(slot, template);
 }
 
 export function Canvas({

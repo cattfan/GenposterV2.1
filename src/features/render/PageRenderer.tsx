@@ -37,6 +37,7 @@ import { isDataGroupMarkerSlot } from "@/engines/binding/slotMarkers";
 import { renderRichTextRuns } from "@/features/editor/richText";
 import { CurvedText } from "@/features/editor/curvedText";
 import { mergeBindingSources } from "@/engines/binding/sourceContext";
+import { isGeneratedCoverBackgroundSlotFromTemplate } from "@/features/generate/backgroundGuards";
 
 const IMAGE_PLACEHOLDER_BACKGROUND =
   "repeating-linear-gradient(135deg, rgba(59,130,246,0.08) 0, rgba(59,130,246,0.08) 14px, #f8fafc 14px, #f8fafc 28px)";
@@ -57,17 +58,6 @@ interface Props {
   hideImagePlaceholderText?: boolean;
   /** Ẩn hoàn toàn image placeholder (stripes) - dùng cho thumbnail preview */
   hideEmptyImages?: boolean;
-}
-
-function isGeneratedCoverBackgroundSlot(slot: Slot, template: PageTemplate) {
-  if (slot.kind !== "image" || slot.bindingPath !== "asset.cover") return false;
-  const name = (slot.name ?? "").toLowerCase();
-  const coversCanvas =
-    slot.x <= template.canvas.width * 0.05 &&
-    slot.y <= template.canvas.height * 0.05 &&
-    slot.width >= template.canvas.width * 0.84 &&
-    slot.height >= template.canvas.height * 0.84;
-  return slot.isUploadedBackground || name.includes("mood_background") || coversCanvas;
 }
 
 function isGeneratedBackgroundOverlaySlot(slot: Slot) {
@@ -350,7 +340,7 @@ function SlotRenderer({
   let imageEntityIdLog: string | undefined;
   let imageAssetIdLog: string | undefined;
   if (slot.kind === "image") {
-    imageRawSrc = isGeneratedCoverBackgroundSlot(slot, template) ? undefined : slot.staticImage;
+    imageRawSrc = isGeneratedCoverBackgroundSlotFromTemplate(slot, template) ? undefined : slot.staticImage;
 
     if (planned?.src) {
       imageRawSrc = planned.src;
@@ -492,7 +482,7 @@ function SlotRenderer({
   }
 
   if (slot.kind === "image") {
-    const isGeneratedCoverBackground = isGeneratedCoverBackgroundSlot(slot, template);
+    const isGeneratedCoverBackground = isGeneratedCoverBackgroundSlotFromTemplate(slot, template);
     const usableSrc =
       resolvedImgSrc && !resolvedImgSrc.startsWith("idb://")
         ? resolvedImgSrc

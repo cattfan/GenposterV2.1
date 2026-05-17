@@ -154,6 +154,7 @@ import { CropOverlay } from "./CropOverlay";
 import { CanvasRuler } from "./CanvasRuler";
 import { SmartSpacing, computeSpacingLines } from "./SmartSpacing";
 import { ColorPicker } from "./ColorPicker";
+import { ElementBindingControls } from "./ElementBindingControls";
 
 type WorkspaceMode = EditorMode;
 type AssetPanelItem = AssetItem | HeroiconAsset;
@@ -5184,32 +5185,21 @@ export function DesignWorkspace({
                           </div>
                         </InspectorSection>
 
-                        {primary.binding?.path ? (
-                          <InspectorSection
-                            title="Data binding"
-                            action={
-                              <span className="rounded-md bg-amber-500/15 px-2 py-1 text-[10px] font-medium text-amber-700 dark:text-amber-300">
-                                Chỉ xem
-                              </span>
+                        <InspectorSection title="Data binding">
+                          <ElementBindingControls
+                            element={primary}
+                            onBindingChange={(next) =>
+                              editor.updateElements([primary.elementId], { binding: next })
                             }
-                          >
-                            <div className="space-y-2 text-xs">
-                              <div>
-                                <Label className="text-[11px] text-muted-foreground">
-                                  Binding path
-                                </Label>
-                                <div className="rounded bg-muted px-2 py-1 font-mono text-[11px]">
-                                  {primary.binding.path}
-                                </div>
+                          />
+                          {primary.binding?.path ? (
+                            <div className="mt-2 space-y-1.5 text-xs">
+                              <Label className="text-[11px] text-muted-foreground">
+                                Binding path hiện tại
+                              </Label>
+                              <div className="rounded bg-muted px-2 py-1 font-mono text-[10px]">
+                                {primary.binding.path}
                               </div>
-                              {primary.binding.source ? (
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="text-muted-foreground">Nguồn</span>
-                                  <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] capitalize">
-                                    {primary.binding.source.replace(/_/g, " ")}
-                                  </span>
-                                </div>
-                              ) : null}
                               {primary.binding.fallbackText ? (
                                 <div>
                                   <Label className="text-[11px] text-muted-foreground">
@@ -5220,12 +5210,9 @@ export function DesignWorkspace({
                                   </div>
                                 </div>
                               ) : null}
-                              <p className="text-[10px] text-muted-foreground">
-                                Để đổi binding/dữ liệu, mở trang "Tạo nội dung".
-                              </p>
                             </div>
-                          </InspectorSection>
-                        ) : null}
+                          ) : null}
+                        </InspectorSection>
 
                         {primary.kind === "text" ? (
                           <InspectorSection title="Chữ">

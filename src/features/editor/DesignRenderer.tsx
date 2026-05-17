@@ -15,6 +15,10 @@ import { useResolvedImageSrc } from "@/storage/imageSrc";
 import { getHeroiconComponent } from "./designAssets";
 import { renderRichTextRuns } from "./richText";
 import { CurvedText } from "./curvedText";
+import {
+  isGeneratedBackgroundOverlayElement,
+  shouldSuppressGeneratedCoverElementSrc,
+} from "@/features/generate/backgroundGuards";
 
 export function DesignRenderer({
   page,
@@ -158,18 +162,12 @@ function displayEditorText(text: string | undefined): string {
 }
 
 function shouldSuppressGeneratedCoverSrc(element: DesignElement): boolean {
-  if (element.kind !== "image" && element.kind !== "shape") return false;
-  const legacyMeta = (element.meta?.legacy ?? {}) as Record<string, unknown>;
-  return (
-    element.binding?.path === "asset.cover" &&
-    (legacyMeta.isUploadedBackground === true ||
-      (element.name ?? "").toLowerCase().includes("mood_background"))
-  );
+  return shouldSuppressGeneratedCoverElementSrc(element);
 }
 
-function isGeneratedBackgroundOverlayElement(element: DesignElement): boolean {
-  return element.kind === "shape" && element.name === "mood_background_overlay";
-}
+// isGeneratedBackgroundOverlayElement đã được import ở đầu file (từ
+// features/generate/backgroundGuards). Wrapper helper trên giữ lại để giảm
+// thay đổi caller — có thể inline khi tách design module độc lập.
 
 function EditorGuideBounds({ kind, show }: { kind: DesignElement["kind"]; show: boolean }) {
   if (!show) return null;

@@ -1,5 +1,6 @@
 import { nanoid } from "nanoid";
 import { SAFE_MARGIN_X, SAFE_MARGIN_Y } from "@/lib/safeZone";
+import { isGeneratedCoverBackgroundSlot } from "@/features/generate/backgroundGuards";
 import type {
   CanvasSize,
   DataBindingRef,
@@ -100,17 +101,6 @@ export function createBlankDesignDocument(params?: {
     updatedAt: Date.now(),
     version: 1,
   };
-}
-
-function isGeneratedCoverBackgroundSlot(slot: Slot, canvas: CanvasSize) {
-  if (slot.kind !== "image" || slot.bindingPath !== "asset.cover") return false;
-  const name = (slot.name ?? "").toLowerCase();
-  const coversCanvas =
-    slot.x <= canvas.width * 0.05 &&
-    slot.y <= canvas.height * 0.05 &&
-    slot.width >= canvas.width * 0.84 &&
-    slot.height >= canvas.height * 0.84;
-  return slot.isUploadedBackground || name.includes("mood_background") || coversCanvas;
 }
 
 function staticImageForTemplateSlot(slot: Slot, canvas: CanvasSize): string | undefined {
