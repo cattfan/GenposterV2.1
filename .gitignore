@@ -11,6 +11,7 @@ node_modules
 .runtime/
 data/
 dist
+*.tsbuildinfo
 dist-ssr
 .output
 .vinxi
