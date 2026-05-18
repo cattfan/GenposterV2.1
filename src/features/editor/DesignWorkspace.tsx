@@ -1477,6 +1477,12 @@ export function DesignWorkspace({
   const currentBrandKit =
     brandKits.find((kit) => kit.brandKitId === editor.state.brandKitId) ?? brandKits[0] ?? null;
 
+  // Brand kit colors cho ColorPicker swatches — hiển thị ở đầu mọi color picker.
+  const brandKitColors = useMemo(
+    () => currentBrandKit?.colors?.filter((c): c is string => !!c && c.length > 0) ?? [],
+    [currentBrandKit],
+  );
+
   const persistBrandKitSelection = async (brandKitId: string | undefined) => {
     editor.setBrandKit(brandKitId);
   };
@@ -3582,6 +3588,7 @@ export function DesignWorkspace({
                       />
                     </div>
                     <CompactColorControl
+                      brandColors={brandKitColors}
                       label="Nền"
                       value={activePage.background ?? "#ffffff"}
                       onChange={(color) =>
@@ -3812,6 +3819,7 @@ export function DesignWorkspace({
                           className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm"
                         />
                         <CompactColorControl
+                      brandColors={brandKitColors}
                           label="Màu chữ"
                           value={primary.style?.color ?? "#0f172a"}
                           onChange={(color) => updatePrimaryStyle({ color })}
@@ -3843,6 +3851,7 @@ export function DesignWorkspace({
                         </div>
                         {primary.kind === "shape" ? (
                           <CompactColorControl
+                      brandColors={brandKitColors}
                             label="Màu nền"
                             value={primary.style?.fill ?? "#f97316"}
                             onChange={(color) => updatePrimaryStyle({ fill: color })}
@@ -3935,6 +3944,7 @@ export function DesignWorkspace({
                       >
                         <div className="grid grid-cols-2 gap-2">
                           <CompactColorControl
+                      brandColors={brandKitColors}
                             label="Từ"
                             value={primary.style?.gradientFrom ?? "#f97316"}
                             onChange={(color) =>
@@ -3953,6 +3963,7 @@ export function DesignWorkspace({
                             }
                           />
                           <CompactColorControl
+                      brandColors={brandKitColors}
                             label="Đến"
                             value={primary.style?.gradientTo ?? "#ec4899"}
                             onChange={(color) =>
@@ -4016,6 +4027,7 @@ export function DesignWorkspace({
                       }
                     >
                       <CompactColorControl
+                      brandColors={brandKitColors}
                         label="Màu"
                         value={primary.style?.shadowColor ?? "#000000"}
                         onChange={(color) =>
@@ -5026,6 +5038,7 @@ export function DesignWorkspace({
                         />
                       </div>
                       <CompactColorControl
+                      brandColors={brandKitColors}
                         label="Nền"
                         value={activePage.background ?? "#ffffff"}
                         onChange={(color) =>
@@ -5270,6 +5283,7 @@ export function DesignWorkspace({
                               </Select>
                             </div>
                             <CompactColorControl
+                      brandColors={brandKitColors}
                               label="Màu chữ"
                               value={primary.style?.color ?? "#0f172a"}
                               onChange={(color) => updateElementStyle(primary.elementId, { color })}
@@ -5340,6 +5354,7 @@ export function DesignWorkspace({
                                   }
                                 />
                                 <CompactColorControl
+                      brandColors={brandKitColors}
                                   label="Màu"
                                   value={primary.style?.textStrokeColor ?? "#ffffff"}
                                   onChange={(color) =>
@@ -5393,6 +5408,7 @@ export function DesignWorkspace({
                               {primary.style?.textShadowColor ? (
                                 <>
                                   <CompactColorControl
+                      brandColors={brandKitColors}
                                     label="Màu"
                                     value={primary.style.textShadowColor}
                                     onChange={(color) =>
@@ -5501,6 +5517,7 @@ export function DesignWorkspace({
                             </div>
                             {primary.kind === "shape" ? (
                               <CompactColorControl
+                      brandColors={brandKitColors}
                                 label="Màu nền"
                                 value={primary.style?.fill ?? "#f97316"}
                                 onChange={(color) =>
@@ -5703,6 +5720,7 @@ export function DesignWorkspace({
                                   <div className="space-y-1">
                                     <Label className="text-xs text-muted-foreground">Từ</Label>
                                     <CompactColorControl
+                      brandColors={brandKitColors}
                                       label="Từ"
                                       value={primary.style?.gradientFrom ?? "#f97316"}
                                       onChange={(color) =>
@@ -5720,6 +5738,7 @@ export function DesignWorkspace({
                                   <div className="space-y-1">
                                     <Label className="text-xs text-muted-foreground">Đến</Label>
                                     <CompactColorControl
+                      brandColors={brandKitColors}
                                       label="Đến"
                                       value={primary.style?.gradientTo ?? "#ec4899"}
                                       onChange={(color) =>
@@ -5799,6 +5818,7 @@ export function DesignWorkspace({
                               <div className="space-y-1">
                                 <Label className="text-xs text-muted-foreground">Màu</Label>
                                 <CompactColorControl
+                      brandColors={brandKitColors}
                                   label="MÃ u"
                                   value={primary.style.shadowColor ?? "#000000"}
                                   onChange={(color) =>
@@ -7040,11 +7060,13 @@ function CompactColorControl({
   value,
   onChange,
   onCommit,
+  brandColors,
 }: {
   label: string;
   value: string;
   onChange: (color: string) => void;
   onCommit?: (color: string) => void;
+  brandColors?: string[];
 }) {
   return (
     <div className="flex items-center gap-2 rounded-lg border bg-background px-2 py-2">
@@ -7067,6 +7089,7 @@ function CompactColorControl({
             onChange={onChange}
             onPreview={onChange}
             onCommit={onCommit ?? onChange}
+            brandColors={brandColors}
           />
         </PopoverContent>
       </Popover>

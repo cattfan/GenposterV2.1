@@ -21,6 +21,8 @@ interface ColorPickerProps {
   onChange: (color: string) => void;
   onPreview?: (color: string) => void;
   onCommit?: (color: string) => void;
+  /** Brand kit colors hiển thị ở đầu swatches (1-click apply). */
+  brandColors?: string[];
   className?: string;
 }
 
@@ -33,7 +35,7 @@ function normalizeHex(value: string, fallback = "#000000") {
   return fallback;
 }
 
-export function ColorPicker({ value, onChange, onPreview, onCommit, className }: ColorPickerProps) {
+export function ColorPicker({ value, onChange, onPreview, onCommit, brandColors, className }: ColorPickerProps) {
   const [recent, setRecent] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem("genposter-recent-colors") ?? "[]");
@@ -149,6 +151,24 @@ export function ColorPicker({ value, onChange, onPreview, onCommit, className }:
           placeholder="#000000"
         />
       </div>
+
+      {/* Brand kit colors */}
+      {brandColors && brandColors.length > 0 ? (
+        <div>
+          <p className="mb-1 text-[10px] uppercase text-muted-foreground">Thương hiệu</p>
+          <div className="flex flex-wrap gap-1">
+            {brandColors.map((color, i) => (
+              <button
+                key={`${color}-${i}`}
+                className="size-5 rounded-sm border-2 border-primary/30 hover:scale-110 transition-transform"
+                style={{ background: color }}
+                onClick={() => handlePick(color)}
+                title={color}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {/* Recent colors */}
       {recent.length > 0 ? (
