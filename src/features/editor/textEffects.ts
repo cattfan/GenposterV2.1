@@ -206,6 +206,86 @@ export const TEXT_EFFECT_PRESETS: TextEffectPreset[] = [
       textStrokeWidth: 0,
     },
   },
+  // === Canva-style effects ===
+  {
+    id: "neon",
+    label: "Neon",
+    description: "Chữ phát sáng neon multi-layer (Canva style)",
+    style: {
+      color: "#ffffff",
+      textShadowColor: "rgba(56,189,248,1)",
+      textShadowBlur: 20,
+      textShadowX: 0,
+      textShadowY: 0,
+      textStrokeColor: "rgba(56,189,248,0.8)",
+      textStrokeWidth: 1,
+      gradientEnabled: false,
+      // Multi-layer glow qua textShadow CSS string (buildTextShadow sẽ dùng)
+      textShadow:
+        "0 0 7px rgba(56,189,248,0.9), 0 0 10px rgba(56,189,248,0.7), 0 0 21px rgba(56,189,248,0.5), 0 0 42px rgba(56,189,248,0.3)",
+    },
+  },
+  {
+    id: "echo",
+    label: "Echo",
+    description: "3 bản copy offset giảm dần opacity (Canva style)",
+    style: {
+      textShadowColor: undefined,
+      textShadowBlur: 0,
+      textShadowX: 0,
+      textShadowY: 0,
+      textStrokeColor: undefined,
+      textStrokeWidth: 0,
+      gradientEnabled: false,
+      textShadow:
+        "2px 2px 0 rgba(99,102,241,0.7), 4px 4px 0 rgba(99,102,241,0.4), 6px 6px 0 rgba(99,102,241,0.2)",
+    },
+  },
+  {
+    id: "hollow",
+    label: "Hollow",
+    description: "Chỉ viền, không fill (Canva style)",
+    style: {
+      color: "transparent",
+      textStrokeColor: "#0f172a",
+      textStrokeWidth: 2,
+      textShadowColor: undefined,
+      textShadowBlur: undefined,
+      textShadowX: undefined,
+      textShadowY: undefined,
+      gradientEnabled: false,
+    },
+  },
+  {
+    id: "splice",
+    label: "Splice",
+    description: "2 bản copy offset ngược nhau (Canva style)",
+    style: {
+      textShadowColor: undefined,
+      textShadowBlur: 0,
+      textShadowX: 0,
+      textShadowY: 0,
+      textStrokeColor: "#0f172a",
+      textStrokeWidth: 2,
+      gradientEnabled: false,
+      textShadow:
+        "-3px -3px 0 #f97316, 3px 3px 0 #6366f1",
+    },
+  },
+  {
+    id: "lift",
+    label: "Lift",
+    description: "Nổi lên với bóng mềm phía dưới (Canva style)",
+    style: {
+      textShadowColor: "rgba(0,0,0,0.25)",
+      textShadowBlur: 16,
+      textShadowX: 0,
+      textShadowY: 8,
+      textStrokeColor: undefined,
+      textStrokeWidth: 0,
+      gradientEnabled: false,
+    },
+  },
 ];
 
 /**
