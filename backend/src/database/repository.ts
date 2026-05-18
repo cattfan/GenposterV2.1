@@ -1,4 +1,4 @@
-// Repository chung cho mọi bảng JSON. Dùng better-sqlite3 sync API.
+// Repository chung cho mọi bảng JSON. Dùng node:sqlite sync API.
 //
 // API mirror Dexie:
 //   list(filter?) -> array, supports indexedFields filter
@@ -11,14 +11,14 @@
 //
 // Mọi row trả về luôn có primary key field set đúng (lấy từ payload).
 
-import type Database from "better-sqlite3";
+import type { DbInstance } from "./sqlite";
 import type { TableConfig } from "../config/tables";
 
 export type Row = Record<string, unknown>;
 
 export class TableRepository {
   constructor(
-    private readonly db: Database.Database,
+    private readonly db: DbInstance,
     private readonly table: TableConfig,
   ) {}
 

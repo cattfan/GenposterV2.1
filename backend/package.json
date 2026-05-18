@@ -16,7 +16,6 @@
     "@nestjs/swagger": "^8.0.7",
     "@nestjs/typeorm": "^10.0.2",
     "@nestjs/websockets": "^10.4.15",
-    "better-sqlite3": "^11.5.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "multer": "^1.4.5-lts.1",
@@ -29,7 +28,6 @@
   },
   "devDependencies": {
     "@nestjs/cli": "^10.4.9",
-    "@types/better-sqlite3": "^7.6.11",
     "@types/express": "^4.17.21",
     "@types/multer": "^1.4.12",
     "@types/node": "^22.10.0",
