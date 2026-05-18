@@ -15,7 +15,7 @@ export const Route = createFileRoute("/history")({
 });
 
 function HistoryPage() {
-  const jobs = useLiveQuery(() => db.jobs.orderBy("createdAt").reverse().toArray(), []);
+  const jobs = useLiveQuery(() => db.jobs.orderBy("createdAt").reverse().toArray(), [], ["jobs"]);
   const { setJob } = useJobStore();
 
   return (

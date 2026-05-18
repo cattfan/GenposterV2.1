@@ -1061,8 +1061,8 @@ function DataPage() {
   const location = useLocation();
   const routeSearch = location.search as { tab?: unknown };
   const requestedTab = normalizeDataTab(routeSearch.tab);
-  const entities = useLiveQuery(() => db.entities.toArray(), []) ?? EMPTY_ENTITIES;
-  const assets = useLiveQuery(() => db.assets.toArray(), []) ?? EMPTY_ASSETS;
+  const entities = useLiveQuery(() => db.entities.toArray(), [], ["entities"]) ?? EMPTY_ENTITIES;
+  const assets = useLiveQuery(() => db.assets.toArray(), [], ["assets"]) ?? EMPTY_ASSETS;
   const [parsed, setParsed] = useState<ParsedTable | null>(null);
   const [mapping, setMapping] = useState<FieldMapping>({});
   const [mappingsBySheet, setMappingsBySheet] = useState<Record<string, FieldMapping>>({});

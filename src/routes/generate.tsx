@@ -22,11 +22,11 @@ export const Route = createFileRoute("/generate")({
 });
 
 function GeneratePage() {
-  const packs = useLiveQuery(() => db.packTemplates.toArray(), []);
-  const storedTpls = useLiveQuery(() => db.pageTemplates.toArray(), []);
-  const designDocuments = useLiveQuery(() => db.designDocuments.toArray(), []);
-  const entities = useLiveQuery(() => db.entities.toArray(), []);
-  const assets = useLiveQuery(() => db.assets.toArray(), []);
+  const packs = useLiveQuery(() => db.packTemplates.toArray(), [], ["packTemplates"]);
+  const storedTpls = useLiveQuery(() => db.pageTemplates.toArray(), [], ["pageTemplates"]);
+  const designDocuments = useLiveQuery(() => db.designDocuments.toArray(), [], ["designDocuments"]);
+  const entities = useLiveQuery(() => db.entities.toArray(), [], ["entities"]);
+  const assets = useLiveQuery(() => db.assets.toArray(), [], ["assets"]);
 
   // Merge designDocuments (canonical mới) vào pageTemplates (legacy) sao cho
   // PackTabContent thấy phiên bản mới nhất của template. Hai đường liên kết

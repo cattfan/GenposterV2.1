@@ -309,8 +309,8 @@ function TemplatesPage() {
   const navigate = useNavigate();
   const routeSearch = location.search as { open?: unknown };
   const openPackId = typeof routeSearch.open === "string" ? routeSearch.open : undefined;
-  const packs = useLiveQuery(() => db.packTemplates.orderBy("updatedAt").reverse().toArray(), []);
-  const tpls = useLiveQuery(() => db.pageTemplates.orderBy("updatedAt").reverse().toArray(), []);
+  const packs = useLiveQuery(() => db.packTemplates.orderBy("updatedAt").reverse().toArray(), [], ["packTemplates"]);
+  const tpls = useLiveQuery(() => db.pageTemplates.orderBy("updatedAt").reverse().toArray(), [], ["pageTemplates"]);
   const templateMap = useMemo(
     () => new Map((tpls ?? []).map((template) => [template.pageTemplateId, template])),
     [tpls],

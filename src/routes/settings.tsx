@@ -151,14 +151,14 @@ function SettingsPage() {
   const [importBusy, setImportBusy] = useState(false);
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
   const backupInputRef = useRef<HTMLInputElement>(null);
-  const entities = useLiveQuery(() => db.entities.toArray(), []) ?? [];
-  const assets = useLiveQuery(() => db.assets.toArray(), []) ?? [];
-  const packTemplatesCount = useLiveQuery(() => db.packTemplates.count(), []) ?? 0;
-  const pageTemplatesCount = useLiveQuery(() => db.pageTemplates.count(), []) ?? 0;
-  const designDocsCount = useLiveQuery(() => db.designDocuments.count(), []) ?? 0;
-  const jobsCount = useLiveQuery(() => db.jobs.count(), []) ?? 0;
-  const generatePresetsCount = useLiveQuery(() => db.generatePresets.count(), []) ?? 0;
-  const symbolsCount = useLiveQuery(() => db.symbols.count(), []) ?? 0;
+  const entities = useLiveQuery(() => db.entities.toArray(), [], ["entities"]) ?? [];
+  const assets = useLiveQuery(() => db.assets.toArray(), [], ["assets"]) ?? [];
+  const packTemplatesCount = useLiveQuery(() => db.packTemplates.count(), [], ["packTemplates"]) ?? 0;
+  const pageTemplatesCount = useLiveQuery(() => db.pageTemplates.count(), [], ["pageTemplates"]) ?? 0;
+  const designDocsCount = useLiveQuery(() => db.designDocuments.count(), [], ["designDocuments"]) ?? 0;
+  const jobsCount = useLiveQuery(() => db.jobs.count(), [], ["jobs"]) ?? 0;
+  const generatePresetsCount = useLiveQuery(() => db.generatePresets.count(), [], ["generatePresets"]) ?? 0;
+  const symbolsCount = useLiveQuery(() => db.symbols.count(), [], ["symbols"]) ?? 0;
   const localImageCount = assets.filter((asset) => asset.blobKey).length;
 
   useEffect(() => {
