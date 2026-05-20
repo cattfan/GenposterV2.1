@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-20
 **Status:** Approved (brainstorming)
-**Scope:** `src/routes/index.tsx`, `src/lib/dashboardSummary.ts`, new `packDrafts` Dexie store, autosave wiring in `/generate` workspace.
+**Scope:** `src/routes/index.tsx`, `src/lib/dashboardSummary.ts`, new `pack_drafts` backend table + client wrapper, autosave wiring in `/generate` workspace.
 
 ## Goal
 
@@ -194,14 +194,31 @@ export interface PackDraftState {
 }
 ```
 
-### Dexie migration
+### Backend storage (generic CRUD)
 
-Bump version trong `src/storage/db.ts`:
+Backend dùng NestJS + SQLite generic CRUD (`backend/src/config/tables.ts`). Thêm 1 entry mới vào `TABLES`:
 
 ```ts
-this.version(N + 1).stores({
-  packDrafts: "packTemplateId, lastOpenedAt, updatedAt",
-});
+// backend/src/config/tables.ts
+{
+  name: "pack_drafts",
+  primaryKey: "packTemplateId",
+  indexedFields: ["lastOpenedAt", "updatedAt"],
+}
+```
+
+`backend/src/database/sqlite.ts` tự `CREATE TABLE` khi server boot — không cần migration script riêng (single-user, dev tool).
+
+### Client wiring
+
+Trong `src/storage/remoteDb.ts`:
+
+```ts
+// Thêm vào TABLE_SLUGS
+packDrafts: "pack_drafts",
+
+// Thêm vào remoteDb object
+packDrafts: makeTable("packDrafts", "packTemplateId") as unknown as DexieLikeTable<PackDraftState>,
 ```
 
 Index `lastOpenedAt` để dashboard có thể `.orderBy("lastOpenedAt").reverse()` nhanh.
@@ -350,7 +367,7 @@ Các sub-component nhận props từ `dashboard` summary, không tự query DB. 
 |------|------------|
 | Autosave debounce gây race với user navigate sang trang khác | Reuse pattern `useDesignAutosave`: flush on unmount + beforeunload guard |
 | `packDrafts` phình to khi user mở 100 pack | Cleanup: `lastOpenedAt < now - 30 days` xóa khi dashboard load (low priority) |
-| Migration Dexie failure trên prod data | Test migration với fixture; rollback path: dashboard fallback "recent pack only" nếu store rỗng |
+| Migration backend table mới gây failure trên prod data | `CREATE TABLE IF NOT EXISTS` (đã có), không destructive; rollback path: dashboard fallback "recent pack only" nếu store rỗng |
 | `Tải ZIP` inline từ dashboard cần re-render → chậm | Defer phase sau. Phase đầu chỉ link "Mở ›" tới `/history`. |
 
 **Decision on row action:** Mỗi row job ở dashboard có link `Mở ›` → `/history?job=<jobId>`. Trang history (đã có) chịu trách nhiệm Tải ZIP / inspect.
@@ -361,13 +378,13 @@ Các sub-component nhận props từ `dashboard` summary, không tự query DB. 
 2. Card "Việc tiếp theo" luôn hiển thị 1 hành động cụ thể, đúng theo rule 1→7.
 3. Click chip sức khoẻ bung panel chi tiết, click khác swap, click cùng collapse.
 4. Mở pack ở `/generate`, bind ít nhất 1 ô, quay về `/` thấy pack trong section "Tiếp tục" với progress đúng.
-5. `db.packDrafts` có schema mới và migration không phá data cũ.
+5. `db.packDrafts` (backend `pack_drafts` table) hoạt động và không phá data cũ.
 6. Tests `dashboardSummary.test.ts` cover 7 rule case + incomplete pack edge cases — pass.
 7. Build + tsc + lint pass; số test tăng (mới ≥10 case so với hiện 2).
 
 ## Implementation phases (preview cho writing-plans)
 
-1. **Schema + autosave** — model + Dexie migration + autosave hook trong `/generate`.
+1. **Schema + autosave** — model + backend table config + client wrapper + autosave hook trong `/generate`.
 2. **Summary logic** — mở rộng `buildDashboardSummary` + tests.
 3. **Components** — 5 sub-component dashboard.
 4. **Glue & polish** — `index.tsx` mới, skeleton, edge cases.
