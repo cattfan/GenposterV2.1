@@ -52,7 +52,6 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   TEXT_BINDING_OPTIONS,
   IMAGE_BINDING_OPTIONS,
@@ -78,9 +77,13 @@ import {
 import { TextRewritePanel } from "@/features/generate/TextRewritePanel";
 import { GeneratePageEditor } from "@/features/generate/GeneratePageEditor";
 import { isLikelyGeneratePageBackgroundSlot } from "@/features/generate/backgroundGuards";
-import { autoBindPlaceholdersForDrafts, previewAutoBindForDrafts } from "@/features/generate/autoBindPlaceholders";
+import { autoBindPlaceholdersForDrafts } from "@/features/generate/autoBindPlaceholders";
+import {
+  buildTextSlotDisplayLabel,
+  normalizeSlotDisplayLabel,
+} from "@/features/generate/slotDisplayLabel";
 import { entityFieldOptionsForUi } from "@/engines/normalize/fieldRegistry";
-import { MappingOverview } from "@/features/generate/MappingOverview";
+import { PackGenerateActions } from "@/features/generate/PackGenerateActions";
 import {
   clonePreviewPageDrafts,
   cloneTemplateDraftsWithSource,
@@ -332,13 +335,6 @@ export function PackTabContent({
   const [varyFontsFromSecondBundle, setVaryFontsFromSecondBundle] = useState(false);
   const [activePageIdx, setActivePageIdx] = useState(0);
   const [selectedSlotIds, setSelectedSlotIds] = useState<string[]>([]);
-  // Tab cột 3: "overview" hiển thị MappingOverview, "selected" hiển thị control
-  // của slot đang chọn. Auto-switch theo selectedSlotIds.length nhưng vẫn cho
-  // user override (bấm tay) — effect chỉ flip khi tab hiện tại không khớp ngữ
-  // cảnh, không phải mỗi lần state đổi.
-  const [activePanelTab, setActivePanelTab] = useState<"overview" | "selected">(
-    "overview",
-  );
   const [previewEntityId, setPreviewEntityId] = useState<string | undefined>(undefined);
   const [editingPreviewOpen, setEditingPreviewOpen] = useState(false);
   const [showSafeFrame, setShowSafeFrame] = useState(false);
@@ -361,7 +357,6 @@ export function PackTabContent({
     setBinding,
     clearBinding,
     resetPage,
-    resetAll,
     replaceAll,
   } = usePackBindOverrides();
   const [previewPageDrafts, setPreviewPageDrafts] = useState<PreviewPageDrafts>({});
@@ -460,11 +455,6 @@ export function PackTabContent({
     setPreviewDraftsNoHistory(next);
   };
 
-  const resetPreviewPageDrafts = (options: { history?: boolean } = {}) => {
-    commitPreviewPageDrafts(() => ({}), options);
-    if (options.history === false) clearPreviewDraftHistory();
-  };
-
   const replacePreviewPageDrafts = (
     next: PreviewPageDrafts,
     options: { history?: boolean } = {},
@@ -502,18 +492,6 @@ export function PackTabContent({
     redoPreviewPageDraftsRef.current = redoPreviewPageDrafts;
   });
 
-  // Auto-switch tab cột 3 dựa trên selection. Chỉ flip khi tab hiện tại không
-  // khớp ngữ cảnh (có slot chọn nhưng đang ở tab tổng quan, hoặc deselect mà
-  // còn ở tab "đang chọn") — cho phép user vẫn bấm tay giữ tab.
-  useEffect(() => {
-    if (selectedSlotIds.length > 0 && activePanelTab === "overview") {
-      setActivePanelTab("selected");
-    } else if (selectedSlotIds.length === 0 && activePanelTab === "selected") {
-      setActivePanelTab("overview");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSlotIds.length]);
-
   const effectiveActive = useMemo(
     () =>
       activePage
@@ -525,6 +503,10 @@ export function PackTabContent({
           )
         : undefined,
     [activePage, packOv, previewPageDrafts],
+  );
+  const activeBaseSlotById = useMemo(
+    () => new Map((activePage?.slots ?? []).map((slot) => [slot.slotId, slot])),
+    [activePage],
   );
 
   const globalGenerateConfig: ResolvedGeneratePageConfig = useMemo(
@@ -1022,14 +1004,6 @@ export function PackTabContent({
       return true;
     });
   };
-  const normalizeSlotLabel = (label: string | undefined, fallback: string) => {
-    const value = label?.trim();
-    if (!value) return fallback;
-    if (/^text$/i.test(value)) return fallback;
-    if (/^\d+\s*,\s*\d+$/.test(value)) return fallback;
-    if (/^image$/i.test(value)) return "Ảnh";
-    return value;
-  };
   const sharedSourceSlots = useMemo(() => {
     if (selectedBindableSlots.length <= 1) return [];
     if (selectedDataGroupIds.length === 1) {
@@ -1065,18 +1039,16 @@ export function PackTabContent({
       return textBindingValue !== "_static" || slot.bindingPath === "asset.random";
     });
   const textSlotLabel = (slot: Slot, index: number) =>
-    normalizeSlotLabel(
-      slot.name?.trim() ||
-        slot.staticText?.trim() ||
-        (slot.bindingPath
-          ? TEXT_BINDING_OPTIONS.find(
-              (option) => (option.value || "_static") === textSlotBindingValue(slot),
-            )?.label
-          : undefined),
-      `Chữ ${index + 1}`,
-    );
+    buildTextSlotDisplayLabel(slot, index, {
+      baseSlot: activeBaseSlotById.get(slot.slotId),
+      bindingLabel: slot.bindingPath
+        ? TEXT_BINDING_OPTIONS.find(
+            (option) => (option.value || "_static") === textSlotBindingValue(slot),
+          )?.label
+        : undefined,
+    });
   const imageSlotLabel = (slot: Slot, index: number) =>
-    normalizeSlotLabel(
+    normalizeSlotDisplayLabel(
       slot.name?.trim() ||
         IMAGE_BINDING_OPTIONS.find((option) => option.value === imageSlotBindingValue(slot))?.label,
       `Ảnh ${index + 1}`,
@@ -1085,7 +1057,7 @@ export function PackTabContent({
     const mode = getSlotBindMode(slot);
     if (mode === "text") return textSlotLabel(slot, index);
     if (mode === "image") return imageSlotLabel(slot, index);
-    return normalizeSlotLabel(slot.name?.trim(), `Khối ${index + 1}`);
+    return normalizeSlotDisplayLabel(slot.name?.trim(), `Khối ${index + 1}`);
   };
   const slotFormatBindingKey = (slot: Slot) => {
     const mode = getSlotBindMode(slot);
@@ -1204,71 +1176,6 @@ export function PackTabContent({
     applyBindingToSlots([slot], activePage.pageTemplateId, bindingPath);
   };
 
-  /**
-   * Chạy autoBindPlaceholders cho riêng page hiện tại — fix trường hợp user
-   * đã clear binding nhưng giờ muốn bind lại theo placeholder. Khác với
-   * applyPreset (chạy cho mọi page khi load preset), hàm này chỉ touch 1 page.
-   */
-  const runAutoBindForActivePage = () => {
-    if (!activePage || !effectiveActive) return;
-    const result = autoBindPlaceholdersForDrafts({
-      [activePage.pageTemplateId]: effectiveActive,
-    });
-    if (result.totalChanged === 0) {
-      toast.info("Không tìm thấy khối nào có placeholder phù hợp");
-      return;
-    }
-    commitPreviewPageDrafts(
-      (prev) => ({ ...prev, [activePage.pageTemplateId]: result.drafts[activePage.pageTemplateId] }),
-      { history: true },
-    );
-    // Đồng bộ packOv để binding có hiệu lực ngay (không phải chờ render kế).
-    const newTemplate = result.drafts[activePage.pageTemplateId];
-    for (const slot of newTemplate.slots) {
-      if (slot.bindingPath) {
-        const previous = effectiveActive.slots.find((s) => s.slotId === slot.slotId);
-        if (!previous?.bindingPath) {
-          setBinding(activePage.pageTemplateId, slot.slotId, slot.bindingPath);
-        }
-      }
-    }
-    toast.success(`Đã tự liên kết ${result.totalChanged} khối từ mẫu placeholder`);
-  };
-
-  // Dry-run: tính số slot có thể auto-bind trên page hiện tại để hiện gợi ý
-  // "X token + Y theo tên + Z heuristic" trong MappingOverview.
-  const activeAutoBindPreview = useMemo(() => {
-    if (!activePage || !effectiveActive) return undefined;
-    return previewAutoBindForDrafts({ [activePage.pageTemplateId]: effectiveActive });
-  }, [activePage, effectiveActive]);
-
-  /**
-   * Áp 1 bindingPath chuẩn (vd: `entity.name`) vào toàn bộ slot đang chọn.
-   * Sử dụng cho luồng "click field trong MappingOverview → bind". Tự phân
-   * loại text/image qua `getSlotBindMode`.
-   */
-  const bindFieldToSelectedSlots = (bindingPath: string) => {
-    if (!activePage || !effectiveActive) return;
-    if (!selectedBindableSlots.length) {
-      toast.error("Chưa chọn khối nào");
-      return;
-    }
-    applyBindingToSlots(selectedBindableSlots, activePage.pageTemplateId, bindingPath);
-    toast.success(`Đã gắn vào ${selectedBindableSlots.length} khối`);
-  };
-
-  /**
-   * Nhóm các slot bound chung (cùng field nhưng chưa cùng dataGroupId) thành
-   * 1 group. Dùng cho icon cảnh báo trong MappingOverview.
-   */
-  const groupBoundSlotsAuto = (slotIds: string[]) => {
-    if (!effectiveActive || !activePage) return;
-    const slots = effectiveActive.slots.filter((slot) => slotIds.includes(slot.slotId));
-    if (slots.length < 2) return;
-    const dataGroupId = createDataGroupId();
-    setDataGroupForSlots(slots, dataGroupId);
-    toast.success(`Đã nhóm ${slots.length} khối cùng dữ liệu`);
-  };
   const applySlotSourcePatch = (
     slots: Slot[],
     patch: Partial<NonNullable<Slot["dataSourceConfig"]>>,
@@ -3120,42 +3027,12 @@ export function PackTabContent({
                   </div>
                 </div>
 
-                <div className="border-t pt-3 space-y-2">
-                  <Button
-                    onClick={onGenerate}
-                    disabled={!generateReadiness.canGenerate}
-                    className="w-full"
-                    title={generateReadiness.reason}
-                  >
-                    <Sparkles className="size-4 mr-2" /> Tạo bộ ảnh
-                  </Button>
-                  <p
-                    className={
-                      "text-xs " +
-                      (generateReadiness.canGenerate ? "text-muted-foreground" : "text-destructive")
-                    }
-                  >
-                    {generateReadiness.reason}
-                  </p>
-                  {generationBaseEntities.length === 0 && (
-                    <Button asChild variant="outline" size="sm" className="w-full">
-                      <a href="/data">Nhập dữ liệu từ Google Sheet</a>
-                    </Button>
-                  )}
-                  {Object.keys(packOv).length > 0 && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        resetAll();
-                        resetPreviewPageDrafts({ history: false });
-                      }}
-                      className="w-full text-xs"
-                    >
-                      <Link2Off className="size-3 mr-1" /> Xoá toàn bộ liên kết
-                    </Button>
-                  )}
-                </div>
+                <PackGenerateActions
+                  canGenerate={generateReadiness.canGenerate}
+                  reason={generateReadiness.reason}
+                  hasEntities={generationBaseEntities.length > 0}
+                  onGenerate={onGenerate}
+                />
               </CardContent>
             </Card>
 
@@ -3238,7 +3115,7 @@ export function PackTabContent({
                   </div>
                 ) : (
                   <>
-                    {/* Tabs page */}
+                    {/* Page selector */}
                     <div className="flex gap-1 overflow-x-auto pb-1">
                       {packPages.map((tpl, idx) => {
                         const ovCount = Object.values(packOv[tpl.pageTemplateId] ?? {}).filter(
@@ -3366,47 +3243,20 @@ export function PackTabContent({
                 </div>
               </CardHeader>
               <CardContent className="space-y-3 pt-3 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pr-3">
-                <Tabs
-                  value={activePanelTab}
-                  onValueChange={(value) =>
-                    setActivePanelTab(value as "overview" | "selected")
-                  }
-                  className="space-y-3"
-                >
-                  <TabsList className="grid w-full grid-cols-2">
-                    <TabsTrigger value="overview" className="text-xs">
-                      Tổng quan
-                    </TabsTrigger>
-                    <TabsTrigger value="selected" className="text-xs">
-                      Khối đang chọn
-                      {selectedSlotIds.length > 0 && (
-                        <Badge
-                          variant="secondary"
-                          className="ml-1 h-4 px-1 text-[10px]"
-                        >
-                          {selectedSlotIds.length}
-                        </Badge>
-                      )}
-                    </TabsTrigger>
-                  </TabsList>
-                  <TabsContent value="overview" className="space-y-3 mt-0">
-                    <MappingOverview
-                      template={effectiveActive}
-                      entitiesInSheet={globalAvailableEntities}
-                      onSelectSlot={(slotId) => handleSelectSlot(slotId, "replace")}
-                      onAutoBind={runAutoBindForActivePage}
-                      autoBindPreview={activeAutoBindPreview}
-                      selectedSlotIds={selectedSlotIds}
-                      onBindFieldToSelected={bindFieldToSelectedSlots}
-                      onGroupBoundSlots={groupBoundSlotsAuto}
-                    />
-                  </TabsContent>
-                  <TabsContent value="selected" className="space-y-3 mt-0">
+                <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-xs font-medium">
+                  <span>Khối đang chọn</span>
+                  {selectedSlotIds.length > 0 && (
+                    <Badge variant="secondary" className="h-4 px-1 text-[10px]">
+                      {selectedSlotIds.length}
+                    </Badge>
+                  )}
+                </div>
+                <div className="space-y-3">
                     {selectedSlots.length === 0 && (
                       <EmptyState
                         icon={<MousePointerClick />}
                         title="Chưa chọn khối"
-                        description="Bấm vào một khối trên vùng thiết kế, hoặc quay lại tab Tổng quan để xem trường nào đã liên kết."
+                        description="Bấm vào một khối trên vùng thiết kế để chỉnh liên kết dữ liệu."
                         compact
                       />
                     )}
@@ -3723,8 +3573,7 @@ export function PackTabContent({
                     )}
                   </>
                 )}
-                  </TabsContent>
-                </Tabs>
+                </div>
               </CardContent>
             </Card>
           </div>
