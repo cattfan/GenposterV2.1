@@ -28,6 +28,10 @@ import type { ExpandedSlot } from "@/engines/binding/cardRepeater";
 import { isDataGroupMarkerSlot } from "@/engines/binding/slotMarkers";
 import { renderRichTextRuns } from "@/features/editor/richText";
 import { mergeBindingSources } from "@/engines/binding/sourceContext";
+import { lookupByBindingPath } from "@/engines/normalize/fieldRegistry";
+
+/** Min scale để hiển thị badge field. Dưới ngưỡng này badge che text → ẩn. */
+const FIELD_BADGE_MIN_SCALE = 0.4;
 
 const IMAGE_PLACEHOLDER_BACKGROUND =
   "repeating-linear-gradient(135deg, rgba(99,102,241,0.035) 0, rgba(99,102,241,0.035) 12px, rgba(248,250,252,0.28) 12px, rgba(248,250,252,0.28) 24px)";
@@ -50,6 +54,7 @@ export function BindCanvas({
   seedKey,
   showSafeFrame = false,
   flatPreview = false,
+  showFieldBadges = true,
 }: {
   template: PageTemplate;
   scale: number;
@@ -67,6 +72,11 @@ export function BindCanvas({
   seedKey?: string;
   showSafeFrame?: boolean;
   flatPreview?: boolean;
+  /**
+   * Hiển thị pill badge tên trường trên mỗi slot có bindingPath. Tự ẩn khi
+   * `flatPreview` (mode export) hoặc `scale < FIELD_BADGE_MIN_SCALE`.
+   */
+  showFieldBadges?: boolean;
 }) {
   const { width, height, background, backgroundImage } = template.canvas;
   const resolvedBg = useResolvedImageSrc(backgroundImage);
@@ -405,6 +415,26 @@ export function BindCanvas({
       {selectedBounds && (
         <SelectionBoundsOverlay bounds={selectedBounds} scale={scale} flatPreview={flatPreview} />
       )}
+      {showFieldBadges && scale >= FIELD_BADGE_MIN_SCALE && (
+        <FieldBadgeLayer
+          slots={visiblePrimarySlots}
+          template={template}
+          scale={scale}
+          onSelect={(slotId, mode) =>
+            onSelectSlot(
+              slotId,
+              mode,
+              getSelectionIdsForMode(
+                template.slots.find((s) => s.slotId === slotId) ?? visiblePrimarySlots[0],
+                mode,
+                visiblePrimarySlots,
+                template,
+                slotItems,
+              ),
+            )
+          }
+        />
+      )}
       {marqueeRect && <SelectionMarqueeOverlay rect={marqueeRect} scale={scale} />}
     </div>
   );
@@ -412,6 +442,66 @@ export function BindCanvas({
 
 function isSelectableSlot(slot: Slot, template: PageTemplate): boolean {
   return isCanvasSelectableSlot(slot, template);
+}
+
+interface FieldBadgeLayerProps {
+  slots: Array<Slot & ExpandedSlot>;
+  template: PageTemplate;
+  scale: number;
+  onSelect: (slotId: string, mode: BindCanvasSelectionMode) => void;
+}
+
+/**
+ * Lớp pill badge nổi trên canvas, hiển thị tên field đã bind cho mỗi slot
+ * có `bindingPath`. Click pill → select slot tương ứng (giống click slot).
+ * Render absolute trong canvas wrapper, pointer events tách biệt khỏi slot
+ * thật để click qua được khi slot ở dưới.
+ */
+function FieldBadgeLayer({ slots, template, scale, onSelect }: FieldBadgeLayerProps) {
+  const items = useMemo(() => {
+    const out: Array<{ slot: Slot; label: string }> = [];
+    for (const slot of slots) {
+      if (!slot.bindingPath) continue;
+      if (!isDataBindableSlot(slot, template)) continue;
+      const field = lookupByBindingPath(slot.bindingPath);
+      const label = field?.labelVi ?? bindingStatusLabel(slot);
+      if (!label) continue;
+      out.push({ slot, label });
+    }
+    return out;
+  }, [slots, template]);
+
+  if (items.length === 0) return null;
+
+  return (
+    <div
+      // pointer-events-none: layer này không chặn marquee selection trên
+      // background; pill bên trong tự bật pointer-events.
+      className="pointer-events-none absolute inset-0 z-20"
+      data-bind-field-badges
+    >
+      {items.map(({ slot, label }) => (
+        <button
+          key={`field-badge-${slot.slotId}`}
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            const mode: BindCanvasSelectionMode = event.shiftKey ? "toggle" : "replace";
+            onSelect(slot.slotId, mode);
+          }}
+          className="pointer-events-auto absolute flex max-w-[60%] items-center gap-1 truncate rounded bg-primary/90 px-1 py-0.5 text-[10px] font-medium leading-none text-primary-foreground shadow ring-1 ring-primary/30 hover:bg-primary"
+          style={{
+            left: Math.max(0, slot.x * scale),
+            top: Math.max(0, slot.y * scale - 14),
+            transform: "translateZ(0)",
+          }}
+          title={`${label} — ${slot.bindingPath}`}
+        >
+          <span className="truncate">{label}</span>
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function isDataBindableSlot(slot: Slot, template?: PageTemplate): boolean {

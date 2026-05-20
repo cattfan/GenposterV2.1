@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { PageTemplate, Slot } from "@/models";
-import { autoBindPlaceholders, autoBindPlaceholdersForDrafts } from "./autoBindPlaceholders";
+import {
+  autoBindPlaceholders,
+  autoBindPlaceholdersForDrafts,
+  previewAutoBindForDrafts,
+} from "./autoBindPlaceholders";
 
 function makeSlot(partial: Partial<Slot> & { slotId: string; kind: Slot["kind"] }): Slot {
   return {
@@ -140,5 +144,132 @@ describe("autoBindPlaceholders", () => {
     expect(next.b.slots[1].bindingPath).toBe("entity.phone");
     // c không đổi -> giữ nguyên reference
     expect(next.c).toBe(drafts.c);
+  });
+});
+
+describe("autoBindPlaceholders — tier 2 (slot.name alias)", () => {
+  it("binds via slot.name when no placeholder in staticText", () => {
+    const tpl = makeTemplate([
+      makeSlot({ slotId: "s1", kind: "text", name: "Tên quán", staticText: "Phở Hà Nội" }),
+      makeSlot({ slotId: "s2", kind: "text", name: "Địa chỉ", staticText: "123 Lê Lợi" }),
+      makeSlot({ slotId: "s3", kind: "text", name: "Hotline", staticText: "Liên hệ ngay" }),
+    ]);
+    const result = autoBindPlaceholders(tpl);
+    expect(result.template.slots[0].bindingPath).toBe("entity.name");
+    expect(result.template.slots[1].bindingPath).toBe("entity.address");
+    expect(result.template.slots[2].bindingPath).toBe("entity.phone");
+    expect(result.changes.every((c) => c.tier === "name")).toBe(true);
+  });
+
+  it("does not bind when slot.name is meaningless", () => {
+    const tpl = makeTemplate([
+      makeSlot({ slotId: "s1", kind: "text", name: "Heading 1", staticText: "Tiêu đề" }),
+      makeSlot({ slotId: "s2", kind: "text", name: "Layer A", staticText: "abc" }),
+    ]);
+    const result = autoBindPlaceholders(tpl);
+    expect(result.changedSlotIds).toEqual([]);
+  });
+});
+
+describe("autoBindPlaceholders — tier 3 (heuristic)", () => {
+  it("binds phone-shaped staticText to entity.phone", () => {
+    const tpl = makeTemplate([
+      makeSlot({ slotId: "s1", kind: "text", staticText: "0905 123 456" }),
+      makeSlot({ slotId: "s2", kind: "text", staticText: "+84 905-123-456" }),
+      makeSlot({ slotId: "s3", kind: "text", staticText: "Hotline: 0905123456" }),
+    ]);
+    const result = autoBindPlaceholders(tpl);
+    expect(result.template.slots[0].bindingPath).toBe("entity.phone");
+    expect(result.template.slots[1].bindingPath).toBe("entity.phone");
+    expect(result.template.slots[2].bindingPath).toBe("entity.phone");
+    expect(result.changes.every((c) => c.tier === "heuristic")).toBe(true);
+  });
+
+  it("binds price-shaped staticText to entity.priceRange", () => {
+    const tpl = makeTemplate([
+      makeSlot({ slotId: "s1", kind: "text", staticText: "30k - 100k" }),
+      makeSlot({ slotId: "s2", kind: "text", staticText: "100.000đ" }),
+      makeSlot({ slotId: "s3", kind: "text", staticText: "Giá: 50.000 VND" }),
+    ]);
+    const result = autoBindPlaceholders(tpl);
+    expect(result.template.slots[0].bindingPath).toBe("entity.priceRange");
+    expect(result.template.slots[1].bindingPath).toBe("entity.priceRange");
+    expect(result.template.slots[2].bindingPath).toBe("entity.priceRange");
+  });
+
+  it("binds hour-shaped staticText to entity.openingHours", () => {
+    const tpl = makeTemplate([
+      makeSlot({ slotId: "s1", kind: "text", staticText: "7h - 22h" }),
+      makeSlot({ slotId: "s2", kind: "text", staticText: "Mở cửa: 8:30 - 22:00" }),
+    ]);
+    const result = autoBindPlaceholders(tpl);
+    expect(result.template.slots[0].bindingPath).toBe("entity.openingHours");
+    expect(result.template.slots[1].bindingPath).toBe("entity.openingHours");
+  });
+
+  it("does NOT guess name/address/description from raw text", () => {
+    const tpl = makeTemplate([
+      makeSlot({ slotId: "s1", kind: "text", staticText: "Phở Hà Nội ngon nhất phố cổ" }),
+      makeSlot({ slotId: "s2", kind: "text", staticText: "Khu vực Hà Đông" }),
+      makeSlot({ slotId: "s3", kind: "text", staticText: "https://example.com" }),
+      makeSlot({ slotId: "s4", kind: "text", staticText: "info@example.com" }),
+    ]);
+    const result = autoBindPlaceholders(tpl);
+    expect(result.changedSlotIds).toEqual([]);
+  });
+});
+
+describe("autoBindPlaceholders — tier priority", () => {
+  it("token tier wins over slot.name and heuristic", () => {
+    const tpl = makeTemplate([
+      makeSlot({
+        slotId: "s1",
+        kind: "text",
+        // slot.name nói "Địa chỉ" nhưng token nói "phone" -> phone thắng.
+        name: "Địa chỉ",
+        staticText: "{{phone_0}}",
+      }),
+    ]);
+    const result = autoBindPlaceholders(tpl);
+    expect(result.template.slots[0].bindingPath).toBe("entity.phone");
+    expect(result.changes[0]?.tier).toBe("token");
+  });
+
+  it("name tier wins over heuristic", () => {
+    const tpl = makeTemplate([
+      makeSlot({
+        slotId: "s1",
+        kind: "text",
+        // staticText giống phone nhưng slot.name = "Tên quán" -> name thắng.
+        name: "Tên quán",
+        staticText: "0905 123 456",
+      }),
+    ]);
+    const result = autoBindPlaceholders(tpl);
+    expect(result.template.slots[0].bindingPath).toBe("entity.name");
+    expect(result.changes[0]?.tier).toBe("name");
+  });
+});
+
+describe("previewAutoBindForDrafts", () => {
+  it("counts changeable slots split by tier", () => {
+    const drafts = {
+      a: makeTemplate([
+        makeSlot({ slotId: "s1", kind: "text", staticText: "{{name_0}}" }),
+        makeSlot({ slotId: "s2", kind: "text", name: "Địa chỉ", staticText: "123 Lê Lợi" }),
+        makeSlot({ slotId: "s3", kind: "text", staticText: "0905 123 456" }),
+        makeSlot({
+          slotId: "s4",
+          kind: "text",
+          // Đã có binding -> bỏ qua
+          bindingPath: "entity.name",
+        }),
+      ]),
+    };
+    const result = previewAutoBindForDrafts(drafts);
+    expect(result.totalChangeable).toBe(3);
+    expect(result.byTier.token).toBe(1);
+    expect(result.byTier.name).toBe(1);
+    expect(result.byTier.heuristic).toBe(1);
   });
 });

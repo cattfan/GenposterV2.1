@@ -52,7 +52,7 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   TEXT_BINDING_OPTIONS,
   IMAGE_BINDING_OPTIONS,
@@ -69,6 +69,7 @@ import {
 } from "@/engines/binding/dataBinding";
 import { BindCanvas } from "@/features/generate/BindCanvas";
 import { BindingIssuesPanel } from "@/features/generate/BindingIssuesPanel";
+import { AllocationWarningsPanel } from "@/features/generate/AllocationWarningsPanel";
 import { PageRenderer } from "@/features/render/PageRenderer";
 import {
   TextListBindingPanel,
@@ -77,7 +78,7 @@ import {
 import { TextRewritePanel } from "@/features/generate/TextRewritePanel";
 import { GeneratePageEditor } from "@/features/generate/GeneratePageEditor";
 import { isLikelyGeneratePageBackgroundSlot } from "@/features/generate/backgroundGuards";
-import { autoBindPlaceholdersForDrafts } from "@/features/generate/autoBindPlaceholders";
+import { autoBindPlaceholdersForDrafts, previewAutoBindForDrafts } from "@/features/generate/autoBindPlaceholders";
 import { entityFieldOptionsForUi } from "@/engines/normalize/fieldRegistry";
 import { MappingOverview } from "@/features/generate/MappingOverview";
 import {
@@ -330,9 +331,19 @@ export function PackTabContent({
   const [varyFontsFromSecondBundle, setVaryFontsFromSecondBundle] = useState(false);
   const [activePageIdx, setActivePageIdx] = useState(0);
   const [selectedSlotIds, setSelectedSlotIds] = useState<string[]>([]);
+  // Tab cột 3: "overview" hiển thị MappingOverview, "selected" hiển thị control
+  // của slot đang chọn. Auto-switch theo selectedSlotIds.length nhưng vẫn cho
+  // user override (bấm tay) — effect chỉ flip khi tab hiện tại không khớp ngữ
+  // cảnh, không phải mỗi lần state đổi.
+  const [activePanelTab, setActivePanelTab] = useState<"overview" | "selected">(
+    "overview",
+  );
   const [previewEntityId, setPreviewEntityId] = useState<string | undefined>(undefined);
   const [editingPreviewOpen, setEditingPreviewOpen] = useState(false);
   const [showSafeFrame, setShowSafeFrame] = useState(false);
+  // Hiển thị pill tên trường trên mỗi khối đã bind. Mặc định bật để user
+  // luôn biết khối nào gắn gì; tắt khi muốn xem preview clean.
+  const [showFieldBadges, setShowFieldBadges] = useState(true);
   const [formatClipboard, setFormatClipboard] = useState<SlotFormatClipboard | null>(null);
   const [captionBusy, setCaptionBusy] = useState(false);
   const [rewriteBusy, setRewriteBusy] = useState(false);
@@ -395,6 +406,35 @@ export function PackTabContent({
 
   const setPreviewDraftsNoHistory = (next: PreviewPageDrafts) => {
     const hydrated = cloneTemplateDraftsWithSource(next, packPages);
+    // Diagnostics: bắt slot bindingPath bị clear không chủ ý qua bất kỳ commit
+    // nào. Khi user báo bug "bind nhóm 2 làm mất nhóm 1", console sẽ in
+    // [bind-loss] với slotId + path cũ + call stack để xác định nguồn.
+    if (import.meta.env.DEV) {
+      try {
+        const prev = previewPageDraftsRef.current;
+        for (const [pageId, prevTpl] of Object.entries(prev)) {
+          const nextTpl = hydrated[pageId];
+          if (!nextTpl) continue;
+          const nextById = new Map(nextTpl.slots.map((slot) => [slot.slotId, slot]));
+          for (const prevSlot of prevTpl.slots) {
+            if (!prevSlot.bindingPath) continue;
+            const nextSlot = nextById.get(prevSlot.slotId);
+            if (!nextSlot) continue;
+            if (nextSlot.bindingPath === prevSlot.bindingPath) continue;
+            console.warn("[bind-loss]", {
+              pageId,
+              slotId: prevSlot.slotId,
+              slotName: prevSlot.name,
+              prev: prevSlot.bindingPath,
+              next: nextSlot.bindingPath,
+            });
+            console.trace("[bind-loss-trace]");
+          }
+        }
+      } catch {
+        // diagnostic only — không phá flow chính
+      }
+    }
     previewPageDraftsRef.current = hydrated;
     setPreviewPageDrafts(hydrated);
   };
@@ -460,6 +500,18 @@ export function PackTabContent({
     undoPreviewPageDraftsRef.current = undoPreviewPageDrafts;
     redoPreviewPageDraftsRef.current = redoPreviewPageDrafts;
   });
+
+  // Auto-switch tab cột 3 dựa trên selection. Chỉ flip khi tab hiện tại không
+  // khớp ngữ cảnh (có slot chọn nhưng đang ở tab tổng quan, hoặc deselect mà
+  // còn ở tab "đang chọn") — cho phép user vẫn bấm tay giữ tab.
+  useEffect(() => {
+    if (selectedSlotIds.length > 0 && activePanelTab === "overview") {
+      setActivePanelTab("selected");
+    } else if (selectedSlotIds.length === 0 && activePanelTab === "selected") {
+      setActivePanelTab("overview");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSlotIds.length]);
 
   const effectiveActive = useMemo(
     () =>
@@ -781,9 +833,13 @@ export function PackTabContent({
     [effectiveActive, selectedSlotIds],
   );
   const selectedSlot: Slot | undefined = selectedSlots[selectedSlots.length - 1];
-  const previewSlotItems = useMemo(() => {
-    if (activePreviewRenderedPage) return activePreviewRenderedPage.items;
-    if (!effectiveActive || !previewEntity) return [];
+  const previewAllocation = useMemo(() => {
+    if (activePreviewRenderedPage) {
+      return { items: activePreviewRenderedPage.items, warnings: [] as string[] };
+    }
+    if (!effectiveActive || !previewEntity) {
+      return { items: [], warnings: [] as string[] };
+    }
     const shouldPinPreviewOwner = activeTargetCount <= 1;
     const allocation = allocateEntityBindingsForTemplate({
       template: effectiveActive,
@@ -793,7 +849,7 @@ export function PackTabContent({
       prioritizePartner: activeGenerateConfig.prioritizePartner,
       batchState: { usedEntityIds: new Set<string>() },
     });
-    return allocation.items;
+    return { items: allocation.items, warnings: allocation.warnings };
   }, [
     effectiveActive,
     previewEntity,
@@ -804,6 +860,8 @@ export function PackTabContent({
     previewEntityId,
     filteredEntities,
   ]);
+  const previewSlotItems = previewAllocation.items;
+  const previewAllocationWarnings = previewAllocation.warnings;
   const getSlotBindMode = (
     slot: Slot,
     template: PageTemplate | undefined = effectiveActive,
@@ -1184,6 +1242,41 @@ export function PackTabContent({
       }
     }
     toast.success(`Đã tự liên kết ${result.totalChanged} khối từ mẫu placeholder`);
+  };
+
+  // Dry-run: tính số slot có thể auto-bind trên page hiện tại để hiện gợi ý
+  // "X token + Y theo tên + Z heuristic" trong MappingOverview.
+  const activeAutoBindPreview = useMemo(() => {
+    if (!activePage || !effectiveActive) return undefined;
+    return previewAutoBindForDrafts({ [activePage.pageTemplateId]: effectiveActive });
+  }, [activePage, effectiveActive]);
+
+  /**
+   * Áp 1 bindingPath chuẩn (vd: `entity.name`) vào toàn bộ slot đang chọn.
+   * Sử dụng cho luồng "click field trong MappingOverview → bind". Tự phân
+   * loại text/image qua `getSlotBindMode`.
+   */
+  const bindFieldToSelectedSlots = (bindingPath: string) => {
+    if (!activePage || !effectiveActive) return;
+    if (!selectedBindableSlots.length) {
+      toast.error("Chưa chọn khối nào");
+      return;
+    }
+    applyBindingToSlots(selectedBindableSlots, activePage.pageTemplateId, bindingPath);
+    toast.success(`Đã gắn vào ${selectedBindableSlots.length} khối`);
+  };
+
+  /**
+   * Nhóm các slot bound chung (cùng field nhưng chưa cùng dataGroupId) thành
+   * 1 group. Dùng cho icon cảnh báo trong MappingOverview.
+   */
+  const groupBoundSlotsAuto = (slotIds: string[]) => {
+    if (!effectiveActive || !activePage) return;
+    const slots = effectiveActive.slots.filter((slot) => slotIds.includes(slot.slotId));
+    if (slots.length < 2) return;
+    const dataGroupId = createDataGroupId();
+    setDataGroupForSlots(slots, dataGroupId);
+    toast.success(`Đã nhóm ${slots.length} khối cùng dữ liệu`);
   };
   const applySlotSourcePatch = (
     slots: Slot[],
@@ -3115,6 +3208,19 @@ export function PackTabContent({
                   </Button>
                   <Button
                     size="sm"
+                    variant={showFieldBadges ? "secondary" : "outline"}
+                    onClick={() => setShowFieldBadges((value) => !value)}
+                    disabled={!effectiveActive}
+                    className="h-7 shrink-0 px-2 text-xs"
+                    title="Bật/tắt pill tên trường trên mỗi khối đã liên kết"
+                  >
+                    <Link2 className="size-3 mr-1" />
+                    <span className="hidden xl:inline">Tên trường</span>
+                    <span className="xl:hidden">Nhãn</span>
+                    <span className="ml-1">{showFieldBadges ? "Bật" : "Tắt"}</span>
+                  </Button>
+                  <Button
+                    size="sm"
                     variant={showSafeFrame ? "secondary" : "outline"}
                     onClick={() => setShowSafeFrame((value) => !value)}
                     disabled={!effectiveActive}
@@ -3198,6 +3304,7 @@ export function PackTabContent({
                           slotItems={previewSlotItems}
                           seedKey={`${effectiveActive.pageTemplateId}:${activePageIdx}`}
                           showSafeFrame={showSafeFrame}
+                          showFieldBadges={showFieldBadges}
                           flatPreview
                         />
                       </div>
@@ -3213,6 +3320,10 @@ export function PackTabContent({
                         activeSheetName={previewEntity?.sheetName}
                         onSelectSlot={(slotId) => handleSelectSlot(slotId)}
                       />
+                    )}
+
+                    {previewAllocationWarnings.length > 0 && (
+                      <AllocationWarningsPanel warnings={previewAllocationWarnings} />
                     )}
 
                   </>
@@ -3264,30 +3375,60 @@ export function PackTabContent({
                 </div>
               </CardHeader>
               <CardContent className="space-y-3 pt-3 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pr-3">
-                <MappingOverview
-                  template={effectiveActive}
-                  entitiesInSheet={filteredEntities}
-                  onSelectSlot={(slotId) => handleSelectSlot(slotId, "replace")}
-                  onAutoBind={runAutoBindForActivePage}
-                />
-                {selectedSlots.length === 0 && (
-                  <EmptyState
-                    icon={<MousePointerClick />}
-                    title="Chưa chọn khối"
-                    description="Bấm vào một khối trên vùng thiết kế để gán trường dữ liệu."
-                    compact
-                  />
-                )}
-                {selectedSlots.length > 0 && selectedBindableSlots.length === 0 && (
-                  <div className="rounded-md border border-dashed bg-muted/30 p-3 space-y-1">
-                    <div className="flex items-center gap-2 text-xs font-medium">
-                      <AlertTriangle className="size-3.5" />
-                      Khối đang chọn không thể liên kết dữ liệu
-                    </div>
-                  </div>
-                )}
-                {selectedBindableSlots.length > 0 && activePage && (
-                  <>
+                <Tabs
+                  value={activePanelTab}
+                  onValueChange={(value) =>
+                    setActivePanelTab(value as "overview" | "selected")
+                  }
+                  className="space-y-3"
+                >
+                  <TabsList className="grid w-full grid-cols-2">
+                    <TabsTrigger value="overview" className="text-xs">
+                      Tổng quan
+                    </TabsTrigger>
+                    <TabsTrigger value="selected" className="text-xs">
+                      Khối đang chọn
+                      {selectedSlotIds.length > 0 && (
+                        <Badge
+                          variant="secondary"
+                          className="ml-1 h-4 px-1 text-[10px]"
+                        >
+                          {selectedSlotIds.length}
+                        </Badge>
+                      )}
+                    </TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="overview" className="space-y-3 mt-0">
+                    <MappingOverview
+                      template={effectiveActive}
+                      entitiesInSheet={globalAvailableEntities}
+                      onSelectSlot={(slotId) => handleSelectSlot(slotId, "replace")}
+                      onAutoBind={runAutoBindForActivePage}
+                      autoBindPreview={activeAutoBindPreview}
+                      selectedSlotIds={selectedSlotIds}
+                      onBindFieldToSelected={bindFieldToSelectedSlots}
+                      onGroupBoundSlots={groupBoundSlotsAuto}
+                    />
+                  </TabsContent>
+                  <TabsContent value="selected" className="space-y-3 mt-0">
+                    {selectedSlots.length === 0 && (
+                      <EmptyState
+                        icon={<MousePointerClick />}
+                        title="Chưa chọn khối"
+                        description="Bấm vào một khối trên vùng thiết kế, hoặc quay lại tab Tổng quan để xem trường nào đã liên kết."
+                        compact
+                      />
+                    )}
+                    {selectedSlots.length > 0 && selectedBindableSlots.length === 0 && (
+                      <div className="rounded-md border border-dashed bg-muted/30 p-3 space-y-1">
+                        <div className="flex items-center gap-2 text-xs font-medium">
+                          <AlertTriangle className="size-3.5" />
+                          Khối đang chọn không thể liên kết dữ liệu
+                        </div>
+                      </div>
+                    )}
+                    {selectedBindableSlots.length > 0 && activePage && (
+                      <>
                     <div className="rounded-xl border bg-muted/20 p-2">
                       <div className="grid grid-cols-2 gap-2">
                         {formatClipboard && (
@@ -3591,6 +3732,8 @@ export function PackTabContent({
                     )}
                   </>
                 )}
+                  </TabsContent>
+                </Tabs>
               </CardContent>
             </Card>
           </div>

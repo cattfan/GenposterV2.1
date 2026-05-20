@@ -18,9 +18,21 @@ export interface MappingRow {
   /** Có entity nào trong sheet đang chứa giá trị cho trường này không? */
   hasDataInSheet: boolean;
   /** Slot đã bind vào field này (kèm tên slot). Có thể nhiều hơn 1. */
-  boundSlots: Array<{ slotId: string; slotName: string }>;
+  boundSlots: Array<{ slotId: string; slotName: string; dataGroupId?: string }>;
   /** Slot có placeholder khớp ({{name_0}}) nhưng chưa bind. */
   placeholderSlots: Array<{ slotId: string; slotName: string }>;
+  /**
+   * Trường tự do từ metadata sheet — không nằm trong fieldRegistry chuẩn.
+   * UI render group này dưới các field chuẩn để user vẫn map được.
+   */
+  isFreeMetadata?: boolean;
+  /**
+   * `true` nếu field đang bị bind bởi >=2 slot KHÔNG cùng `dataGroupId` —
+   * sẽ render entity khác nhau giữa các slot và tạo content lệch (gốc bug
+   * "trùng dữ liệu chỉ tên đối tác đổi"). UI hiển thị cảnh báo + gợi ý
+   * "Nhóm dữ liệu" khi cờ này bật.
+   */
+  duplicateUnGrouped?: boolean;
 }
 
 export interface MappingOverviewSummary {
@@ -58,7 +70,29 @@ function extractPlaceholderToken(staticText: string | undefined): string | null 
 }
 
 function slotDisplayName(slot: Slot, fallback: string): string {
+  // Ưu tiên slot.name (designer thường rename layer có nghĩa) → staticText
+  // (đoạn text mẫu) → fallback do caller gán dựa trên slotId hash. KHÔNG dùng
+  // index theo thứ tự template vì nhiều slot không có name sẽ trùng "Khối 2".
   return slot.name?.trim() || slot.staticText?.trim().slice(0, 32) || fallback;
+}
+
+/**
+ * Trả về `true` nếu danh sách slot bound chứa >=2 phần tử KHÔNG cùng
+ * dataGroupId. Khi 2 slot khác nhóm cùng bind 1 field, generator sẽ chọn
+ * entity ngẫu nhiên cho mỗi slot → content lệch giữa các khối.
+ */
+function hasDuplicateUngrouped(
+  boundSlots: ReadonlyArray<{ slotId: string; dataGroupId?: string }>,
+): boolean {
+  if (boundSlots.length < 2) return false;
+  const groupIds = boundSlots.map((slot) => slot.dataGroupId);
+  const grouped = groupIds.filter((id): id is string => !!id);
+  // Nếu mọi slot có dataGroupId chung -> đã nhóm hợp lệ.
+  if (grouped.length === boundSlots.length) {
+    return new Set(grouped).size > 1;
+  }
+  // Có ít nhất 1 slot chưa nhóm.
+  return true;
 }
 
 export function buildMappingOverview(
@@ -69,12 +103,26 @@ export function buildMappingOverview(
     return { rows: [], fieldsWithData: 0, fieldsBound: 0, hasUnboundPlaceholders: false };
   }
 
-  const boundByFieldId = new Map<string, Array<{ slotId: string; slotName: string }>>();
+  // Defensive: ngữ nghĩa "trường có data trong sheet" = sheet thực sự có entity
+  // active mang giá trị. KHÔNG bao gồm entity đã archived. Caller có thể đẩy
+  // entities chưa filter (vd: globalAvailableEntities) — ta tự làm sạch ở đây.
+  const activeEntities = entitiesInSheet.filter((entity) => entity.status === "active");
+
+  const boundByFieldId = new Map<
+    string,
+    Array<{ slotId: string; slotName: string; dataGroupId?: string }>
+  >();
   const placeholderByFieldId = new Map<string, Array<{ slotId: string; slotName: string }>>();
 
-  template.slots.forEach((slot, index) => {
-    const fallbackName = `Khối ${index + 1}`;
-    const slotEntry = { slotId: slot.slotId, slotName: slotDisplayName(slot, fallbackName) };
+  template.slots.forEach((slot) => {
+    // Hash slotId làm fallback: dùng 4 ký tự cuối để ngắn nhưng đủ phân biệt
+    // ngay cả khi slot.name và staticText cùng trống.
+    const fallbackName = `Khối #${slot.slotId.slice(-4)}`;
+    const slotEntry = {
+      slotId: slot.slotId,
+      slotName: slotDisplayName(slot, fallbackName),
+      dataGroupId: slot.dataGroupId,
+    };
 
     const boundPath = resolveSlotEntityFieldPath(slot);
     if (boundPath) {
@@ -104,7 +152,7 @@ export function buildMappingOverview(
   const fieldsWithDataIds = new Set<string>();
   for (const field of ENTITY_FIELDS) {
     if (field.placeholderTokens.length === 0) continue;
-    const has = entitiesInSheet.some((entity) => {
+    const has = activeEntities.some((entity) => {
       if (field.storedInMetadata) {
         const value = entity.metadata?.[field.id];
         return value != null && String(value).trim().length > 0;
@@ -118,13 +166,80 @@ export function buildMappingOverview(
   }
 
   const rows: MappingRow[] = ENTITY_FIELDS.filter((field) => field.placeholderTokens.length > 0).map(
-    (field) => ({
-      field,
-      hasDataInSheet: fieldsWithDataIds.has(field.id),
-      boundSlots: boundByFieldId.get(field.id) ?? [],
-      placeholderSlots: placeholderByFieldId.get(field.id) ?? [],
-    }),
+    (field) => {
+      const boundSlots = boundByFieldId.get(field.id) ?? [];
+      return {
+        field,
+        hasDataInSheet: fieldsWithDataIds.has(field.id),
+        boundSlots,
+        placeholderSlots: placeholderByFieldId.get(field.id) ?? [],
+        duplicateUnGrouped: hasDuplicateUngrouped(boundSlots),
+      };
+    },
   );
+
+  // Trường tự do: các metadata key trong sheet KHÔNG có trong fieldRegistry.
+  // Cũng phát hiện slot đang bind tới `entity.metadata.<key>` để liệt kê.
+  const knownMetadataIds = new Set(
+    ENTITY_FIELDS.filter((field) => field.storedInMetadata).map((field) => field.id),
+  );
+  const freeKeysWithData = new Set<string>();
+  for (const entity of activeEntities) {
+    const metadata = entity.metadata ?? {};
+    for (const [key, value] of Object.entries(metadata)) {
+      if (!key || knownMetadataIds.has(key)) continue;
+      if (value == null) continue;
+      if (Array.isArray(value) ? value.length > 0 : String(value).trim().length > 0) {
+        freeKeysWithData.add(key);
+      }
+    }
+  }
+  // Phát hiện slot đang bind tới metadata key tự do để hiện cả khi sheet chưa
+  // có data (giúp user thấy "khối này cần data nhưng sheet thiếu").
+  const freeKeysFromBindings = new Set<string>();
+  for (const slot of template.slots) {
+    const path = resolveSlotEntityFieldPath(slot);
+    if (!path?.startsWith("entity.metadata.")) continue;
+    const key = path.slice("entity.metadata.".length);
+    if (key && !knownMetadataIds.has(key)) freeKeysFromBindings.add(key);
+  }
+
+  const allFreeKeys = Array.from(new Set([...freeKeysWithData, ...freeKeysFromBindings])).sort(
+    (a, b) => a.localeCompare(b, "vi"),
+  );
+  for (const key of allFreeKeys) {
+    const bindingPath = `entity.metadata.${key}`;
+    const fieldId = `metadata.${key}`;
+    const freeField: EntityFieldDefinition = {
+      id: fieldId,
+      bindingPath,
+      labelVi: key,
+      group: "metadata",
+      aliases: [],
+      placeholderTokens: [],
+      kind: "string",
+      storedInMetadata: true,
+    };
+    const boundSlots: Array<{ slotId: string; slotName: string; dataGroupId?: string }> = [];
+    template.slots.forEach((slot) => {
+      const slotPath = resolveSlotEntityFieldPath(slot);
+      if (slotPath !== bindingPath) return;
+      const fallbackName = `Khối #${slot.slotId.slice(-4)}`;
+      boundSlots.push({
+        slotId: slot.slotId,
+        slotName: slotDisplayName(slot, fallbackName),
+        dataGroupId: slot.dataGroupId,
+      });
+    });
+    rows.push({
+      field: freeField,
+      hasDataInSheet: freeKeysWithData.has(key),
+      boundSlots,
+      placeholderSlots: [],
+      isFreeMetadata: true,
+      duplicateUnGrouped: hasDuplicateUngrouped(boundSlots),
+    });
+  }
 
   const fieldsWithData = rows.filter((row) => row.hasDataInSheet).length;
   const fieldsBound = rows.filter(

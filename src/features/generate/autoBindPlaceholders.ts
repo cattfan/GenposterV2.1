@@ -1,19 +1,19 @@
-// Auto-bind placeholder tokens trong staticText sang bindingPath để fix bug
-// "trùng dữ liệu chỉ tên đối tác đổi". Khi AI sinh template (templateFromImage.ts),
-// các slot text được gán staticText: "{{name_0}}", "{{address_0}}",... nhưng KHÔNG
-// set bindingPath. Khi user vào workspace generate, chỉ những slot có bindingPath
-// mới được đổ dữ liệu — slot còn lại render staticText cố định, dẫn đến mọi page
-// hiển thị giống nhau, chỉ khác slot tên.
+// Auto-bind tầng đa cấp:
+//   1. Token match `{{name_0}}` trong staticText (tầng cũ — confidence cao nhất).
+//   2. Alias theo `slot.name` (designer rename layer "Tên quán" → entity.name).
+//   3. Heuristic chặt theo nội dung staticText (phone/price/hours).
 //
-// Hàm autoBindPlaceholders quét template, suy ra bindingPath từ token placeholder
-// và set vào slot. Giữ staticText nguyên (làm fallback hiển thị editor / khi entity
-// thiếu trường tương ứng).
-//
-// Map placeholder->binding sống trong fieldRegistry.ENTITY_FIELDS — file này
-// chỉ phụ trách matching pattern "{{token}}" và áp vào slot.
+// Tất cả tầng đều idempotent — chỉ chạy khi `slot.bindingPath` chưa có.
+// Chỉ chạy khi user chủ động bấm nút "Tự liên kết" — KHÔNG tự đè binding cũ.
+// Map placeholder→binding sống trong fieldRegistry.ENTITY_FIELDS.
 
 import type { PageTemplate, Slot } from "@/models";
-import { lookupByPlaceholder } from "@/engines/normalize/fieldRegistry";
+import {
+  lookupByAlias,
+  lookupByPlaceholder,
+  type EntityFieldDefinition,
+} from "@/engines/normalize/fieldRegistry";
+import { guessFieldFromStaticText } from "./autoBindHeuristics";
 
 /** Strip "{{" "}}", lấy token chính. KHÔNG strip "_<n>" vì lookupByPlaceholder tự xử lý. */
 function extractPlaceholderToken(staticText: string | undefined): string | null {
@@ -24,36 +24,80 @@ function extractPlaceholderToken(staticText: string | undefined): string | null 
   return match?.[1] ?? null;
 }
 
+export type AutoBindTier = "token" | "name" | "heuristic";
+
+export interface AutoBindChange {
+  slotId: string;
+  tier: AutoBindTier;
+  bindingPath: string;
+}
+
 export interface AutoBindResult {
   template: PageTemplate;
   changedSlotIds: string[];
+  /** Chi tiết từng slot đã đổi: bind theo tầng nào. */
+  changes: AutoBindChange[];
 }
 
 /**
- * Quét template, set bindingPath cho slot text có staticText dạng "{{token}}" hoặc
- * "{{token_<n>}}" mà chưa có bindingPath. Trả về template MỚI nếu có thay đổi
- * (không mutate input), hoặc cùng tham chiếu nếu không có gì đổi.
+ * Tìm field phù hợp với 1 slot bằng cách thử lần lượt 3 tầng. Trả về undefined
+ * nếu không match gì.
+ */
+function resolveFieldForSlot(
+  slot: Slot,
+): { field: EntityFieldDefinition; tier: AutoBindTier } | null {
+  // Tầng 1: token trong staticText — ưu tiên cao nhất, đã validate dạng {{...}}.
+  const token = extractPlaceholderToken(slot.staticText);
+  if (token) {
+    const tokenField = lookupByPlaceholder(token);
+    if (tokenField) return { field: tokenField, tier: "token" };
+  }
+
+  // Tầng 2: slot.name (designer rename layer có nghĩa). Dùng aliasIndex của
+  // fieldRegistry — đã battle-test bởi pipeline import data.
+  if (slot.name?.trim()) {
+    const nameField = lookupByAlias(slot.name);
+    if (nameField) return { field: nameField, tier: "name" };
+  }
+
+  // Tầng 3: heuristic chặt theo content staticText (chỉ phone/price/hours).
+  // Bỏ qua nếu staticText là placeholder dạng {{...}} (đã thử ở tầng 1 và fail).
+  if (slot.staticText && !token) {
+    const heuristicField = guessFieldFromStaticText(slot.staticText);
+    if (heuristicField) return { field: heuristicField, tier: "heuristic" };
+  }
+
+  return null;
+}
+
+/**
+ * Quét template, set bindingPath cho slot text/shape chưa có bindingPath theo
+ * 3 tầng (token > name alias > content heuristic). Trả về template MỚI nếu có
+ * thay đổi (không mutate input), hoặc cùng tham chiếu nếu không có gì đổi.
  */
 export function autoBindPlaceholders(template: PageTemplate): AutoBindResult {
-  const changedSlotIds: string[] = [];
+  const changes: AutoBindChange[] = [];
   const nextSlots: Slot[] = template.slots.map((slot) => {
     if (slot.bindingPath) return slot;
     if (slot.kind !== "text" && slot.kind !== "shape") return slot;
-    const token = extractPlaceholderToken(slot.staticText);
-    if (!token) return slot;
-    const field = lookupByPlaceholder(token);
-    if (!field) return slot;
-    changedSlotIds.push(slot.slotId);
-    return { ...slot, bindingPath: field.bindingPath };
+    const match = resolveFieldForSlot(slot);
+    if (!match) return slot;
+    changes.push({
+      slotId: slot.slotId,
+      tier: match.tier,
+      bindingPath: match.field.bindingPath,
+    });
+    return { ...slot, bindingPath: match.field.bindingPath };
   });
 
-  if (changedSlotIds.length === 0) {
-    return { template, changedSlotIds: [] };
+  if (changes.length === 0) {
+    return { template, changedSlotIds: [], changes: [] };
   }
 
   return {
     template: { ...template, slots: nextSlots, updatedAt: Date.now() },
-    changedSlotIds,
+    changedSlotIds: changes.map((change) => change.slotId),
+    changes,
   };
 }
 
@@ -63,15 +107,42 @@ export function autoBindPlaceholders(template: PageTemplate): AutoBindResult {
  */
 export function autoBindPlaceholdersForDrafts(
   drafts: Record<string, PageTemplate>,
-): { drafts: Record<string, PageTemplate>; totalChanged: number } {
+): { drafts: Record<string, PageTemplate>; totalChanged: number; changes: AutoBindChange[] } {
   let totalChanged = 0;
+  const allChanges: AutoBindChange[] = [];
   const next: Record<string, PageTemplate> = { ...drafts };
   for (const [pageId, template] of Object.entries(drafts)) {
     const result = autoBindPlaceholders(template);
     if (result.changedSlotIds.length > 0) {
       next[pageId] = result.template;
       totalChanged += result.changedSlotIds.length;
+      allChanges.push(...result.changes);
     }
   }
-  return { drafts: next, totalChanged };
+  return { drafts: next, totalChanged, changes: allChanges };
+}
+
+/**
+ * Dry-run: tính số slot có thể auto-bind (chia theo tầng) mà không mutate
+ * template. Dùng cho UI preview trước khi user bấm.
+ */
+export function previewAutoBindForDrafts(
+  drafts: Record<string, PageTemplate>,
+): {
+  totalChangeable: number;
+  byTier: Record<AutoBindTier, number>;
+} {
+  const byTier: Record<AutoBindTier, number> = { token: 0, name: 0, heuristic: 0 };
+  let totalChangeable = 0;
+  for (const template of Object.values(drafts)) {
+    for (const slot of template.slots) {
+      if (slot.bindingPath) continue;
+      if (slot.kind !== "text" && slot.kind !== "shape") continue;
+      const match = resolveFieldForSlot(slot);
+      if (!match) continue;
+      byTier[match.tier] += 1;
+      totalChangeable += 1;
+    }
+  }
+  return { totalChangeable, byTier };
 }
