@@ -12,6 +12,7 @@ import {
   appendPageToPack,
   createBlankPageTemplate,
   duplicatePageTemplate,
+  packPageLabel,
 } from "@/features/packs/packTemplateUtils";
 import { clonePageTemplate } from "@/features/generate/templateState";
 
@@ -93,7 +94,9 @@ export function EditorPage() {
               const pack = await db.packTemplates.get(packId);
               if (!pack) return;
               const pageNumber = pack.orderedPages.length + 1;
-              const newPage = createBlankPageTemplate({ name: `Trang mới ${pageNumber}` });
+              const newPage = createBlankPageTemplate({
+                name: packPageLabel(pageNumber - 1),
+              });
               const nextPack = appendPageToPack(pack, newPage.pageTemplateId);
               await db.transaction(
                 "rw",
@@ -103,7 +106,7 @@ export function EditorPage() {
                   await db.packTemplates.put(nextPack);
                 },
               );
-              toast.success(`Đã thêm ${newPage.name}`);
+              toast.success(`Đã thêm ${packPageLabel(pageNumber - 1)}`);
               void navigate({
                 to: "/templates/$id/edit",
                 params: { id: newPage.pageTemplateId },
@@ -118,7 +121,8 @@ export function EditorPage() {
               const pack = await db.packTemplates.get(packId);
               const source = await db.pageTemplates.get(pageTemplateId);
               if (!pack || !source) return;
-              const dup = duplicatePageTemplate(source);
+              const nextIndex = pack.orderedPages.length;
+              const dup = duplicatePageTemplate(source, packPageLabel(nextIndex));
               const nextPack = appendPageToPack(pack, dup.pageTemplateId);
               await db.transaction(
                 "rw",
@@ -128,7 +132,7 @@ export function EditorPage() {
                   await db.packTemplates.put(nextPack);
                 },
               );
-              toast.success(`Đã nhân bản ${source.name}`);
+              toast.success(`Đã nhân bản ${packPageLabel(nextIndex)}`);
               void navigate({
                 to: "/templates/$id/edit",
                 params: { id: dup.pageTemplateId },
@@ -148,6 +152,7 @@ export function EditorPage() {
               }
               const target = await db.pageTemplates.get(pageTemplateId);
               if (!target) return;
+              const pageIndex = pack.orderedPages.indexOf(pageTemplateId);
               const nextPack = {
                 ...pack,
                 orderedPages: pack.orderedPages.filter((id) => id !== pageTemplateId),
@@ -176,7 +181,9 @@ export function EditorPage() {
                   void clonePageTemplate(target);
                 },
               );
-              toast.success(`Đã xóa ${target.name}`);
+              toast.success(
+                `Đã xóa ${pageIndex >= 0 ? packPageLabel(pageIndex) : "trang"}`,
+              );
               if (nextPageId && nextPageId !== pageTemplateId) {
                 void navigate({
                   to: "/templates/$id/edit",
@@ -203,20 +210,6 @@ export function EditorPage() {
                 updatedAt: Date.now(),
               });
               toast.success("Đã đổi vị trí trang");
-            }
-          : undefined
-      }
-      onRenamePackPage={
-        packId
-          ? async (pageTemplateId, newName) => {
-              const page = await db.pageTemplates.get(pageTemplateId);
-              if (!page) return;
-              await db.pageTemplates.put({
-                ...page,
-                name: newName,
-                updatedAt: Date.now(),
-              });
-              toast.success(`Đã đổi tên thành "${newName}"`);
             }
           : undefined
       }

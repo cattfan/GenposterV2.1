@@ -121,6 +121,7 @@ import type {
   PageTemplate,
   SymbolDefinition,
 } from "@/models";
+import { packPageLabel } from "@/features/packs/packTemplateUtils";
 import { DesignRenderer } from "./DesignRenderer";
 import { FONTS, ensureExtendedFontsLoaded } from "./fonts";
 import { usePageCommands, type CommandEntry } from "@/components/CommandPalette";
@@ -1072,7 +1073,6 @@ export function DesignWorkspace({
   onDuplicatePackPage,
   onDeletePackPage,
   onReorderPackPage,
-  onRenamePackPage,
 }: {
   initialDocument: DesignDocument;
   mode?: WorkspaceMode;
@@ -1090,7 +1090,6 @@ export function DesignWorkspace({
   onDuplicatePackPage?: (pageTemplateId: string) => void | Promise<void>;
   onDeletePackPage?: (pageTemplateId: string) => void | Promise<void>;
   onReorderPackPage?: (pageTemplateId: string, toIndex: number) => void | Promise<void>;
-  onRenamePackPage?: (pageTemplateId: string, newName: string) => void | Promise<void>;
 }) {
   const workspaceDocument = useMemo(
     () => ({
@@ -4654,39 +4653,8 @@ export function DesignWorkspace({
                                   />
                                 </div>
                                 <div className="min-w-0 flex-1">
-                                  <div
-                                    className="truncate text-sm font-semibold"
-                                    onDoubleClick={(e) => {
-                                      if (!onRenamePackPage) return;
-                                      e.stopPropagation();
-                                      const el = e.currentTarget;
-                                      const currentName = pageTemplate.name;
-                                      el.contentEditable = "true";
-                                      el.focus();
-                                      // Select all text
-                                      const range = document.createRange();
-                                      range.selectNodeContents(el);
-                                      const sel = window.getSelection();
-                                      sel?.removeAllRanges();
-                                      sel?.addRange(range);
-                                      const commit = () => {
-                                        el.contentEditable = "false";
-                                        const newName = (el.textContent ?? "").trim();
-                                        if (newName && newName !== currentName) {
-                                          void onRenamePackPage(pageTemplate.pageTemplateId, newName);
-                                        } else {
-                                          el.textContent = currentName;
-                                        }
-                                      };
-                                      el.onblur = commit;
-                                      el.onkeydown = (ev) => {
-                                        if (ev.key === "Enter") { ev.preventDefault(); el.blur(); }
-                                        if (ev.key === "Escape") { el.textContent = currentName; el.blur(); }
-                                      };
-                                    }}
-                                    title="Nhấp đúp để đổi tên"
-                                  >
-                                    {pageTemplate.name}
+                                  <div className="truncate text-sm font-semibold">
+                                    {packPageLabel(index)}
                                   </div>
                                   <div className="text-xs text-muted-foreground">
                                     {pageTemplate.canvas.width} x {pageTemplate.canvas.height}

@@ -54,6 +54,7 @@ import {
   createBlankPageTemplate,
   createPackTemplate,
   duplicatePageTemplate,
+  packPageLabel,
 } from "@/features/packs/packTemplateUtils";
 import {
   buildPackTemplateBundle,
@@ -283,16 +284,7 @@ function PackSummaryCard({
                   key={`${id}-${index}`}
                   className="w-[150px] shrink-0 rounded-lg border bg-background p-2 shadow-sm sm:w-[170px]"
                 >
-                  <div className="mb-2 flex items-center gap-2">
-                    <div className="grid h-7 min-w-8 place-items-center rounded-md bg-primary/10 px-1.5 text-xs font-semibold text-primary">
-                      P{index + 1}
-                    </div>
-                    <div className="min-w-0 truncate text-sm font-medium">
-                      {template
-                        ? formatTemplateDisplayName(template.name, "Trang")
-                        : "Trang khuôn không tồn tại"}
-                    </div>
-                  </div>
+                  <div className="mb-2 truncate text-sm font-medium">{packPageLabel(index)}</div>
                   <PackPreviewThumb template={template} className="w-full" />
                 </div>
               ))}
@@ -525,7 +517,7 @@ function TemplatesPage() {
     const pack = await ensureActivePack();
     const pageNumber = pack.orderedPages.length + 1;
     const page = createBlankPageTemplate({
-      name: `Trang mới ${pageNumber}`,
+      name: packPageLabel(pageNumber - 1),
       presetId,
     });
     const nextPack = appendPageToPack(pack, page.pageTemplateId);
@@ -534,22 +526,23 @@ function TemplatesPage() {
       await db.packTemplates.put(nextPack);
     });
     setEditing(nextPack);
-    toast.success(`Đã tạo ${page.name}`);
+    toast.success(`Đã tạo ${packPageLabel(pageNumber - 1)}`);
   };
 
   const duplicatePageInPack = async (template: PageTemplate) => {
     if (!editing) return;
-    const dup = duplicatePageTemplate(template);
+    const nextIndex = editing.orderedPages.length;
+    const dup = duplicatePageTemplate(template, packPageLabel(nextIndex));
     const nextPack = appendPageToPack(editing, dup.pageTemplateId);
     await db.transaction("rw", [db.pageTemplates, db.packTemplates], async () => {
       await db.pageTemplates.put(dup);
       await db.packTemplates.put(nextPack);
     });
     setEditing(nextPack);
-    toast.success("Đã nhân bản trang vào bộ khuôn");
+    toast.success(`Đã nhân bản ${packPageLabel(nextIndex)}`);
   };
 
-  const deletePageFromPack = async (template: PageTemplate) => {
+  const deletePageFromPack = async (template: PageTemplate, pageIndex?: number) => {
     const deletedTemplate = clonePageTemplate(template);
     const activePackId = editing?.packTemplateId;
     const allPacks = await db.packTemplates.toArray();
@@ -585,7 +578,7 @@ function TemplatesPage() {
       setEditing(nextEditing);
     }
     toast.success("Đã xóa trang", {
-      description: `"${formatTemplateDisplayName(template.name, "Trang")}" có thể khôi phục trong vài giây.`,
+      description: `"${pageIndex != null ? packPageLabel(pageIndex) : "Trang"}" có thể khôi phục trong vài giây.`,
       duration: UNDO_TOAST_DURATION,
       action: {
         label: "Khôi phục",
@@ -612,15 +605,6 @@ function TemplatesPage() {
             });
         },
       },
-    });
-  };
-
-  const renamePageTemplate = async (template: PageTemplate, name: string) => {
-    const nextName = name.trim();
-    if (!nextName || nextName === template.name) return;
-    await db.pageTemplates.update(template.pageTemplateId, {
-      name: nextName,
-      updatedAt: Date.now(),
     });
   };
 
@@ -1017,7 +1001,6 @@ function TemplatesPage() {
                 onCreateAiPage={onPickAiImage}
                 onDuplicatePage={duplicatePageInPack}
                 onDeletePage={deletePageFromPack}
-                onRenamePage={renamePageTemplate}
                 onDeletePack={() => deletePack(pack)}
                 onCollapse={collapsePack}
               />

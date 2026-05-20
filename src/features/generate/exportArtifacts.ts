@@ -70,8 +70,6 @@ export interface BuildCaptionInput {
   bundleIndex?: number;
   pages: ExportPageEntityData[];
   entities: Entity[];
-  /** @deprecated luôn ra 1 caption/Bộ. Tham số giữ để backward-compat. */
-  variantCount?: number;
 }
 
 export async function buildTikTokCaptionBlob(input: BuildCaptionInput): Promise<Blob> {
@@ -110,10 +108,35 @@ export function buildFallbackCaptionBlob(input: BuildCaptionInput): Blob {
   return new Blob([formatCaptionDraft(draft)], { type: "text/plain;charset=utf-8" });
 }
 
+/** Spec strict format từ design 2026-05-20: hook UPPERCASE ≤90, body ≤300, đúng 5 hashtag. */
+const HOOK_MAX = 90;
+const BODY_MAX = 300;
+const HASHTAG_COUNT = 5;
+
+export function enforceStrictFormat(draft: CaptionDraft): CaptionDraft {
+  const hookUpper = draft.hook.replace(/\s+/g, " ").trim().toUpperCase();
+  const hook = truncateAtWord(hookUpper, HOOK_MAX);
+  const bodyClean = draft.body.replace(/\s*\n\s*/g, " ").replace(/\s+/g, " ").trim();
+  const body = truncateAtWord(bodyClean, BODY_MAX);
+  const hashtags = draft.hashtags.slice(0, HASHTAG_COUNT);
+  while (hashtags.length < HASHTAG_COUNT) hashtags.push("#dalat");
+  return { hook, body, hashtags };
+}
+
+function truncateAtWord(value: string, max: number): string {
+  if (value.length <= max) return value;
+  const slice = value.slice(0, max);
+  const lastSpace = slice.lastIndexOf(" ");
+  if (lastSpace > max * 0.6) return slice.slice(0, lastSpace).trimEnd();
+  return slice.trimEnd();
+}
+
 export function formatCaptionDraft(draft: CaptionDraft): string {
-  // Format 3 phần: hook -> dòng trắng -> body -> dòng trắng -> hashtags
-  // Match style 4 ví dụ TikTok user paste.
-  return [draft.hook.trim(), "", draft.body.trim(), "", draft.hashtags.join(" ")].join("\n");
+  // Format 3 phần: hook -> dòng trắng -> body -> dòng trắng -> hashtags.
+  // Áp [enforceStrictFormat] ngay tại đây — single point đảm bảo mọi caption
+  // (AI hay fallback) đều đúng spec UPPERCASE/length.
+  const strict = enforceStrictFormat(draft);
+  return [strict.hook, "", strict.body, "", strict.hashtags.join(" ")].join("\n");
 }
 
 async function requestAiCaption(
@@ -131,19 +154,22 @@ async function requestAiCaption(
     entities: ctx.entities.slice(0, 30),
   };
 
+  const hasEntities = ctx.entityCount > 0;
   const systemPrompt = [
     "Bạn viết caption TikTok tiếng Việt cho 1 bộ ảnh du lịch/ẩm thực Đà Lạt.",
     "Mỗi bộ là 1 caption duy nhất, dùng cho 1 post TikTok. Không tạo nhiều biến thể.",
     `Phong cách yêu cầu (BẮT BUỘC theo): ${tone.styleHint}`,
     "Quy tắc dữ liệu:",
     "- Chỉ dùng tên/địa chỉ/giá/giờ có trong data. Không bịa thông tin.",
-    "- Tham chiếu cụ thể 2-4 tên địa điểm thực sự xuất hiện trong bundle nếu có.",
-    "- Cảm nhận và sắp xếp nhịp văn dựa trên mix category/style của bundle.",
-    "Quy tắc output (BẮT BUỘC):",
+    hasEntities
+      ? "- Tham chiếu cụ thể 2-4 tên địa điểm thực sự xuất hiện trong bundle."
+      : "- entities[] rỗng → TUYỆT ĐỐI KHÔNG nhắc tên quán/địa điểm cụ thể. Viết kiểu gợi cảm hứng chung chung.",
+    "- Cảm nhận và sắp xếp nhịp văn dựa trên mix category/style của bundle (nếu có).",
+    "Quy tắc output (BẮT BUỘC, sẽ bị validate cứng):",
     '- Trả JSON object duy nhất: {"hook":"...","body":"...","hashtags":["#a","#b","#c","#d","#e"]}',
-    "- hook: 1 dòng mở đầu (không cần UPPERCASE trừ khi tone yêu cầu).",
-    "- body: 1 đoạn 2-5 câu, độ dài tự nhiên theo tone (50-400 ký tự).",
-    "- hashtags: đúng 5 hashtag. 3 hashtag đầu CHÍNH XÁC là #riviudalat #dalat #dalatreview. 2 hashtag còn lại tự sinh, viết liền không dấu, liên quan tới bundle.",
+    "- hook: 1 dòng UPPERCASE, tối đa 90 ký tự (vượt sẽ bị cắt).",
+    "- body: 1 đoạn 2-4 câu, tối đa 300 ký tự (vượt sẽ bị cắt). PHẢI có 1-2 keyword SEO Đà Lạt phù hợp tone (vd: du lịch Đà Lạt / ăn uống Đà Lạt / check-in Đà Lạt / cafe Đà Lạt / homestay Đà Lạt / cẩm nang Đà Lạt).",
+    "- hashtags: ĐÚNG 5 phần tử. 3 đầu CHÍNH XÁC là #riviudalat #dalat #dalatreview. 2 cuối: AI sinh, viết liền không dấu, single word, liên quan du lịch Đà Lạt (vd: #checkindalat, #andalat, #cafedalat, #homestaydalat).",
   ].join("\n");
 
   try {

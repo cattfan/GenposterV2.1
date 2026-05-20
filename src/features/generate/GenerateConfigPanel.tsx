@@ -3,15 +3,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { ChevronDown } from "lucide-react";
 import { PackGenerateActions } from "@/features/generate/PackGenerateActions";
 import { cn } from "@/lib/utils";
 
@@ -67,15 +61,13 @@ function ConfigBody({
   normalizeCount,
   config,
   onConfigChange,
-  varyFontsFromSecondBundle,
-  onVaryFontsChange,
   activeTargetCount,
   stats,
   canGenerate,
   generateReason,
   hasEntities,
   onGenerate,
-}: Omit<Props, "bare">) {
+}: Omit<Props, "bare" | "varyFontsFromSecondBundle" | "onVaryFontsChange">) {
   return (
     <div className="flex flex-col gap-3">
       <div>
@@ -114,53 +106,31 @@ function ConfigBody({
         </div>
       </div>
 
-      <Collapsible defaultOpen>
-        <CollapsibleTrigger className="flex w-full items-center justify-between rounded-md border bg-background px-2.5 py-2 text-xs font-medium shadow-sm">
-          Đối tác
-          <ChevronDown className="size-3.5 transition-transform [[data-state=open]_&]:rotate-180" />
-        </CollapsibleTrigger>
-        <CollapsibleContent className="mt-2 flex flex-col gap-2.5">
-          <label className="flex items-start gap-2 text-xs">
-            <Checkbox
-              checked={config.prioritizePartner}
-              onCheckedChange={(v) => onConfigChange({ prioritizePartner: v === true })}
-              className="mt-0.5"
-            />
-            <span className="min-w-0 font-medium">Ưu tiên dữ liệu đối tác</span>
-          </label>
-          <label className="flex items-center gap-2 text-xs">
-            <Checkbox
-              checked={config.onlyPartner}
-              onCheckedChange={(v) => onConfigChange({ onlyPartner: v === true })}
-            />
-            Chỉ dùng dữ liệu đối tác
-          </label>
-          <div>
-            <Label className="text-xs">Số đối tác / trang</Label>
-            <Input
-              type="number"
-              min={0}
-              max={Math.max(1, activeTargetCount)}
-              value={config.onlyPartner ? activeTargetCount || 1 : config.partnerQuotaPerPage}
-              disabled={config.onlyPartner}
-              onChange={(e) =>
-                onConfigChange({
-                  partnerQuotaPerPage: Math.max(0, Number(e.target.value) || 0),
-                })
-              }
-              className="mt-1 h-8 text-sm max-lg:h-9"
-            />
-          </div>
-          <label className="flex cursor-pointer items-start gap-2 text-xs">
-            <Checkbox
-              checked={varyFontsFromSecondBundle}
-              onCheckedChange={(checked) => onVaryFontsChange(checked === true)}
-              className="mt-0.5"
-            />
-            <span className="min-w-0 font-medium">Biến thể font từ bộ thứ 2</span>
-          </label>
-        </CollapsibleContent>
-      </Collapsible>
+      <label className="flex items-start gap-2 text-xs">
+        <Checkbox
+          checked={config.prioritizePartner}
+          onCheckedChange={(v) => onConfigChange({ prioritizePartner: v === true })}
+          className="mt-0.5"
+        />
+        <span className="min-w-0 font-medium">Ưu tiên dữ liệu đối tác</span>
+      </label>
+
+      <div>
+        <Label className="text-xs">Số đối tác / trang</Label>
+        <Input
+          type="number"
+          min={0}
+          max={Math.max(1, activeTargetCount)}
+          value={config.onlyPartner ? activeTargetCount || 1 : config.partnerQuotaPerPage}
+          disabled={config.onlyPartner}
+          onChange={(e) =>
+            onConfigChange({
+              partnerQuotaPerPage: Math.max(0, Number(e.target.value) || 0),
+            })
+          }
+          className="mt-1 h-8 text-sm max-lg:h-9"
+        />
+      </div>
 
       <Separator />
 

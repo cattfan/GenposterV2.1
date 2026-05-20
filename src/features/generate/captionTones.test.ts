@@ -35,6 +35,16 @@ describe("CAPTION_TONES", () => {
       expect(typeof tone.fallbackBody).toBe("function");
     }
   });
+
+  it("fallback hooks are UPPERCASE and respect the 90-char hook cap", () => {
+    for (const tone of CAPTION_TONES) {
+      for (const hook of tone.fallbackHooks) {
+        // Emojis hợp lệ — chỉ so sánh phần chữ cái (Đà Lạt → ĐÀ LẠT).
+        expect(hook).toBe(hook.toUpperCase());
+        expect(hook.length).toBeLessThanOrEqual(90);
+      }
+    }
+  });
 });
 
 describe("pickCaptionTone", () => {

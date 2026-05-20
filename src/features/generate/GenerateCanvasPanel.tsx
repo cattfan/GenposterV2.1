@@ -4,13 +4,11 @@ import type { Asset, Entity, PageTemplate } from "@/models";
 import type { RenderedItem } from "@/models";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ux";
 import { BindCanvas } from "@/features/generate/BindCanvas";
 import { BindingIssuesPanel } from "@/features/generate/BindingIssuesPanel";
 import { AllocationWarningsPanel } from "@/features/generate/AllocationWarningsPanel";
 import { GenerateCanvasToolbar } from "@/features/generate/GenerateCanvasToolbar";
-import { formatTemplateDisplayName } from "@/lib/templateNames";
 import type { GeneratePageTabItem } from "./generatePanelProps";
 
 interface Props {
@@ -129,17 +127,9 @@ export function GenerateCanvasPanel({
                   <TabsTrigger
                     key={tab.pageTemplateId + idx}
                     value={String(idx)}
-                    className="h-7 shrink-0 gap-1 rounded-md px-2 text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+                    className="h-7 shrink-0 gap-1 rounded-md border border-transparent px-2.5 text-xs font-medium transition-colors hover:bg-muted/60 data-[state=active]:border-border/70 data-[state=active]:bg-muted data-[state=active]:font-semibold data-[state=active]:text-foreground data-[state=active]:shadow-sm"
                   >
-                    <span className="text-muted-foreground">Trang {idx + 1}</span>
-                    <span className="max-w-[9rem] truncate font-medium">
-                      {formatTemplateDisplayName(tab.name, "Trang")}
-                    </span>
-                    {tab.overrideCount > 0 ? (
-                      <Badge variant="secondary" className="h-4 px-1 text-[10px]">
-                        {tab.overrideCount}
-                      </Badge>
-                    ) : null}
+                    Trang {idx + 1}
                   </TabsTrigger>
                 ))}
               </TabsList>
@@ -191,7 +181,7 @@ export function GenerateCanvasPanel({
                     className="mx-auto flex min-h-[420px] w-full select-none items-start justify-center"
                   >
                     <div
-                      className="relative shrink-0 overflow-hidden rounded-md bg-background shadow-md ring-1 ring-border/70"
+                      className="relative shrink-0 overflow-hidden bg-background shadow-md ring-1 ring-border/70"
                       style={{ width: canvasSize.width, height: canvasSize.height }}
                     >
                       <BindCanvas
@@ -207,6 +197,7 @@ export function GenerateCanvasPanel({
                         seedKey={`${effectiveActive.pageTemplateId}:${activePageIdx}`}
                         showSafeFrame={showSafeFrame}
                         showFieldBadges={showFieldBadges}
+                        flatPreview
                       />
                     </div>
                   </div>

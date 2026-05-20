@@ -1,7 +1,6 @@
 import { nanoid } from "nanoid";
 import type { CanvasSize, PackTemplate, PageTemplate, PageType } from "@/models";
 import { db } from "@/storage/db";
-import { formatTemplateDisplayName } from "@/lib/templateNames";
 
 export const DEFAULT_PACK_NAME = "Bộ khuôn mặc định";
 
@@ -37,6 +36,11 @@ export function getCanvasPresetById(id: string) {
   return CANVAS_PRESETS.find((preset) => preset.id === id);
 }
 
+/** Nhãn trang trong bộ khuôn — luôn theo thứ tự 1-based, không đặt tên riêng. */
+export function packPageLabel(pageIndex: number): string {
+  return `Trang ${pageIndex + 1}`;
+}
+
 export function createPackTemplate(
   input: { name?: string; orderedPages?: string[] } = {},
 ): PackTemplate {
@@ -67,7 +71,7 @@ export function createBlankPageTemplate(
   };
   return {
     pageTemplateId: nanoid(),
-    name: input.name?.trim() || "Trang mới",
+    name: input.name?.trim() || packPageLabel(0),
     type: input.type ?? preset?.defaultPageType ?? "cover",
     canvas,
     slots: [],
@@ -92,7 +96,7 @@ export function duplicatePageTemplate(template: PageTemplate, name?: string): Pa
   return {
     ...copy,
     pageTemplateId,
-    name: name?.trim() || `${formatTemplateDisplayName(copy.name, "Trang")} - bản sao`,
+    name: name?.trim() || packPageLabel(0),
     slots: copy.slots.map((slot) => ({
       ...slot,
       slotId: slotIdMap.get(slot.slotId) ?? nanoid(),

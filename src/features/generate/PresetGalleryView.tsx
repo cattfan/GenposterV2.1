@@ -7,7 +7,6 @@ import {
   Trash2,
 } from "lucide-react";
 import type { Asset, Entity, GenerateBindingPreset, PageTemplate } from "@/models";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -28,6 +27,7 @@ import { EmptyState } from "@/components/ux";
 import { PageRenderer } from "@/features/render/PageRenderer";
 import type { PresetCardPagePreviewContext } from "@/features/generate/presetCardPreview";
 import { formatTemplateDisplayName } from "@/lib/templateNames";
+import { packPageLabel } from "@/features/packs/packTemplateUtils";
 
 interface PresetGalleryItem {
   preset: GenerateBindingPreset;
@@ -163,7 +163,8 @@ export function PresetGalleryView({
                     Bộ mẫu hoặc trang mẫu không còn tồn tại.
                   </div>
                 ) : (
-                  <div className="grid grid-cols-[repeat(auto-fill,minmax(168px,180px))] gap-3">
+                  <div className="overflow-x-auto pb-1 [scrollbar-width:thin]">
+                    <div className="flex w-max min-w-full gap-3">
                     {pages.map((page, index) => {
                       const previewTemplate = resolvePreviewTemplate(preset, page);
                       if (!previewTemplate) return null;
@@ -180,18 +181,11 @@ export function PresetGalleryView({
                         <button
                           key={`${preset.presetId}:${page.pageTemplateId}`}
                           type="button"
-                          className="group flex w-full max-w-[180px] flex-col gap-2 rounded-xl border bg-background p-2 text-left shadow-sm transition hover:border-primary/50"
+                          className="group flex w-[172px] shrink-0 flex-col gap-2 rounded-xl border bg-background p-2 text-left shadow-sm transition hover:border-primary/50"
                           onClick={() => onOpenPreset(preset, index)}
                         >
-                          <div className="flex min-w-0 flex-col gap-1">
-                            <Badge variant="secondary" className="w-fit shrink-0">
-                              Trang {index + 1}
-                            </Badge>
-                            <div className="truncate text-sm font-medium">
-                              {formatTemplateDisplayName(page.name, "Trang")}
-                            </div>
-                          </div>
-                          <div className="grid aspect-[3/4] w-full place-items-center overflow-hidden rounded-md border bg-muted/20">
+                          <div className="truncate text-sm font-medium">{packPageLabel(index)}</div>
+                          <div className="grid h-[205px] place-items-center overflow-hidden border bg-muted/20">
                             <PageRenderer
                               template={previewTemplate}
                               entities={entities}
@@ -207,6 +201,7 @@ export function PresetGalleryView({
                         </button>
                       );
                     })}
+                    </div>
                   </div>
                 )}
               </div>

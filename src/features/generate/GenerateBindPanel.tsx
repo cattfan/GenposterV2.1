@@ -1,9 +1,12 @@
+import type { ReactNode } from "react";
 import {
   AlertTriangle,
+  ClipboardPaste,
   Copy,
   Link2,
   Link2Off,
   Loader2,
+  MoreHorizontal,
   MousePointerClick,
   Wand2,
 } from "lucide-react";
@@ -30,6 +33,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { EmptyState } from "@/components/ux";
 import { TextListBindingPanel, type TextListFieldOption } from "@/features/generate/TextListBindingPanel";
 import { TextRewritePanel } from "@/features/generate/TextRewritePanel";
@@ -136,21 +151,174 @@ function BindPanelToolbar({ selectedSlotCount }: { selectedSlotCount: number }) 
   );
 }
 
+function ToolbarDivider() {
+  return <div className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden />;
+}
+
+function ToolbarGroup({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex shrink-0 items-center gap-0.5 rounded-md border bg-background p-0.5 shadow-sm">
+      {children}
+    </div>
+  );
+}
+
+function BindPanelActionsBar({
+  formatClipboard,
+  showGroupButton,
+  groupButtonActive,
+  selectedDataGroupCount,
+  showClusterPasteButton,
+  clusterPasteTargetsCount,
+  relatedFormatTargetCount,
+  onCopyFormat,
+  onPasteToSelected,
+  onGroupSelected,
+  onClearGroups,
+  onPasteToCluster,
+  onPasteToRelatedCluster,
+}: {
+  formatClipboard: SlotFormatClipboard | null;
+  showGroupButton: boolean;
+  groupButtonActive: boolean;
+  selectedDataGroupCount: number;
+  showClusterPasteButton: boolean;
+  clusterPasteTargetsCount: number;
+  relatedFormatTargetCount: number;
+  onCopyFormat: () => void;
+  onPasteToSelected: () => void;
+  onGroupSelected: () => void;
+  onClearGroups: () => void;
+  onPasteToCluster: () => void;
+  onPasteToRelatedCluster: () => void;
+}) {
+  const extraActions =
+    (showClusterPasteButton ? 1 : 0) + (relatedFormatTargetCount > 1 ? 1 : 0) + (selectedDataGroupCount > 0 ? 1 : 0);
+
+  return (
+    <TooltipProvider delayDuration={300}>
+      <div
+        role="toolbar"
+        aria-label="Thao tác liên kết"
+        className="flex min-h-11 flex-nowrap items-center gap-1.5 overflow-x-auto border-b bg-muted/30 px-2 py-1.5"
+      >
+        <ToolbarGroup>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="size-8 shrink-0"
+                onClick={onCopyFormat}
+                aria-label="Sao chép liên kết"
+              >
+                <Copy className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Sao chép liên kết</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className={cn(
+                  "size-8 shrink-0",
+                  formatClipboard && "bg-primary/10 text-primary hover:bg-primary/15",
+                )}
+                disabled={!formatClipboard}
+                onClick={onPasteToSelected}
+                aria-label="Dán vào khối đang chọn"
+              >
+                <ClipboardPaste className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {formatClipboard
+                ? `Dán: ${formatClipboard.label} · ${formatClipboard.sourcePageLabel}`
+                : "Dán vào khối đang chọn"}
+            </TooltipContent>
+          </Tooltip>
+        </ToolbarGroup>
+
+        {showGroupButton ? (
+          <>
+            <ToolbarDivider />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className={cn(
+                    "size-8 shrink-0",
+                    groupButtonActive && "bg-primary/10 text-primary hover:bg-primary/15",
+                  )}
+                  onClick={onGroupSelected}
+                  aria-label="Nhóm dữ liệu"
+                  aria-pressed={groupButtonActive}
+                >
+                  <Link2 className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Nhóm dữ liệu</TooltipContent>
+            </Tooltip>
+          </>
+        ) : null}
+
+        {extraActions > 0 ? (
+          <>
+            <ToolbarDivider />
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="size-8 shrink-0"
+                  aria-label="Thêm thao tác liên kết"
+                >
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {selectedDataGroupCount > 0 ? (
+                  <DropdownMenuItem onClick={onClearGroups}>
+                    <Link2Off className="mr-2 size-4" /> Bỏ nhóm
+                  </DropdownMenuItem>
+                ) : null}
+                {showClusterPasteButton ? (
+                  <DropdownMenuItem
+                    disabled={clusterPasteTargetsCount === 0}
+                    onClick={onPasteToCluster}
+                  >
+                    <Wand2 className="mr-2 size-4" /> Dán vào cùng cụm
+                  </DropdownMenuItem>
+                ) : null}
+                {relatedFormatTargetCount > 1 ? (
+                  <DropdownMenuItem disabled={!formatClipboard} onClick={onPasteToRelatedCluster}>
+                    <Wand2 className="mr-2 size-4" /> Dán vào cụm liên quan
+                  </DropdownMenuItem>
+                ) : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
+        ) : null}
+      </div>
+    </TooltipProvider>
+  );
+}
+
 function BindPanelBody(props: Props) {
   const {
-    selectedSlotCount,
     selectedSlotsEmpty,
     selectedBindableEmpty,
-    panelPreviewEntity,
-    formatClipboard,
     hasMultipleSelectedClusters,
     shouldShowClusterSourceControls,
-    clusterPasteTargetsCount,
-    showClusterPasteButton,
-    relatedFormatTargetCount,
-    selectedDataGroupCount,
-    showGroupButton,
-    groupButtonActive,
+    clusterSourceSlots,
+    clusterSourceConfig,
     textSlots,
     imageSlots,
     showTextListPanel,
@@ -168,15 +336,7 @@ function BindPanelBody(props: Props) {
     sheetOptions,
     allValue,
     renderSourceControls,
-    clusterSourceSlots,
-    clusterSourceConfig,
     slotSourceConfig,
-    onCopyFormat,
-    onPasteToSelected,
-    onPasteToCluster,
-    onPasteToRelatedCluster,
-    onGroupSelected,
-    onClearGroups,
     onTextBindingChange,
     onImageBindingChange,
     onRandomScopeSheetChange,
@@ -209,98 +369,6 @@ function BindPanelBody(props: Props) {
 
       {!selectedSlotsEmpty && !selectedBindableEmpty ? (
         <>
-          {panelPreviewEntity ? (
-            <Badge variant="outline" className="w-fit max-w-full truncate font-normal">
-              Xem trước cụm: {panelPreviewEntity.name}
-              {panelPreviewEntity.sheetName ? ` · ${panelPreviewEntity.sheetName}` : ""}
-            </Badge>
-          ) : null}
-
-          <div className="rounded-md border bg-background p-2 shadow-sm">
-            <div className="grid grid-cols-2 gap-1.5">
-              {formatClipboard ? (
-                <Badge
-                  variant="outline"
-                  className="col-span-2 h-8 justify-center truncate px-2 text-xs"
-                  title={`Sao chép từ ${formatClipboard.sourcePageLabel}`}
-                >
-                  Đã sao chép: {formatClipboard.label} · {formatClipboard.sourcePageLabel}
-                </Badge>
-              ) : null}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-9 justify-start px-2 text-xs max-lg:h-10"
-                onClick={onCopyFormat}
-                title="Sao chép trường dữ liệu, nguồn dữ liệu cụm và cách nhóm — có thể dán sang trang khác"
-              >
-                <Copy className="mr-1 size-3" /> Sao chép liên kết
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-9 justify-start px-2 text-xs max-lg:h-10"
-                disabled={!formatClipboard}
-                onClick={onPasteToSelected}
-              >
-                <Wand2 className="mr-1 size-3" /> Dán vào khối
-              </Button>
-              {showGroupButton ? (
-                <Button
-                  type="button"
-                  variant={groupButtonActive ? "secondary" : "outline"}
-                  size="sm"
-                  className="h-9 justify-start px-2 text-xs max-lg:h-10"
-                  onClick={onGroupSelected}
-                >
-                  <Link2 className="mr-1 size-3" /> Nhóm dữ liệu
-                </Button>
-              ) : null}
-              {selectedDataGroupCount > 0 ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-9 justify-start px-2 text-xs max-lg:h-10"
-                  onClick={onClearGroups}
-                >
-                  <Link2Off className="mr-1 size-3" /> Bỏ nhóm
-                </Button>
-              ) : null}
-              {showClusterPasteButton ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  className="col-span-2 h-9 justify-start px-2 text-xs max-lg:h-10"
-                  disabled={clusterPasteTargetsCount === 0}
-                  onClick={onPasteToCluster}
-                  title={
-                    clusterPasteTargetsCount > 0
-                      ? `Dán liên kết cụm layout vào ${clusterPasteTargetsCount} khối trên trang này`
-                      : "Trang này không có cụm layout giống bản sao chép"
-                  }
-                >
-                  <Wand2 className="mr-1 size-3" /> Dán vào cùng cụm trang này
-                </Button>
-              ) : null}
-              {relatedFormatTargetCount > 1 ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-9 justify-start px-2 text-xs max-lg:h-10"
-                  disabled={!formatClipboard}
-                  onClick={onPasteToRelatedCluster}
-                >
-                  Dán dữ liệu vào cụm
-                </Button>
-              ) : null}
-            </div>
-          </div>
-
           {hasMultipleSelectedClusters ? (
             <p className="rounded-md border border-dashed bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">
               Đang chọn khối từ nhiều cụm — chọn khối trong một cụm để đổi nguồn dữ liệu chung.
@@ -420,11 +488,6 @@ function BindPanelBody(props: Props) {
                             ))}
                           </SelectContent>
                         </Select>
-                        {!row.hasLinkedText ? (
-                          <p className="text-xs leading-snug text-muted-foreground">
-                            Muốn dùng ảnh theo quán, hãy nhóm khung ảnh với trường Tên/Địa chỉ/Giá.
-                          </p>
-                        ) : null}
                         {row.showRandomScope ? (
                           <div className="grid gap-2 rounded-md border bg-background/70 p-2">
                             <div>
@@ -528,13 +591,53 @@ function BindPanelBody(props: Props) {
 }
 
 export function GenerateBindPanel(props: Props) {
+  const showActions = !props.selectedSlotsEmpty && !props.selectedBindableEmpty;
+
   if (props.bare) {
-    return <BindPanelBody {...props} />;
+    return (
+      <div className="flex flex-col gap-3">
+        {showActions ? (
+          <BindPanelActionsBar
+            formatClipboard={props.formatClipboard}
+            showGroupButton={props.showGroupButton}
+            groupButtonActive={props.groupButtonActive}
+            selectedDataGroupCount={props.selectedDataGroupCount}
+            showClusterPasteButton={props.showClusterPasteButton}
+            clusterPasteTargetsCount={props.clusterPasteTargetsCount}
+            relatedFormatTargetCount={props.relatedFormatTargetCount}
+            onCopyFormat={props.onCopyFormat}
+            onPasteToSelected={props.onPasteToSelected}
+            onGroupSelected={props.onGroupSelected}
+            onClearGroups={props.onClearGroups}
+            onPasteToCluster={props.onPasteToCluster}
+            onPasteToRelatedCluster={props.onPasteToRelatedCluster}
+          />
+        ) : null}
+        <BindPanelBody {...props} />
+      </div>
+    );
   }
 
   return (
     <Card className={cn("overflow-hidden border-0 shadow-none lg:border lg:shadow-sm")}>
       <BindPanelToolbar selectedSlotCount={props.selectedSlotCount} />
+      {showActions ? (
+        <BindPanelActionsBar
+          formatClipboard={props.formatClipboard}
+          showGroupButton={props.showGroupButton}
+          groupButtonActive={props.groupButtonActive}
+          selectedDataGroupCount={props.selectedDataGroupCount}
+          showClusterPasteButton={props.showClusterPasteButton}
+          clusterPasteTargetsCount={props.clusterPasteTargetsCount}
+          relatedFormatTargetCount={props.relatedFormatTargetCount}
+          onCopyFormat={props.onCopyFormat}
+          onPasteToSelected={props.onPasteToSelected}
+          onGroupSelected={props.onGroupSelected}
+          onClearGroups={props.onClearGroups}
+          onPasteToCluster={props.onPasteToCluster}
+          onPasteToRelatedCluster={props.onPasteToRelatedCluster}
+        />
+      ) : null}
       <CardContent className="p-3">
         <BindPanelBody {...props} />
       </CardContent>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
+import { useMemo, type WheelEvent } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -36,9 +36,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { formatTemplateDisplayName } from "@/lib/templateNames";
 import type { PackTemplate, PageTemplate } from "@/models";
-import { CANVAS_PRESETS } from "./packTemplateUtils";
+import { CANVAS_PRESETS, packPageLabel } from "./packTemplateUtils";
 import { PackPagePreview } from "./PackPagePreview";
 
 interface Props {
@@ -50,7 +49,6 @@ interface Props {
   onCreateAiPage?: () => void;
   onDuplicatePage?: (template: PageTemplate) => void;
   onDeletePage?: (template: PageTemplate, index: number) => void;
-  onRenamePage?: (template: PageTemplate, name: string) => void | Promise<void>;
   onDeletePack?: () => void;
   onCollapse?: () => void;
 }
@@ -91,7 +89,6 @@ function SortablePageCard({
   onOpen,
   onDuplicate,
   onDelete,
-  onRename,
 }: {
   id: string;
   index: number;
@@ -99,39 +96,14 @@ function SortablePageCard({
   onOpen: () => void;
   onDuplicate?: () => void;
   onDelete?: () => void;
-  onRename?: (name: string) => void | Promise<void>;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
   });
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [renaming, setRenaming] = useState(false);
-  const [draftName, setDraftName] = useState(tpl?.name ?? "");
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.55 : 1,
-  };
-
-  useEffect(() => {
-    setDraftName(tpl?.name ?? "");
-  }, [tpl?.name]);
-
-  useEffect(() => {
-    if (!renaming) return;
-    inputRef.current?.focus();
-    inputRef.current?.select();
-  }, [renaming]);
-
-  const commitRename = () => {
-    const nextName = draftName.trim();
-    setRenaming(false);
-    if (!tpl) return;
-    if (!nextName || nextName === tpl.name) {
-      setDraftName(tpl.name);
-      return;
-    }
-    void onRename?.(nextName);
   };
 
   return (
@@ -152,44 +124,8 @@ function SortablePageCard({
             <GripVertical className="size-4" />
           </button>
 
-          <div className="grid h-8 min-w-9 shrink-0 place-items-center rounded-md bg-primary px-2 text-xs font-semibold text-primary-foreground shadow-sm">
-            P{index + 1}
-          </div>
-
-          <div className="min-w-0 flex-1" onPointerDown={(event) => event.stopPropagation()}>
-            {renaming ? (
-              <Input
-                ref={inputRef}
-                value={draftName}
-                className="h-8 bg-background"
-                onChange={(event) => setDraftName(event.target.value)}
-                onBlur={commitRename}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    commitRename();
-                  }
-                  if (event.key === "Escape") {
-                    event.preventDefault();
-                    setDraftName(tpl?.name ?? "");
-                    setRenaming(false);
-                  }
-                }}
-                aria-label="Đổi tên trang"
-              />
-            ) : (
-              <button
-                type="button"
-                className="max-w-full truncate text-left font-medium leading-5"
-                onDoubleClick={() => {
-                  if (tpl) setRenaming(true);
-                }}
-                disabled={!tpl}
-                title="Bấm đúp để đổi tên"
-              >
-                {tpl ? formatTemplateDisplayName(tpl.name, "Trang") : "Trang khuôn không tồn tại"}
-              </button>
-            )}
+          <div className="min-w-0 flex-1 truncate font-medium leading-5">
+            {tpl ? packPageLabel(index) : "Trang khuôn không tồn tại"}
           </div>
         </div>
 
@@ -255,7 +191,6 @@ export function PackBuilder({
   onCreateAiPage,
   onDuplicatePage,
   onDeletePage,
-  onRenamePage,
   onDeletePack,
   onCollapse,
 }: Props) {
@@ -413,11 +348,6 @@ export function PackBuilder({
                         onDelete={
                           tplMap.get(item.id)
                             ? () => onDeletePage?.(tplMap.get(item.id)!, item.idx)
-                            : undefined
-                        }
-                        onRename={
-                          tplMap.get(item.id)
-                            ? (name) => onRenamePage?.(tplMap.get(item.id)!, name)
                             : undefined
                         }
                       />

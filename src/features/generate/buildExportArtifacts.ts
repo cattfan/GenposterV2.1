@@ -10,7 +10,7 @@
 // Caller chịu trách nhiệm gọi `downloadMultiBundleZip` (vì naming file phụ
 // thuộc context: "toàn bộ" vs "1 bundle").
 
-import type { Entity, GenerationJob, RenderedItem } from "@/models";
+import type { Entity, GenerationJob, PageTemplate, RenderedItem } from "@/models";
 import { nodeToPngBlob } from "@/features/render/exportPng";
 import {
   buildFallbackCaptionBlob,
@@ -18,6 +18,7 @@ import {
   buildPartnerWorkbookBlob,
   type ExportPageEntityData,
 } from "@/features/generate/exportArtifacts";
+import { collectVisibleEntityIds } from "@/lib/packDisplay";
 
 export interface BundleArtifactInputPage {
   pageIndex: number;
@@ -174,16 +175,51 @@ export async function assembleBundleArtifacts(
   return { bundles: out, totalRendered, totalFailed };
 }
 
+export interface ToExportPageDataOptions {
+  /** PageTemplate đầy đủ slot definitions để check visibility. */
+  pageTemplate?: PageTemplate;
+  /** Map entityId -> Entity để resolve binding value. */
+  entitiesById?: Map<string, Entity>;
+}
+
 /**
  * Convenience: chuyển 1 RenderedPage của GenerationJob về ExportPageEntityData
  * — cùng shape mà cả exportZip và exportBundleZip dùng.
+ *
+ * Khi truyền `options` đầy đủ, hàm sẽ filter `entityId` + `items` chỉ giữ lại
+ * các entity thực sự được render lên trang (qua [collectVisibleEntityIds]).
+ * Điều này đảm bảo caption.txt và doitac.xlsx không "tự tạo data" về entity
+ * mà user chưa bind slot — fix bug được mô tả trong design 2026-05-20.
+ *
+ * Bỏ trống `options` để giữ hành vi cũ (backward-compat cho test/script).
  */
-export function toExportPageData(page: GenerationJob["pages"][number]): ExportPageEntityData {
+export function toExportPageData(
+  page: GenerationJob["pages"][number],
+  options: ToExportPageDataOptions = {},
+): ExportPageEntityData {
+  const items = page.items as RenderedItem[] | undefined;
+  if (!options.pageTemplate || !options.entitiesById) {
+    return {
+      pageFile: page.pageFile,
+      pageName: page.workingTemplate?.name,
+      entityId: page.entityId,
+      entityName: page.entityName,
+      items,
+    };
+  }
+  const visible = new Set(
+    collectVisibleEntityIds(page, options.pageTemplate, options.entitiesById),
+  );
+  const filteredEntityId =
+    page.entityId && visible.has(page.entityId) ? page.entityId : undefined;
+  const filteredItems = items?.filter(
+    (item) => !item.entityId || visible.has(item.entityId),
+  );
   return {
     pageFile: page.pageFile,
     pageName: page.workingTemplate?.name,
-    entityId: page.entityId,
-    entityName: page.entityName,
-    items: page.items as RenderedItem[] | undefined,
+    entityId: filteredEntityId,
+    entityName: filteredEntityId ? page.entityName : undefined,
+    items: filteredItems,
   };
 }

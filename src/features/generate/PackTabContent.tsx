@@ -7,10 +7,12 @@ import { toast } from "sonner";
 import {
   Download,
   Package,
-  Type,
   Star,
   Loader2,
   Play as PlayIcon,
+  Check,
+  Pencil,
+  X,
 } from "lucide-react";
 import type {
   Asset,
@@ -23,7 +25,6 @@ import type {
   Slot,
 } from "@/models";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -32,7 +33,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
   TEXT_BINDING_OPTIONS,
@@ -131,6 +131,7 @@ import {
 } from "@/features/generate/generatePresetPortability";
 import { exportPresetJsonToDataServer } from "@/server/presetExport";
 import { formatTemplateDisplayName } from "@/lib/templateNames";
+import { packPageLabel } from "@/features/packs/packTemplateUtils";
 import { usePageCommands, type CommandEntry } from "@/components/CommandPalette";
 import { createProgressToast } from "@/components/ux";
 import {
@@ -2513,6 +2514,32 @@ export function PackTabContent({
     () => new Set(filteredPages?.map((page) => page.pageIndex) ?? []),
     [filteredPages],
   );
+  // entitiesById + getExportPageTemplate dùng cho [toExportPageData] để lọc
+  // entityId/items theo visibility thật sự (xem design 2026-05-20). Memo
+  // theo tpls/entities/packOv để tránh rebuild Map mỗi lần render bundle card.
+  const entitiesById = useMemo(
+    () => new Map(entities.map((e) => [e.entityId, e])),
+    [entities],
+  );
+  const tplsById = useMemo(
+    () => new Map(tpls.map((t) => [t.pageTemplateId, t])),
+    [tpls],
+  );
+  const getExportPageTemplate = useCallback(
+    (page: GenerationJob["pages"][number]): PageTemplate | undefined => {
+      if (page.workingTemplate) return page.workingTemplate;
+      const base = tplsById.get(page.pageTemplateId);
+      if (!base) return undefined;
+      return resolvePageWorkingTemplate(
+        base,
+        page.bindOverrides ?? packOv[page.pageTemplateId],
+        undefined,
+        GENERATE_TEMPLATE_OPTIONS,
+      );
+    },
+    [tplsById, packOv],
+  );
+
   const bundleGroups = useMemo(() => {
     if (!currentJob || !jobPack) return [];
     return buildBundleGroups(currentJob, jobPack, tpls, entities)
@@ -2628,7 +2655,10 @@ export function PackTabContent({
           pages: pages.map((p) => ({
             pageIndex: p.pageIndex,
             node: packRefs.current.get(p.pageIndex) ?? null,
-            pageData: toExportPageData(p),
+            pageData: toExportPageData(p, {
+              pageTemplate: getExportPageTemplate(p),
+              entitiesById,
+            }),
           })),
         })),
         onProgress: (step) =>
@@ -2675,17 +2705,21 @@ export function PackTabContent({
         bundles: [
           {
             bundleLabel: bundle.bundleLabel,
-            pages: bundle.pages.map((meta) => ({
-              pageIndex: meta.page.pageIndex,
-              node: packRefs.current.get(meta.page.pageIndex) ?? null,
-              pageData: {
-                pageFile: meta.displayPageName,
-                pageName: meta.pageTemplate?.name ?? meta.page.workingTemplate?.name,
-                entityId: meta.page.entityId,
-                entityName: meta.page.entityName,
-                items: meta.page.items,
-              },
-            })),
+            pages: bundle.pages.map((meta) => {
+              const filtered = toExportPageData(meta.page, {
+                pageTemplate: meta.pageTemplate ?? getExportPageTemplate(meta.page),
+                entitiesById,
+              });
+              return {
+                pageIndex: meta.page.pageIndex,
+                node: packRefs.current.get(meta.page.pageIndex) ?? null,
+                pageData: {
+                  ...filtered,
+                  pageFile: meta.displayPageName,
+                  pageName: meta.pageTemplate?.name ?? meta.page.workingTemplate?.name,
+                },
+              };
+            }),
           },
         ],
         onProgress: (step) =>
@@ -3010,127 +3044,106 @@ export function PackTabContent({
             }}
           />
 
-          {/* Kết quả render */}
+          {/* Kết quả render — sticky toolbar gộp các thao tác global + danh
+              sách bundle. Per-bundle header tối giản, card không còn border
+              tím / filename / footer buttons (xem design 2026-05-20). */}
           {currentJob && currentJob.pages.length > 0 && (
             <>
-              {bundleGroups.length > 2 && (
-                <div className="sticky top-0 z-20 -mx-4 mb-3 flex flex-wrap items-center gap-2 border-b bg-background/95 px-4 py-2 backdrop-blur">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    Nhảy tới bộ:
-                  </span>
-                  {bundleGroups.map((bundle) => (
-                    <Button
-                      key={bundle.bundleIndex}
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 px-2 text-xs"
-                      onClick={() => {
-                        const el = document.getElementById(`bundle-${bundle.bundleIndex}`);
-                        el?.scrollIntoView({ behavior: "smooth", block: "start" });
-                      }}
-                      title={`Tới ${bundle.bundleLabel} (${bundle.pages.length} trang)`}
-                    >
-                      {bundle.bundleLabel}
-                    </Button>
-                  ))}
+              <div className="sticky top-0 z-20 -mx-4 mb-3 flex flex-wrap items-center gap-2 border-b bg-background/95 px-4 py-2 backdrop-blur">
+                <Select value={filter} onValueChange={(v) => setFilter(v as Filter)}>
+                  <SelectTrigger className="h-9 w-44">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tất cả</SelectItem>
+                    <SelectItem value="selected">Đang chọn</SelectItem>
+                    <SelectItem value="errors">Có cảnh báo</SelectItem>
+                    <SelectItem value="partner">Có đối tác</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSelectedAll(true)}
+                >
+                  Chọn hết
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSelectedAll(false)}
+                >
+                  Bỏ chọn hết
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void exportZip();
+                  }}
+                  title="Xuất toàn bộ bộ ảnh đã chọn thành file ZIP"
+                >
+                  <Package className="size-4 mr-2" /> Xuất ZIP
+                </Button>
+                <div className="ml-auto flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">{currentJob.pages.length} trang</Badge>
+                  <Badge variant="secondary">
+                    {currentJob.pages.filter((p) => p.selected).length} đã chọn
+                  </Badge>
                 </div>
-              )}
+              </div>
               <div className="space-y-6">
-                {bundleGroups.map((bundle, bundleGroupIndex) => (
+                {bundleGroups.map((bundle) => (
                   <div
                     key={bundle.bundleIndex}
                     id={`bundle-${bundle.bundleIndex}`}
                     className="space-y-3 scroll-mt-20"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex flex-wrap items-center gap-3">
-                        <h2 className="text-lg font-semibold">{bundle.bundleLabel}</h2>
-                        <Badge variant="outline">{bundle.pages.length} trang</Badge>
-                        {(() => {
-                          const bundleAllSelected = bundle.pages.every((meta) => meta.page.selected);
-                          return (
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant={bundleAllSelected ? "secondary" : "outline"}
-                              onClick={() => {
-                                bundle.pages.forEach((meta) => {
-                                  updatePage(meta.page.pageIndex, (page) => ({
-                                    ...page,
-                                    selected: !bundleAllSelected,
-                                  }));
-                                });
-                              }}
-                            >
-                              {bundleAllSelected ? "Bỏ chọn cả bộ" : "Chọn cả bộ"}
-                            </Button>
-                          );
-                        })()}
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={(event) => {
-                            event.preventDefault();
-                            void exportBundleZip(bundle);
-                          }}
-                          disabled={bundleExportingIndex === bundle.bundleIndex}
-                        >
-                          {bundleExportingIndex === bundle.bundleIndex ? (
-                            <Loader2 className="size-3 mr-1 animate-spin" />
-                          ) : (
-                            <Package className="size-3 mr-1" />
-                          )}
-                          Tải bộ
-                        </Button>
-                      </div>
-                      {bundleGroupIndex === 0 && (
-                        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-                          <Badge variant="outline">{currentJob.pages.length} trang</Badge>
-                          <Badge variant="secondary">
-                            {currentJob.pages.filter((p) => p.selected).length} đã chọn
-                          </Badge>
-                          <Select value={filter} onValueChange={(v) => setFilter(v as Filter)}>
-                            <SelectTrigger className="h-9 w-44">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="all">Tất cả</SelectItem>
-                              <SelectItem value="selected">Đang chọn</SelectItem>
-                              <SelectItem value="errors">Có cảnh báo</SelectItem>
-                              <SelectItem value="partner">Có đối tác</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setSelectedAll(true)}
-                          >
-                            Chọn hết
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setSelectedAll(false)}
-                          >
-                            Bỏ chọn hết
-                          </Button>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <h2 className="text-lg font-semibold">{bundle.bundleLabel}</h2>
+                      <Badge variant="outline">{bundle.pages.length} trang</Badge>
+                      {(() => {
+                        const bundleAllSelected = bundle.pages.every(
+                          (meta) => meta.page.selected,
+                        );
+                        return (
                           <Button
                             type="button"
                             size="sm"
-                            onClick={(event) => {
-                              event.preventDefault();
-                              void exportZip();
+                            variant={bundleAllSelected ? "secondary" : "outline"}
+                            onClick={() => {
+                              bundle.pages.forEach((meta) => {
+                                updatePage(meta.page.pageIndex, (page) => ({
+                                  ...page,
+                                  selected: !bundleAllSelected,
+                                }));
+                              });
                             }}
-                            title="Xuất toàn bộ bộ ảnh đã chọn thành file ZIP"
                           >
-                            <Package className="size-4 mr-2" /> Xuất ZIP
+                            {bundleAllSelected ? "Bỏ chọn cả bộ" : "Chọn cả bộ"}
                           </Button>
-                        </div>
-                      )}
+                        );
+                      })()}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          void exportBundleZip(bundle);
+                        }}
+                        disabled={bundleExportingIndex === bundle.bundleIndex}
+                      >
+                        {bundleExportingIndex === bundle.bundleIndex ? (
+                          <Loader2 className="size-3 mr-1 animate-spin" />
+                        ) : (
+                          <Package className="size-3 mr-1" />
+                        )}
+                        Tải bộ
+                      </Button>
                     </div>
                     <BundleImageWarningsAlert
                       bundleLabel={bundle.bundleLabel}
@@ -3138,10 +3151,10 @@ export function PackTabContent({
                     />
                     <div className="overflow-x-auto pb-2">
                       <div className="flex w-max gap-4">
-                      {bundle.pages.map((meta) => {
-                        const page = meta.page;
-                        const tpl = meta.pageTemplate;
-                        if (!tpl) return null;
+                        {bundle.pages.map((meta) => {
+                          const page = meta.page;
+                          const tpl = meta.pageTemplate;
+                          if (!tpl) return null;
                           const eff =
                             page.workingTemplate ??
                             resolvePageWorkingTemplate(
@@ -3150,48 +3163,24 @@ export function PackTabContent({
                               undefined,
                               GENERATE_TEMPLATE_OPTIONS,
                             );
-                        if (!eff) return null;
-                        const ent = page.entityId
-                          ? entities.find((entity) => entity.entityId === page.entityId)
-                          : undefined;
-                        const previewScale = Math.min(
-                          320 / eff.canvas.width,
-                          420 / eff.canvas.height,
-                        );
-                        const previewWidth = Math.round(eff.canvas.width * previewScale);
-                        const previewHeight = Math.round(eff.canvas.height * previewScale);
-                        return (
-                          <Card
-                            key={page.pageIndex}
-                            className={`w-[352px] shrink-0 ${page.selected ? "border-primary" : ""}`}
-                          >
-                            <CardHeader className="p-3 pb-2">
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="flex items-start gap-2 min-w-0">
-                                  <Checkbox
-                                    checked={page.selected}
-                                    onCheckedChange={() => toggleSelected(page.pageIndex)}
-                                  />
-                                  <div className="min-w-0">
-                                    <div className="font-semibold text-sm truncate">
-                                      {formatTemplateDisplayName(tpl.name, "Trang")}
-                                    </div>
-                                    <div className="text-xs text-muted-foreground truncate">
-                                      {meta.displayPageName}
-                                    </div>
-                                  </div>
-                                </div>
-                                {meta.hasPartnerExposure && (
-                                  <Badge className="gap-1">
-                                    <Star className="size-3" /> Đối tác
-                                  </Badge>
-                                )}
-                              </div>
-                            </CardHeader>
-                            <CardContent className="p-3 pt-0 space-y-2">
+                          if (!eff) return null;
+                          const ent = page.entityId
+                            ? entities.find((entity) => entity.entityId === page.entityId)
+                            : undefined;
+                          const previewScale = Math.min(
+                            320 / eff.canvas.width,
+                            420 / eff.canvas.height,
+                          );
+                          const previewWidth = Math.round(eff.canvas.width * previewScale);
+                          const previewHeight = Math.round(eff.canvas.height * previewScale);
+                          return (
+                            <div
+                              key={page.pageIndex}
+                              className="relative w-[280px] shrink-0"
+                            >
                               <button
                                 type="button"
-                                className="grid place-items-center overflow-hidden rounded border bg-muted/30 p-2 transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                className="group relative block w-full overflow-hidden border bg-muted/30 transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                                 title="Bấm để phóng to ảnh"
                                 onClick={() =>
                                   setZoomedPageIndex((current) =>
@@ -3203,7 +3192,7 @@ export function PackTabContent({
                                   ref={(el) => {
                                     if (el) packRefs.current.set(page.pageIndex, el);
                                   }}
-                                  className="overflow-hidden bg-background"
+                                  className="mx-auto overflow-hidden bg-background"
                                   style={{ width: previewWidth, height: previewHeight }}
                                 >
                                   <PageRenderer
@@ -3219,33 +3208,44 @@ export function PackTabContent({
                                     hideImagePlaceholderText
                                   />
                                 </div>
+                                <span
+                                  className="pointer-events-none absolute right-2 top-2 inline-flex items-center gap-1"
+                                  aria-hidden
+                                >
+                                  {meta.hasPartnerExposure && (
+                                    <Badge className="gap-1 shadow-sm">
+                                      <Star className="size-3" /> Đối tác
+                                    </Badge>
+                                  )}
+                                </span>
                               </button>
-                              <div className="grid grid-cols-2 gap-2">
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="w-full"
-                                  onClick={() => setEditingPageIndex(page.pageIndex)}
+                              <div
+                                className="absolute left-2 top-2 z-10"
+                                onClick={(event) => event.stopPropagation()}
+                                onMouseDown={(event) => event.stopPropagation()}
+                              >
+                                <button
+                                  type="button"
+                                  aria-label={
+                                    page.selected ? "Bỏ chọn trang" : "Chọn trang"
+                                  }
+                                  onClick={() => toggleSelected(page.pageIndex)}
+                                  className={
+                                    page.selected
+                                      ? "inline-flex size-6 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition hover:bg-primary/90"
+                                      : "inline-flex size-6 items-center justify-center rounded-full border border-input bg-background/90 text-muted-foreground shadow-sm transition hover:bg-background"
+                                  }
                                 >
-                                  <Type className="size-3 mr-1" /> Sửa trang
-                                </Button>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="w-full"
-                                  onClick={async () => {
-                                    const node = packRefs.current.get(page.pageIndex);
-                                    if (!node) return;
-                                    await downloadPng(node, page.pageFile, 2);
-                                  }}
-                                >
-                                  <Download className="size-3 mr-1" /> Xuất PNG
-                                </Button>
+                                  {page.selected ? (
+                                    <Check className="size-4" />
+                                  ) : (
+                                    <span className="block size-3 rounded-full border border-current" />
+                                  )}
+                                </button>
                               </div>
-                            </CardContent>
-                          </Card>
-                        );
-                      })}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
@@ -3261,19 +3261,70 @@ export function PackTabContent({
           className="fixed inset-0 z-50 grid cursor-zoom-out place-items-center bg-black/75 p-4"
           onClick={() => setZoomedPageIndex(null)}
         >
-          <div className="max-h-[92vh] max-w-[92vw] overflow-auto rounded-lg bg-background p-3 shadow-2xl">
-            <PageRenderer
-              template={zoomedTemplate}
-              page={zoomedPageMeta.page}
-              entities={entities}
-              assets={assets}
-              entity={zoomedEntity}
-              entityPool={buildPageEntityPool(zoomedPageMeta.page)}
-              scale={zoomedScale}
-              debug={debug}
-              seedKey={`${jobRenderSeed}:${zoomedPageMeta.page.pageTemplateId}:${zoomedPageMeta.page.pageIndex}:zoom`}
-              hideImagePlaceholderText
-            />
+          <div
+            className="flex max-h-[92vh] max-w-[92vw] cursor-default flex-col gap-3 rounded-lg bg-background p-3 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0 truncate text-sm font-medium">
+                {zoomedPageMeta.pageTemplate?.name ??
+                  zoomedPageMeta.page.workingTemplate?.name ??
+                  zoomedPageMeta.page.pageFile}
+              </div>
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setEditingPageIndex(zoomedPageMeta.page.pageIndex);
+                    setZoomedPageIndex(null);
+                  }}
+                >
+                  <Pencil className="size-3.5 mr-1.5" />
+                  Sửa trang
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={async () => {
+                    const node = packRefs.current.get(zoomedPageMeta.page.pageIndex);
+                    if (!node) {
+                      toast.error("Không tìm thấy ảnh để tải");
+                      return;
+                    }
+                    await downloadPng(node, zoomedPageMeta.page.pageFile, 2);
+                  }}
+                >
+                  <Download className="size-3.5 mr-1.5" />
+                  Tải PNG
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  aria-label="Đóng"
+                  onClick={() => setZoomedPageIndex(null)}
+                >
+                  <X className="size-4" />
+                </Button>
+              </div>
+            </div>
+            <div className="overflow-auto">
+              <PageRenderer
+                template={zoomedTemplate}
+                page={zoomedPageMeta.page}
+                entities={entities}
+                assets={assets}
+                entity={zoomedEntity}
+                entityPool={buildPageEntityPool(zoomedPageMeta.page)}
+                scale={zoomedScale}
+                debug={debug}
+                seedKey={`${jobRenderSeed}:${zoomedPageMeta.page.pageTemplateId}:${zoomedPageMeta.page.pageIndex}:zoom`}
+                hideImagePlaceholderText
+              />
+            </div>
           </div>
         </div>
       )}
@@ -3311,7 +3362,7 @@ export function PackTabContent({
         <GeneratePageEditor
           open={editingPreviewOpen}
           onOpenChange={setEditingPreviewOpen}
-          title={`Chỉnh bố cục xem trước · ${formatTemplateDisplayName(activePage.name, "Trang")}`}
+          title={`Chỉnh bố cục xem trước · ${packPageLabel(activePageIdx)}`}
           template={effectiveActive}
           baseTemplate={activePage}
           entities={entities}
