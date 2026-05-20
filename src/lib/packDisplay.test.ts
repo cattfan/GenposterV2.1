@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { Entity, PageTemplate, RenderedPage, Slot } from "@/models";
-import { collectVisibleEntityIds } from "./packDisplay";
+import { collectVisibleEntityIds, groupPagesByBundle, getBundleIndex } from "./packDisplay";
 
 function makeEntity(partial: Partial<Entity> & Pick<Entity, "entityId" | "name">): Entity {
   return {
@@ -133,5 +133,56 @@ describe("collectVisibleEntityIds", () => {
     ]);
     const page = makePage([{ slotId: "s-name", entityId: "e-missing" }]);
     expect(collectVisibleEntityIds(page, tpl, entitiesById)).toEqual([]);
+  });
+});
+
+describe("getBundleIndex", () => {
+  it("returns 1 when total pages fit in one bundle", () => {
+    expect(getBundleIndex(3, 6, 6)).toBe(1);
+  });
+
+  it("increments bundle for later page indices", () => {
+    expect(getBundleIndex(6, 6, 12)).toBe(2);
+  });
+});
+
+describe("groupPagesByBundle", () => {
+  const pack = {
+    packTemplateId: "p1",
+    name: "Pack",
+    orderedPages: ["t1", "t2"],
+    requiredPages: [],
+    optionalPages: [],
+    updatedAt: Date.now(),
+    createdAt: Date.now(),
+  } satisfies import("@/models").PackTemplate;
+
+  function makeJob(pageCount: number): import("@/models").GenerationJob {
+    return {
+      jobId: "j1",
+      packTemplateId: "p1",
+      packTemplateName: "Pack",
+      status: "generated",
+      pages: Array.from({ length: pageCount }, (_, i) => ({
+        pageIndex: i,
+        pageFile: `${i}.png`,
+        pageTemplateId: "t1",
+        state: "accepted" as const,
+        selected: true,
+        healthScore: 1,
+        warnings: [],
+        items: [],
+        renderedAt: Date.now(),
+      })),
+      createdAt: Date.now(),
+    };
+  }
+
+  it("groups selected pages by bundle index", () => {
+    const job = makeJob(4);
+    const selected = [job.pages[0]!, job.pages[2]!];
+    const grouped = groupPagesByBundle(selected, job, pack);
+    expect(grouped.get(1)?.length).toBe(1);
+    expect(grouped.get(2)?.length).toBe(1);
   });
 });

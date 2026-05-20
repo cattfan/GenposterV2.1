@@ -61,6 +61,8 @@ interface Props {
   hideImagePlaceholderText?: boolean;
   /** Ẩn hoàn toàn image placeholder (stripes) - dùng cho thumbnail preview */
   hideEmptyImages?: boolean;
+  /** Lazy-load/decode images (gallery, results, thumbs — not interactive canvas). */
+  lazyImages?: boolean;
 }
 
 function isGeneratedBackgroundOverlaySlot(slot: Slot) {
@@ -82,6 +84,7 @@ export function PageRenderer({
   showSlotBounds = false,
   hideImagePlaceholderText = false,
   hideEmptyImages = false,
+  lazyImages = false,
 }: Props) {
   const entityMap = useMemo(
     () => new Map(entities.map((item) => [item.entityId, item])),
@@ -228,6 +231,7 @@ export function PageRenderer({
             showSlotBounds={showSlotBounds}
             hideImagePlaceholderText={hideImagePlaceholderText}
             hideEmptyImages={hideEmptyImages}
+            lazyImages={lazyImages}
             renderGeneratedOverlay={
               assets.length > 0 || !!entity || !!entityPool?.length || effectiveSlotItems.length > 0
             }
@@ -285,6 +289,7 @@ function SlotRenderer({
   showSlotBounds,
   hideImagePlaceholderText,
   hideEmptyImages,
+  lazyImages,
   renderGeneratedOverlay,
 }: {
   slot: ExpandedSlot;
@@ -304,6 +309,7 @@ function SlotRenderer({
   showSlotBounds?: boolean;
   hideImagePlaceholderText?: boolean;
   hideEmptyImages?: boolean;
+  lazyImages?: boolean;
   renderGeneratedOverlay?: boolean;
 }) {
   const flip = buildFlipTransform(slot.style);
@@ -443,6 +449,8 @@ function SlotRenderer({
               src={usableSrc}
               crossOrigin="anonymous"
               alt=""
+              loading={lazyImages ? "lazy" : undefined}
+              decoding={lazyImages ? "async" : undefined}
               style={{
                 width: "100%",
                 height: "100%",
@@ -516,6 +524,8 @@ function SlotRenderer({
               src={usableSrc}
               crossOrigin="anonymous"
               alt=""
+              loading={lazyImages ? "lazy" : undefined}
+              decoding={lazyImages ? "async" : undefined}
               style={{
                 position: "absolute",
                 left: `${-crop.x * 100}%`,
@@ -532,6 +542,8 @@ function SlotRenderer({
               src={usableSrc}
               crossOrigin="anonymous"
               alt=""
+              loading={lazyImages ? "lazy" : undefined}
+              decoding={lazyImages ? "async" : undefined}
               style={{
                 width: "100%",
                 height: "100%",
@@ -641,6 +653,7 @@ function SlotRenderer({
           width={slot.width}
           height={slot.height}
           debug={debug}
+          lazyImages={lazyImages}
         />
         <SlotPreviewBounds kind="section" show={showSlotBounds} />
       </div>
@@ -660,6 +673,7 @@ function SectionView({
   width,
   height,
   debug,
+  lazyImages,
 }: {
   slot: Slot;
   section: Section;
@@ -670,6 +684,7 @@ function SectionView({
   width: number;
   height: number;
   debug?: boolean;
+  lazyImages?: boolean;
 }) {
   const isPosterList = section.layoutMode === "poster_list";
   const baseColor = slot.style?.color ?? (isPosterList ? "#ffffff" : "#0f172a");
@@ -810,7 +825,14 @@ function SectionView({
                   borderRadius: 12 * scale,
                 }}
               >
-                {asset && <ResolvedAssetImage asset={asset} scale={scale} isZigzag={isZigzag} />}
+                {asset && (
+                  <ResolvedAssetImage
+                    asset={asset}
+                    scale={scale}
+                    isZigzag={isZigzag}
+                    lazyImages={lazyImages}
+                  />
+                )}
                 <div style={{ flex: 1, minWidth: 0, textAlign: flipRow ? "right" : "left" }}>
                   <div
                     style={{
@@ -890,10 +912,12 @@ function ResolvedAssetImage({
   asset,
   scale,
   isZigzag,
+  lazyImages,
 }: {
   asset: Asset;
   scale: number;
   isZigzag: boolean;
+  lazyImages?: boolean;
 }) {
   const rawSrc = getAssetImageSource(asset);
   const resolvedSrc = useResolvedImageSrc(rawSrc);
@@ -911,6 +935,8 @@ function ResolvedAssetImage({
       src={usableSrc}
       crossOrigin="anonymous"
       alt=""
+      loading={lazyImages ? "lazy" : undefined}
+      decoding={lazyImages ? "async" : undefined}
       style={{
         width: 80 * scale,
         height: 80 * scale,

@@ -1,6 +1,8 @@
 import type { Entity, RenderedItem } from "@/models";
 import { buildEntityBindingTargets } from "@/engines/binding/cardRepeater";
 import type { PageTemplate } from "@/models";
+import { entityContentKey } from "@/lib/entityContentKey";
+import { shuffleWithSeed } from "@/lib/seededRandom";
 
 interface EntityBindBatchState {
   usedEntityIds: Set<string>;
@@ -17,32 +19,6 @@ function sortByName(entities: Entity[]): Entity[] {
   return entities.slice().sort((a, b) => a.name.localeCompare(b.name, "vi"));
 }
 
-function stableHash(input: string): number {
-  let hash = 0;
-  for (let index = 0; index < input.length; index += 1) {
-    hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
-  }
-  return hash;
-}
-
-function createSeededRandom(seed: string): () => number {
-  let state = stableHash(seed) || 1;
-  return () => {
-    state = (state * 1664525 + 1013904223) >>> 0;
-    return state / 0x100000000;
-  };
-}
-
-function shuffleWithSeed<T>(items: T[], seed: string): T[] {
-  const next = items.slice();
-  const random = createSeededRandom(seed);
-  for (let index = next.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(random() * (index + 1));
-    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
-  }
-  return next;
-}
-
 function sortPartnersByPriority(entities: Entity[], seed?: string): Entity[] {
   const buckets = new Map<number, Entity[]>();
   for (const entity of entities) {
@@ -57,26 +33,6 @@ function sortPartnersByPriority(entities: Entity[], seed?: string): Entity[] {
     .flatMap(([priority, bucket]) =>
       seed ? shuffleWithSeed(bucket, `${seed}:partner:${priority}`) : sortByName(bucket),
     );
-}
-
-function normalizeEntityKeyPart(value: unknown): string {
-  return String(value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\u0111/gi, "d")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .replace(/\s+/g, " ");
-}
-
-export function entityContentKey(entity: Entity): string {
-  const name = normalizeEntityKeyPart(entity.name);
-  const address = normalizeEntityKeyPart(entity.address ?? entity.metadata?.address);
-  const sheet = normalizeEntityKeyPart(entity.sheetName);
-  if (name) return `${sheet}|${name}`;
-  if (address) return `${sheet}|address:${address}`;
-  return entity.entityId;
 }
 
 /**
@@ -268,3 +224,5 @@ export function allocateEntityBindingsForTemplate(params: {
 
   return { items, assignedEntities, warnings };
 }
+
+export { entityContentKey } from "@/lib/entityContentKey";

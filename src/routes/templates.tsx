@@ -98,12 +98,10 @@ function packDraftHasChanges(draft: PackTemplate, persisted: PackTemplate) {
   );
 }
 
+import { clonePageTemplate } from "@/features/generate/templateState";
+
 function clonePackTemplate(pack: PackTemplate): PackTemplate {
   return structuredClone(pack);
-}
-
-function clonePageTemplate(template: PageTemplate): PageTemplate {
-  return structuredClone(template);
 }
 
 function errorMessage(error: unknown): string {

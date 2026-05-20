@@ -6,13 +6,7 @@ import type { DesignDocument, DesignElement, DesignPage } from "@/models";
 import { DesignRenderer } from "./DesignRenderer";
 import { downloadJSON } from "@/features/render/exportPng";
 
-function slugify(input: string): string {
-  return input
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
+import { slugify } from "@/lib/slugify";
 
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));

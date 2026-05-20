@@ -20,7 +20,7 @@ function isSyntheticAutoGroupId(value: string | undefined) {
 }
 
 export function clonePageTemplate(template: PageTemplate): PageTemplate {
-  return JSON.parse(JSON.stringify(template)) as PageTemplate;
+  return structuredClone(template);
 }
 
 function slotArea(slot: PageTemplate["slots"][number]): number {

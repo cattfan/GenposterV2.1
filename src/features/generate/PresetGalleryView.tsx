@@ -196,6 +196,7 @@ export function PresetGalleryView({
                               scale={previewScale}
                               seedKey={`${preset.presetId}:${page.pageTemplateId}:preview`}
                               hideImagePlaceholderText
+                              lazyImages
                             />
                           </div>
                         </button>

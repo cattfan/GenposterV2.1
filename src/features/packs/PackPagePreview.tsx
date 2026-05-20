@@ -50,10 +50,8 @@ export function PackPagePreview({ tpl }: { tpl: PageTemplate }) {
   // Đọc designDocument nếu có (content mới nhất từ editor)
   const linkedDoc = useLiveQuery(
     async () => {
-      // Trường hợp 1: designDocumentId === pageTemplateId (EditorPage lưu trực tiếp)
       const direct = await db.designDocuments.get(tpl.pageTemplateId);
       if (direct) return direct;
-      // Trường hợp 2: sourcePageTemplateId trỏ về pageTemplateId
       const linked = await db.designDocuments
         .where("sourcePageTemplateId")
         .equals(tpl.pageTemplateId)
@@ -61,6 +59,7 @@ export function PackPagePreview({ tpl }: { tpl: PageTemplate }) {
       return linked ?? null;
     },
     [tpl.pageTemplateId],
+    ["designDocuments"],
   );
 
   const effectiveTemplate = useMemo(
@@ -129,6 +128,7 @@ export function PackPagePreview({ tpl }: { tpl: PageTemplate }) {
               entities={[]}
               assets={[]}
               scale={renderScale}
+              lazyImages
             />
           </div>
         </div>

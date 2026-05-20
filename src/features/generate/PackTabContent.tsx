@@ -53,7 +53,6 @@ import { type TextListFieldOption } from "@/features/generate/TextListBindingPan
 import { GeneratePageEditor } from "@/features/generate/GeneratePageEditor";
 import { isLikelyGeneratePageBackgroundSlot } from "@/features/generate/backgroundGuards";
 import { autoBindPlaceholdersForDrafts } from "@/features/generate/autoBindPlaceholders";
-import { allocatePackWorkspacePreview } from "@/features/generate/packWorkspacePreview";
 import {
   buildPresetCardPreviewContexts,
   type PresetCardPagePreviewContext,
@@ -95,33 +94,15 @@ import {
 import { aiCaptionFromEntity, aiRewriteTextPreserveMeaning } from "@/features/ai/aiFeatures";
 import { generatePackJob } from "@/engines/selection/generate";
 import { buildEntityBindingTargets, expandPageWithCardGroups } from "@/engines/binding/cardRepeater";
-import { filterRenderableAssets } from "@/engines/binding/assetImage";
 import { isDataGroupMarkerSlot } from "@/engines/binding/slotMarkers";
-import { getImageReferenceEntityIds } from "@/features/data/imageReferences";
-import {
-  usePackBindOverrides,
-  type PackBindOverrides,
-} from "@/features/generate/usePackBindOverrides";
-import { isSlotInsideSelectionContainer } from "@/features/generate/selectionGeometry";
-import {
-  downloadPng,
-  downloadMultiBundleZip,
-  formatZipFileName,
-  formatExportError,
-} from "@/features/render/exportPng";
+import { loadExportPipeline } from "@/features/generate/lazyExport";
 import { db } from "@/storage/db";
-import { buildBundleGroups } from "@/lib/packDisplay";
 import {
   createWorkingTemplate,
   clonePageTemplate,
   resolvePageWorkingTemplate,
-  restoreTemplateGroups,
   GENERATE_TEMPLATE_OPTIONS,
 } from "@/features/generate/templateState";
-import {
-  assembleBundleArtifacts,
-  toExportPageData,
-} from "@/features/generate/buildExportArtifacts";
 import { applyFontVariationToGeneratedJob } from "@/features/generate/fontVariation";
 import {
   buildGeneratePresetBundle,
@@ -145,21 +126,25 @@ import {
   toPageTabItems,
   type ResolvedGeneratePageConfig,
 } from "@/features/generate/generatePanelProps";
+import {
+  usePackBindOverrides,
+  type PackBindOverrides,
+} from "@/features/generate/usePackBindOverrides";
+import { isSlotInsideSelectionContainer } from "@/features/generate/selectionGeometry";
+import {
+  ALL_VALUE,
+  buildConfiguredEntityPool,
+  buildSourceFilteredEntities,
+  normalizeCount,
+  resolveGeneratePageConfig,
+} from "@/features/generate/generateConfigHelpers";
+import { useResolvedPackTemplates } from "@/features/generate/useResolvedPackTemplates";
+import { useGeneratePageReadiness } from "@/features/generate/useGeneratePageReadiness";
+import { usePackPreviewAllocation } from "@/features/generate/usePackPreviewAllocation";
+import { usePackBundleGroups } from "@/features/generate/usePackBundleGroups";
+import { useBundleExporter } from "@/features/generate/useBundleExporter";
 
 type Filter = "all" | "selected" | "errors" | "partner";
-
-interface BundleImageIssue {
-  entityId: string;
-  entityName: string;
-  pageNames: string[];
-  partnerFlag: boolean;
-  hasImageReference: boolean;
-}
-
-interface GenerateReadiness {
-  canGenerate: boolean;
-  reason: string;
-}
 
 const cloneJsonValue = <T,>(value: T | undefined): T | undefined =>
   value == null ? undefined : (JSON.parse(JSON.stringify(value)) as T);
@@ -226,69 +211,6 @@ interface Props {
   setPackId: (id: string | undefined) => void;
   filter: Filter;
   setFilter: (f: Filter) => void;
-}
-
-const ALL_VALUE = "__all__";
-
-function normalizeCount(value: number | undefined, fallback: number): number {
-  const numberValue = Number(value ?? fallback);
-  if (!Number.isFinite(numberValue)) return Math.max(1, fallback);
-  return Math.max(1, Math.floor(numberValue));
-}
-
-function resolveGeneratePageConfig(
-  globalConfig: ResolvedGeneratePageConfig,
-  pageConfig: GeneratePageConfig | undefined,
-): ResolvedGeneratePageConfig {
-  const onlyPartner = pageConfig?.onlyPartner ?? globalConfig.onlyPartner;
-  return {
-    selectedSheet: pageConfig?.selectedSheet ?? globalConfig.selectedSheet,
-    filterMoHinh: pageConfig?.filterMoHinh ?? globalConfig.filterMoHinh,
-    filterPhongCach: pageConfig?.filterPhongCach ?? globalConfig.filterPhongCach,
-    prioritizePartner: pageConfig?.prioritizePartner ?? globalConfig.prioritizePartner,
-    onlyPartner,
-    partnerQuotaPerPage: onlyPartner
-      ? Number.MAX_SAFE_INTEGER
-      : Math.max(0, Math.floor(pageConfig?.partnerQuotaPerPage ?? globalConfig.partnerQuotaPerPage)),
-    maxEntities: normalizeCount(pageConfig?.maxEntities, globalConfig.maxEntities),
-  };
-}
-
-function entityMatchesGenerateSource(entity: Entity, config: ResolvedGeneratePageConfig): boolean {
-  if (entity.status !== "active") return false;
-  if (config.selectedSheet !== ALL_VALUE && entity.sheetName !== config.selectedSheet) return false;
-  if (config.filterMoHinh !== ALL_VALUE && entity.categoryMain !== config.filterMoHinh) return false;
-  if (config.filterPhongCach !== ALL_VALUE && entity.categorySub !== config.filterPhongCach) {
-    return false;
-  }
-  return true;
-}
-
-function buildSourceFilteredEntities(entities: Entity[], config: ResolvedGeneratePageConfig): Entity[] {
-  return entities.filter((entity) => entityMatchesGenerateSource(entity, config));
-}
-
-function buildConfiguredEntityPool(
-  source: Entity[],
-  config: ResolvedGeneratePageConfig,
-): Entity[] {
-  const list = source.filter((entity) => !config.onlyPartner || entity.partnerFlag);
-  list.sort((a, b) => {
-    if (config.prioritizePartner) {
-      if (!!b.partnerFlag !== !!a.partnerFlag) return b.partnerFlag ? 1 : -1;
-      if ((b.partnerPriority ?? 0) !== (a.partnerPriority ?? 0)) {
-        return (b.partnerPriority ?? 0) - (a.partnerPriority ?? 0);
-      }
-    }
-    return a.name.localeCompare(b.name, "vi");
-  });
-  return list;
-}
-
-function slotNeedsEntityImage(slot: Slot): boolean {
-  if (slot.kind !== "image" && slot.kind !== "shape") return false;
-  const bindingPath = slot.bindingPath ?? "";
-  return isEntityScopedImageBindingPath(bindingPath);
 }
 
 function textBindingOptionLabel(value: string, label: string): string {
@@ -391,6 +313,7 @@ export function PackTabContent({
   const generatePresets = useLiveQuery(
     () => db.generatePresets.where("mode").equals("pack").toArray(),
     [],
+    ["generatePresets"],
   );
 
   const selectedPack = packs.find((p) => p.packTemplateId === packId);
@@ -511,18 +434,13 @@ export function PackTabContent({
     redoPreviewPageDraftsRef.current = redoPreviewPageDrafts;
   });
 
-  const effectiveActive = useMemo(
-    () =>
-      activePage
-        ? resolvePageWorkingTemplate(
-            activePage,
-            packOv[activePage.pageTemplateId],
-            previewPageDrafts[activePage.pageTemplateId],
-            GENERATE_TEMPLATE_OPTIONS,
-          )
-        : undefined,
-    [activePage, packOv, previewPageDrafts],
-  );
+  const { effectiveActive, pageTemplatesForGenerate } = useResolvedPackTemplates({
+      tpls,
+      packPages,
+      activePage,
+      packOv,
+      previewPageDrafts,
+    });
   const activeBaseSlotById = useMemo(
     () => new Map((activePage?.slots ?? []).map((slot) => [slot.slotId, slot])),
     [activePage],
@@ -579,17 +497,6 @@ export function PackTabContent({
   const generationBaseEntities = useMemo(
     () => entities.filter((entity) => entity.status === "active"),
     [entities],
-  );
-  const pageTemplatesForGenerate = useMemo(
-    () =>
-      tpls.map((tpl) =>
-        restoreTemplateGroups(
-          tpl,
-          previewPageDrafts[tpl.pageTemplateId] ?? tpl,
-          GENERATE_TEMPLATE_OPTIONS,
-        ),
-      ),
-    [tpls, previewPageDrafts],
   );
   const previewGenerateJob = useMemo(() => {
     if (!selectedPack) return null;
@@ -790,37 +697,22 @@ export function PackTabContent({
     [effectiveActive, selectedSlotIds],
   );
   const selectedSlot: Slot | undefined = selectedSlots[selectedSlots.length - 1];
-  const packPreviewAllocations = useMemo(() => {
-    if (!workspaceOpen || !previewEntity || packPages.length === 0) {
-      return new Map<
-        string,
-        { items: import("@/models").RenderedItem[]; warnings: string[] }
-      >();
-    }
-    return allocatePackWorkspacePreview({
-      packPages,
-      resolveEffectiveTemplate: (page) =>
-        resolvePageWorkingTemplate(
-          page,
-          packOv[page.pageTemplateId],
-          previewPageDrafts[page.pageTemplateId],
-          GENERATE_TEMPLATE_OPTIONS,
-        ),
-      orderedEntities: buildOrderedEntityPool(previewEntityId, filteredEntities),
-      pinsByPage: stickyPreviewPinsByPageRef.current,
-      resolvePageConfig: (page) => {
-        const cfg = resolveGeneratePageConfig(
-          globalGenerateConfig,
-          sourceNeutralPageConfigs[page.pageTemplateId],
-        );
-        return {
-          partnerQuota: cfg.partnerQuotaPerPage,
-          prioritizePartner: cfg.prioritizePartner,
-        };
-      },
-      previewEntity,
-    });
-  }, [
+  const getSlotBindMode = useCallback(
+    (
+      slot: Slot,
+      template: PageTemplate | undefined = effectiveActive,
+    ): "text" | "image" | null => {
+      if (slot.isUploadedBackground) return null;
+      if (isDataGroupMarkerSlot(slot)) return null;
+      if (isLikelyGeneratePageBackgroundSlot(slot, template)) return null;
+      if (slot.kind === "text") return "text";
+      if (slot.kind === "image") return "image";
+      if (slot.kind === "shape") return slot.staticText?.trim() ? "text" : "image";
+      return null;
+    },
+    [effectiveActive],
+  );
+  const { previewAllocation } = usePackPreviewAllocation({
     workspaceOpen,
     packPages,
     packOv,
@@ -831,39 +723,12 @@ export function PackTabContent({
     buildOrderedEntityPool,
     globalGenerateConfig,
     sourceNeutralPageConfigs,
-  ]);
-
-  const previewAllocation = useMemo(() => {
-    // Workspace bind: phân bổ cả pack (không trùng quán). Job dry-run chỉ cho sidebar.
-    const useStickyBindPreview = workspaceOpen;
-    if (!useStickyBindPreview && activePreviewRenderedPage) {
-      return { items: activePreviewRenderedPage.items, warnings: [] as string[] };
-    }
-    if (!effectiveActive) {
-      return { items: [], warnings: [] as string[] };
-    }
-    const pageAlloc = packPreviewAllocations.get(effectiveActive.pageTemplateId);
-    return pageAlloc ?? { items: [], warnings: [] as string[] };
-  }, [
-    workspaceOpen,
+    stickyPreviewPinsByPageRef,
     activePreviewRenderedPage,
     effectiveActive,
-    packPreviewAllocations,
-  ]);
+  });
   const previewSlotItems = previewAllocation.items;
   const previewAllocationWarnings = previewAllocation.warnings;
-  const getSlotBindMode = (
-    slot: Slot,
-    template: PageTemplate | undefined = effectiveActive,
-  ): "text" | "image" | null => {
-    if (slot.isUploadedBackground) return null;
-    if (isDataGroupMarkerSlot(slot)) return null;
-    if (isLikelyGeneratePageBackgroundSlot(slot, template)) return null;
-    if (slot.kind === "text") return "text";
-    if (slot.kind === "image") return "image";
-    if (slot.kind === "shape") return slot.staticText?.trim() ? "text" : "image";
-    return null;
-  };
   const selectedBindableSlots = useMemo(() => {
     if (!effectiveActive) return [];
 
@@ -1113,36 +978,39 @@ export function PackTabContent({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [activeGenerateConfig, entities],
   );
-  const handleSelectSlot = (
-    slotId: string | null,
-    mode: "replace" | "toggle" | "group" | "replace-many" = "replace",
-    relatedSlotIds: string[] = [],
-  ) => {
-    if (mode === "replace-many") {
-      setSelectedSlotIds(Array.from(new Set(relatedSlotIds)));
-      return;
-    }
-    if (!slotId) {
-      setSelectedSlotIds([]);
-      return;
-    }
-    setSelectedSlotIds((prev) => {
-      if (mode === "replace") {
-        return relatedSlotIds.length > 0 ? Array.from(new Set(relatedSlotIds)) : [slotId];
+  const handleSelectSlot = useCallback(
+    (
+      slotId: string | null,
+      mode: "replace" | "toggle" | "group" | "replace-many" = "replace",
+      relatedSlotIds: string[] = [],
+    ) => {
+      if (mode === "replace-many") {
+        setSelectedSlotIds(Array.from(new Set(relatedSlotIds)));
+        return;
       }
-      if (mode === "toggle") {
-        return prev.includes(slotId) ? prev.filter((id) => id !== slotId) : [...prev, slotId];
+      if (!slotId) {
+        setSelectedSlotIds([]);
+        return;
       }
-      if (mode === "group") {
-        const ids = relatedSlotIds.length > 0 ? relatedSlotIds : [slotId];
-        const selectedSet = new Set(prev);
-        const allSelected = ids.every((id) => selectedSet.has(id));
-        if (allSelected) return prev.filter((id) => !ids.includes(id));
-        return Array.from(new Set([...prev, ...ids]));
-      }
-      return [slotId];
-    });
-  };
+      setSelectedSlotIds((prev) => {
+        if (mode === "replace") {
+          return relatedSlotIds.length > 0 ? Array.from(new Set(relatedSlotIds)) : [slotId];
+        }
+        if (mode === "toggle") {
+          return prev.includes(slotId) ? prev.filter((id) => id !== slotId) : [...prev, slotId];
+        }
+        if (mode === "group") {
+          const ids = relatedSlotIds.length > 0 ? relatedSlotIds : [slotId];
+          const selectedSet = new Set(prev);
+          const allSelected = ids.every((id) => selectedSet.has(id));
+          if (allSelected) return prev.filter((id) => !ids.includes(id));
+          return Array.from(new Set([...prev, ...ids]));
+        }
+        return [slotId];
+      });
+    },
+    [],
+  );
   const applyBindingToSlots = (
     slots: Slot[],
     pageTemplateId: string,
@@ -1565,102 +1433,19 @@ export function PackTabContent({
       </div>
     );
   };
-  const totalBound = useMemo(
-    () =>
-      packPages.reduce(
-        (acc, t) =>
-          acc +
-          (
-            resolvePageWorkingTemplate(
-              t,
-              packOv[t.pageTemplateId],
-              previewPageDrafts[t.pageTemplateId],
-              GENERATE_TEMPLATE_OPTIONS,
-            )?.slots ?? []
-          ).filter((s) => !!s.bindingPath).length,
-        0,
-      ),
-    [packPages, packOv, previewPageDrafts],
-  );
-  const pageReadinessRows = useMemo(
-    () =>
-      packPages.map((page, index) => {
-        const template =
-          resolvePageWorkingTemplate(
-            page,
-            packOv[page.pageTemplateId],
-            previewPageDrafts[page.pageTemplateId],
-            GENERATE_TEMPLATE_OPTIONS,
-          ) ?? page;
-        const configuredEntities = buildConfiguredEntityPool(
-          buildSourceFilteredEntities(entities, globalGenerateConfig),
-          resolveGeneratePageConfig(globalGenerateConfig, sourceNeutralPageConfigs[page.pageTemplateId]),
-        );
-        const targets = buildEntityBindingTargets(template, configuredEntities);
-        const emptyTarget = targets.find((target) => target.candidateEntities.length === 0);
-        return {
-          page,
-          index,
-          entityCount: configuredEntities.length,
-          bindableCount: template.slots.filter((slot) => getSlotBindMode(slot, template) !== null).length,
-          boundCount: template.slots.filter((slot) => !!slot.bindingPath).length,
-          targetCount: targets.length,
-          emptyTarget,
-        };
-      }),
-    // getSlotBindMode is a stable helper; deps listed are sufficient.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [packPages, packOv, previewPageDrafts, globalGenerateConfig, sourceNeutralPageConfigs, entities],
-  );
-  const hasTextOrImageSlots = useMemo(
-    () => pageReadinessRows.some((row) => row.bindableCount > 0),
-    [pageReadinessRows],
-  );
-  const generateReadiness: GenerateReadiness = useMemo(() => {
-    if (!selectedPack) return { canGenerate: false, reason: "Chưa chọn bộ mẫu" };
-    if (packPages.length === 0) return { canGenerate: false, reason: "Bộ mẫu chưa có trang" };
-    if (generationBaseEntities.length === 0) {
-      return { canGenerate: false, reason: "Chưa có dữ liệu. Hãy nhập Google Sheet trước." };
-    }
-    if (!hasTextOrImageSlots) {
-      return { canGenerate: false, reason: "Bộ mẫu chưa có khung chữ hoặc ảnh để đổ dữ liệu" };
-    }
-    if (totalBound === 0) {
-      return { canGenerate: false, reason: "Chưa liên kết khung chữ/ảnh với dữ liệu" };
-    }
-    const emptyPage = pageReadinessRows.find(
-      (row) => row.targetCount > 0 && row.entityCount === 0,
-    );
-    if (emptyPage) {
-      return {
-        canGenerate: false,
-        reason: `Trang ${emptyPage.index + 1} không có dòng dữ liệu phù hợp`,
-      };
-    }
-    const emptySlotSourcePage = pageReadinessRows.find((row) => row.emptyTarget);
-    if (emptySlotSourcePage) {
-      return {
-        canGenerate: false,
-        reason: `Trang ${emptySlotSourcePage.index + 1} có khối không có dữ liệu phù hợp`,
-      };
-    }
-    if (estimateGeneratedPageCount === 0) {
-      return { canGenerate: false, reason: "Không có dòng dữ liệu phù hợp để tạo ảnh" };
-    }
-    return {
-      canGenerate: true,
-      reason: `Sẵn sàng tạo ${estimateGeneratedPageCount} trang từ ${filteredEntities.length} dòng dữ liệu`,
-    };
-  }, [
+  const { totalBound, pageReadinessRows, generateReadiness } = useGeneratePageReadiness({
     selectedPack,
-    packPages.length,
-    generationBaseEntities.length,
-    hasTextOrImageSlots,
-    totalBound,
-    pageReadinessRows,
+    packPages,
+    packOv,
+    previewPageDrafts,
+    globalGenerateConfig,
+    sourceNeutralPageConfigs,
+    entities,
+    generationBaseEntities,
+    filteredEntities,
     estimateGeneratedPageCount,
-    filteredEntities.length,
-  ]);
+    getSlotBindMode,
+  });
   const selectedSlotStatusLabel = (slot: Slot) => {
     if (!slot.bindingPath) return "Tĩnh";
     const listConfig = parseEntityListBindingPath(slot.bindingPath);
@@ -1740,6 +1525,7 @@ export function PackTabContent({
 
   /** Thumbnail trước khi mở workspace — pack-order giống canvas workspace. */
   const presetCardPreviewContexts = useMemo(() => {
+    if (workspaceOpen) return new Map<string, PresetCardPagePreviewContext>();
     const map = new Map<string, PresetCardPagePreviewContext>();
 
     const resolvePresetStoredTemplate = (
@@ -1822,6 +1608,7 @@ export function PackTabContent({
     globalGenerateConfig,
     buildOrderedEntityPool,
     matchingPresets?.map((item) => `${item.presetId}:${item.updatedAt}`).join("|"),
+    workspaceOpen,
   ]);
 
   const exportPreset = async (preset: GenerateBindingPreset) => {
@@ -2501,249 +2288,34 @@ export function PackTabContent({
     }
   };
 
-  const filteredPages = currentJob?.pages.filter((p) => {
-    if (filter === "selected") return p.selected;
-    if (filter === "errors") return p.warnings.length > 0 || p.state === "rejected";
-    if (filter === "partner") return p.items.some((item) => item.partnerFlag);
-    return true;
-  });
-
   const jobPack =
     packs.find((pack) => pack.packTemplateId === currentJob?.packTemplateId) ?? selectedPack;
-  const visiblePageIndexes = useMemo(
-    () => new Set(filteredPages?.map((page) => page.pageIndex) ?? []),
-    [filteredPages],
-  );
-  // entitiesById + getExportPageTemplate dùng cho [toExportPageData] để lọc
-  // entityId/items theo visibility thật sự (xem design 2026-05-20). Memo
-  // theo tpls/entities/packOv để tránh rebuild Map mỗi lần render bundle card.
-  const entitiesById = useMemo(
-    () => new Map(entities.map((e) => [e.entityId, e])),
-    [entities],
-  );
-  const tplsById = useMemo(
-    () => new Map(tpls.map((t) => [t.pageTemplateId, t])),
-    [tpls],
-  );
-  const getExportPageTemplate = useCallback(
-    (page: GenerationJob["pages"][number]): PageTemplate | undefined => {
-      if (page.workingTemplate) return page.workingTemplate;
-      const base = tplsById.get(page.pageTemplateId);
-      if (!base) return undefined;
-      return resolvePageWorkingTemplate(
-        base,
-        page.bindOverrides ?? packOv[page.pageTemplateId],
-        undefined,
-        GENERATE_TEMPLATE_OPTIONS,
-      );
-    },
-    [tplsById, packOv],
-  );
 
-  const bundleGroups = useMemo(() => {
-    if (!currentJob || !jobPack) return [];
-    return buildBundleGroups(currentJob, jobPack, tpls, entities)
-      .map((group) => ({
-        ...group,
-        pages: group.pages.filter((page) => visiblePageIndexes.has(page.page.pageIndex)),
-      }))
-      .filter((group) => group.pages.length > 0);
-  }, [currentJob, jobPack, tpls, entities, visiblePageIndexes]);
+  const {
+    filteredPages,
+    entitiesById,
+    getExportPageTemplate,
+    bundleGroups,
+    bundleImageIssuesByIndex,
+  } = usePackBundleGroups({
+    currentJob,
+    jobPack,
+    tpls,
+    entities,
+    assets,
+    filter,
+    packOv,
+  });
 
-  const bundleImageIssuesByIndex = useMemo(() => {
-    const renderableAssets = filterRenderableAssets(assets);
-    const assetCountByEntity = new Map<string, number>();
-    for (const asset of renderableAssets) {
-      assetCountByEntity.set(asset.entityId, (assetCountByEntity.get(asset.entityId) ?? 0) + 1);
-    }
-    const imageReferenceEntityIds = getImageReferenceEntityIds(entities, assets);
-
-    const entityById = new Map(entities.map((entity) => [entity.entityId, entity]));
-    const issuesByBundle = new Map<number, BundleImageIssue[]>();
-
-    for (const bundle of bundleGroups) {
-      const issues = new Map<string, BundleImageIssue>();
-
-      for (const meta of bundle.pages) {
-        const template = meta.page.workingTemplate
-          ? meta.page.workingTemplate
-          : resolvePageWorkingTemplate(
-              meta.pageTemplate,
-              meta.page.bindOverrides ??
-                (meta.pageTemplate ? packOv[meta.pageTemplate.pageTemplateId] : undefined),
-              undefined,
-              GENERATE_TEMPLATE_OPTIONS,
-            );
-        if (!template) continue;
-
-        const imageSlotIds = new Set(
-          expandPageWithCardGroups(template, [])
-            .slots.filter(slotNeedsEntityImage)
-            .map((slot) => slot.slotId),
-        );
-        if (imageSlotIds.size === 0) continue;
-
-        const entityIds = new Set<string>();
-        for (const item of meta.page.items) {
-          if (item.entityId && item.slotId && imageSlotIds.has(item.slotId)) {
-            entityIds.add(item.entityId);
-          }
-        }
-        if (entityIds.size === 0 && meta.page.entityId) {
-          entityIds.add(meta.page.entityId);
-        }
-
-        const pageName = meta.pageTemplate?.name ?? `Trang ${meta.pageOrderInBundle + 1}`;
-        for (const entityId of entityIds) {
-          if ((assetCountByEntity.get(entityId) ?? 0) > 0) continue;
-          const entity = entityById.get(entityId);
-          if (!entity) continue;
-          const issue = issues.get(entityId) ?? {
-            entityId,
-            entityName: entity.name,
-            pageNames: [],
-            partnerFlag: entity.partnerFlag,
-            hasImageReference: imageReferenceEntityIds.has(entityId),
-          };
-          if (!issue.pageNames.includes(pageName)) issue.pageNames.push(pageName);
-          issues.set(entityId, issue);
-        }
-      }
-
-      if (issues.size > 0) {
-        issuesByBundle.set(
-          bundle.bundleIndex,
-          Array.from(issues.values()).sort((a, b) => a.entityName.localeCompare(b.entityName, "vi")),
-        );
-      }
-    }
-
-    return issuesByBundle;
-  }, [assets, bundleGroups, entities, packOv]);
-
-  const exportZip = async () => {
-    if (!currentJob || !jobPack) return;
-    const sel = currentJob.pages.filter((p) => p.selected);
-    if (sel.length === 0) return toast.error("Chưa chọn trang nào");
-
-    const progress = createProgressToast({
-      initialLabel: `Đang render ${sel.length} trang...`,
-      total: sel.length,
-    });
-
-    try {
-      // Group selected pages theo bundle index — bundle map xác định bằng vị
-      // trí trong currentJob.pages (giữ nguyên logic cũ).
-      const bundleSize = Math.max(1, jobPack.orderedPages.length);
-      const totalPages = currentJob.pages.length;
-      const groupedByBundle = new Map<number, typeof sel>();
-      for (const p of sel) {
-        const originalIdx = currentJob.pages.findIndex((page) => page.pageIndex === p.pageIndex);
-        const bundleIdx = totalPages <= bundleSize ? 1 : Math.floor(originalIdx / bundleSize) + 1;
-        const bucket = groupedByBundle.get(bundleIdx) ?? [];
-        bucket.push(p);
-        groupedByBundle.set(bundleIdx, bucket);
-      }
-      const bundleEntries = Array.from(groupedByBundle.entries()).sort((a, b) => a[0] - b[0]);
-
-      const result = await assembleBundleArtifacts({
-        packName: jobPack.name,
-        entities,
-        renderTimeoutMs: 5_000,
-        bundles: bundleEntries.map(([bundleIdx, pages]) => ({
-          bundleLabel: `Bộ ${bundleIdx}`,
-          pages: pages.map((p) => ({
-            pageIndex: p.pageIndex,
-            node: packRefs.current.get(p.pageIndex) ?? null,
-            pageData: toExportPageData(p, {
-              pageTemplate: getExportPageTemplate(p),
-              entitiesById,
-            }),
-          })),
-        })),
-        onProgress: (step) =>
-          progress.update(step, `Đang render ảnh ${step + 1}/${sel.length}...`),
-      });
-
-      const successfulBundles = result.bundles.filter((bundle) => bundle.succeeded > 0);
-      if (successfulBundles.length === 0) {
-        progress.error(`Không render được ảnh nào (${result.totalFailed} trang lỗi)`);
-        return;
-      }
-
-      progress.update(result.totalRendered, "Đang tạo caption và đóng gói ZIP...");
-
-      const templateName = formatTemplateDisplayName(currentJob.packTemplateName, "bo-anh");
-      const zipFileName = successfulBundles.length === 1
-        ? `${formatZipFileName(templateName, { version: bundleEntries[0][0] })}.zip`
-        : `${formatZipFileName(templateName)}.zip`;
-      await downloadMultiBundleZip(
-        successfulBundles.map((bundle) => ({ files: bundle.files })),
-        zipFileName,
-      );
-      await db.jobs.put({ ...currentJob, status: "exported" });
-      progress.success(
-        `Đã tải ZIP · ${successfulBundles.length} bộ · ${result.totalRendered} ảnh`,
-      );
-    } catch (error) {
-      progress.error("Không thể tải ZIP: " + formatExportError(error));
-    }
-  };
-
-  const exportBundleZip = async (bundle: (typeof bundleGroups)[number]) => {
-    if (!currentJob || !jobPack) return;
-    setBundleExportingIndex(bundle.bundleIndex);
-    const progress = createProgressToast({
-      initialLabel: `Đang tải ${bundle.bundleLabel}...`,
-      total: bundle.pages.length,
-    });
-    try {
-      const result = await assembleBundleArtifacts({
-        packName: jobPack.name,
-        entities,
-        renderTimeoutMs: 8_000,
-        bundles: [
-          {
-            bundleLabel: bundle.bundleLabel,
-            pages: bundle.pages.map((meta) => {
-              const filtered = toExportPageData(meta.page, {
-                pageTemplate: meta.pageTemplate ?? getExportPageTemplate(meta.page),
-                entitiesById,
-              });
-              return {
-                pageIndex: meta.page.pageIndex,
-                node: packRefs.current.get(meta.page.pageIndex) ?? null,
-                pageData: {
-                  ...filtered,
-                  pageFile: meta.displayPageName,
-                  pageName: meta.pageTemplate?.name ?? meta.page.workingTemplate?.name,
-                },
-              };
-            }),
-          },
-        ],
-        onProgress: (step) =>
-          progress.update(step, `Đang render ${step + 1}/${bundle.pages.length}...`),
-      });
-
-      const built = result.bundles[0];
-      if (!built || built.succeeded === 0) {
-        progress.error("Không tìm thấy ảnh trong bộ này để tải");
-        return;
-      }
-
-      progress.update(built.succeeded, "Đang tạo caption và đóng gói...");
-
-      const templateName = formatTemplateDisplayName(jobPack.name, "bo-anh");
-      const zipFileName = `${formatZipFileName(templateName, { version: bundle.bundleIndex })}.zip`;
-      await downloadMultiBundleZip([{ files: built.files }], zipFileName);
-      progress.success(`Đã tải ${bundle.bundleLabel}`);
-    } catch (error) {
-      progress.error("Không thể tải bộ: " + formatExportError(error));
-    } finally {
-      setBundleExportingIndex(null);
-    }
-  };
+  const { exportZip, exportBundleZip } = useBundleExporter({
+    currentJob,
+    jobPack,
+    entities,
+    entitiesById,
+    getExportPageTemplate,
+    packRefs,
+    setBundleExportingIndex,
+  });
 
   // Contribute pack/generate commands to the global Ctrl+K palette.
   usePageCommands(
@@ -3206,6 +2778,7 @@ export function PackTabContent({
                                     debug={debug}
                                     seedKey={`${jobRenderSeed}:${page.pageTemplateId}:${page.pageIndex}`}
                                     hideImagePlaceholderText
+                                    lazyImages
                                   />
                                 </div>
                                 <span
@@ -3294,7 +2867,8 @@ export function PackTabContent({
                       toast.error("Không tìm thấy ảnh để tải");
                       return;
                     }
-                    await downloadPng(node, zoomedPageMeta.page.pageFile, 2);
+                    const pipeline = await loadExportPipeline();
+                    await pipeline.downloadPng(node, zoomedPageMeta.page.pageFile, 2);
                   }}
                 >
                   <Download className="size-3.5 mr-1.5" />
@@ -3323,6 +2897,7 @@ export function PackTabContent({
                 debug={debug}
                 seedKey={`${jobRenderSeed}:${zoomedPageMeta.page.pageTemplateId}:${zoomedPageMeta.page.pageIndex}:zoom`}
                 hideImagePlaceholderText
+                lazyImages
               />
             </div>
           </div>

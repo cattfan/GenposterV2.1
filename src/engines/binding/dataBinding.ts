@@ -8,6 +8,8 @@ import {
   type BindingSourceDescriptor,
 } from "./sourceContext";
 import { ENTITY_FIELDS, normalizeFieldToken } from "@/engines/normalize/fieldRegistry";
+import { entityContentKey } from "@/lib/entityContentKey";
+import { stableHashFnv, stableShuffle } from "@/lib/seededRandom";
 
 export interface BindingFieldOption {
   value: string;
@@ -151,58 +153,15 @@ function toDisplayText(value: unknown, fallback: string | undefined): string {
   return text || (fallback ?? "");
 }
 
-function stableHash(input: string): number {
-  let hash = 2166136261;
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index);
-    hash = Math.imul(hash, 16777619) >>> 0;
-  }
-  return hash;
-}
-
-function createSeededRandom(seed: string): () => number {
-  let state = stableHash(seed) || 1;
-  return () => {
-    state = (state * 1664525 + 1013904223) >>> 0;
-    return state / 0x100000000;
-  };
-}
-
-function stableShuffle<T>(items: T[], seed: string): T[] {
-  const next = items.slice();
-  const random = createSeededRandom(seed);
-  for (let index = next.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(random() * (index + 1));
-    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
-  }
-  return next;
-}
-
-function normalizeEntityContentToken(value: unknown): string {
-  return String(value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/đ/gi, "d")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .replace(/\s+/g, " ");
-}
-
-function entityListContentKey(entity: Entity): string {
-  const name = normalizeEntityContentToken(entity.name);
-  const address = normalizeEntityContentToken(entity.address ?? entity.metadata?.address);
-  const sheet = normalizeEntityContentToken(entity.sheetName);
-  if (name) return `${sheet}|${name}`;
-  if (address) return `${sheet}|address:${address}`;
-  return entity.entityId;
+function pickFromSeededList<T>(ordered: T[], seed: string): T {
+  return ordered[stableHashFnv(seed) % ordered.length];
 }
 
 function dedupeEntitiesByContent(entities: Entity[]): Entity[] {
   const seen = new Set<string>();
   const out: Entity[] = [];
   for (const entity of entities) {
-    const key = entityListContentKey(entity);
+    const key = entityContentKey(entity);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(entity);
@@ -213,7 +172,7 @@ function dedupeEntitiesByContent(entities: Entity[]): Entity[] {
 function pickStableRandomAsset(pool: Asset[], seed: string): Asset | undefined {
   if (pool.length === 0) return undefined;
   const ordered = pool.slice().sort((a, b) => a.assetId.localeCompare(b.assetId));
-  return ordered[stableHash(seed) % ordered.length];
+  return ordered[stableHashFnv(seed) % ordered.length];
 }
 
 const ENTITY_FIELD_ALIASES: Record<string, string> = (() => {
@@ -555,7 +514,7 @@ function pickScopedTextEntity(
   const seed = [options?.seed, currentEntity?.entityId, scoped.sheetName, scoped.path]
     .filter(Boolean)
     .join(":");
-  return candidates[stableHash(seed) % candidates.length];
+  return candidates[stableHashFnv(seed) % candidates.length];
 }
 
 export function resolveTextBinding(

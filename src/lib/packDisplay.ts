@@ -7,7 +7,8 @@ import type {
   RenderedPage,
   Slot,
 } from "@/models";
-import { slugify } from "@/engines/selection/generate";
+import { slugify } from "@/lib/slugify";
+import { indexById } from "@/lib/indexById";
 import { formatTemplateDisplayName } from "@/lib/templateNames";
 import { resolveTextBinding } from "@/engines/binding/dataBinding";
 
@@ -29,7 +30,7 @@ export interface BundleGroup {
   pages: BundlePageMeta[];
 }
 
-function getBundleIndex(pageIndex: number, bundleSize: number, totalPages: number): number {
+export function getBundleIndex(pageIndex: number, bundleSize: number, totalPages: number): number {
   if (bundleSize <= 0) return 1;
   if (totalPages <= bundleSize) return 1;
   return Math.floor(pageIndex / bundleSize) + 1;
@@ -66,7 +67,7 @@ export function collectVisibleEntityIds(
 ): string[] {
   const slots = pageTemplate?.slots ?? page.workingTemplate?.slots ?? [];
   if (slots.length === 0) return [];
-  const slotById = new Map(slots.map((s) => [s.slotId, s]));
+  const slotById = indexById(slots, (s) => s.slotId);
   const visible = new Set<string>();
   for (const item of page.items) {
     if (!item.entityId) continue;
@@ -85,8 +86,8 @@ export function buildBundlePageMeta(
   pageTemplates: PageTemplate[],
   entities: Entity[],
 ): BundlePageMeta[] {
-  const templateMap = new Map(pageTemplates.map((template) => [template.pageTemplateId, template]));
-  const entityMap = new Map(entities.map((entity) => [entity.entityId, entity]));
+  const templateMap = indexById(pageTemplates, (template) => template.pageTemplateId);
+  const entityMap = indexById(entities, (entity) => entity.entityId);
   const bundleSize = Math.max(1, pack.orderedPages.length);
 
   return job.pages.map((page, index) => {
@@ -142,4 +143,24 @@ export function buildBundleGroups(
         (a, b) => a.pageOrderInBundle - b.pageOrderInBundle || a.page.pageIndex - b.page.pageIndex,
       ),
   }));
+}
+
+/** Group job pages by 1-based bundle index (matches export ZIP grouping). */
+export function groupPagesByBundle(
+  pages: RenderedPage[],
+  job: GenerationJob,
+  pack: PackTemplate,
+): Map<number, RenderedPage[]> {
+  const bundleSize = Math.max(1, pack.orderedPages.length);
+  const totalPages = job.pages.length;
+  const grouped = new Map<number, RenderedPage[]>();
+  for (const page of pages) {
+    const originalIdx = job.pages.findIndex((p) => p.pageIndex === page.pageIndex);
+    const idx = originalIdx >= 0 ? originalIdx : page.pageIndex;
+    const bundleIdx = getBundleIndex(idx, bundleSize, totalPages);
+    const bucket = grouped.get(bundleIdx) ?? [];
+    bucket.push(page);
+    grouped.set(bundleIdx, bucket);
+  }
+  return grouped;
 }
