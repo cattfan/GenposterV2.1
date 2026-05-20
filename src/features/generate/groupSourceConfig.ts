@@ -121,3 +121,28 @@ export function collectClusterBindableSlotIds(
   }
   return targetIds;
 }
+
+/** Phạm vi nguồn dữ liệu cụm: ưu tiên groupId layout (Gr1/Gr2) để Gr2 không ghi đè Gr1. */
+export function resolveClusterSourceScopeSlots(
+  template: PageTemplate,
+  seedSlots: Slot[],
+  isBindable: (slot: Slot) => boolean,
+): Slot[] {
+  const bindableSeeds = seedSlots.filter((slot) => isBindable(slot));
+  if (bindableSeeds.length === 0) return [];
+
+  const groupIds = new Set(
+    bindableSeeds.map((slot) => slot.groupId).filter((groupId): groupId is string => !!groupId),
+  );
+  if (groupIds.size === 1) {
+    const [groupId] = groupIds;
+    return template.slots.filter((slot) => isBindable(slot) && slot.groupId === groupId);
+  }
+
+  const clusterSlotIds = collectClusterBindableSlotIds(
+    template,
+    bindableSeeds.map((slot) => slot.slotId),
+    isBindable,
+  );
+  return template.slots.filter((slot) => clusterSlotIds.has(slot.slotId));
+}

@@ -17,6 +17,15 @@ describe("parseWarning", () => {
     expect(result.detail).toContain("không đủ 2 đối tác/trang");
   });
 
+  it("includes actionable hint for partner-quota shortage", () => {
+    const result = parseWarning(
+      'Page "Trang 1": khong du doi tac de dat quota 2/trang.',
+    );
+    expect(result.hint).toBeDefined();
+    expect(result.hint).toContain("giảm");
+    expect(result.hint).toContain("đối tác");
+  });
+
   it("classifies partner-quota shortage without explicit quota number", () => {
     const result = parseWarning('Page "X": khong du doi tac de dat quota.');
     expect(result.level).toBe("warning");
@@ -30,11 +39,18 @@ describe("parseWarning", () => {
     expect(result.detail).toContain("Pool không đủ entity");
   });
 
+  it("includes actionable hint for entity shortage", () => {
+    const result = parseWarning('Page "Trang 1": khong du entity de gan du lieu.');
+    expect(result.hint).toBeDefined();
+    expect(result.hint).toMatch(/mở rộng|tăng|thêm/i);
+  });
+
   it("falls back to generic info for unknown messages", () => {
     const result = parseWarning("Some unexpected warning text");
     expect(result.level).toBe("info");
     expect(result.label).toBe("Thông báo");
     expect(result.detail).toBe("Some unexpected warning text");
+    expect(result.hint).toBeUndefined();
   });
 
   it("partner-quota detection beats entity-shortage when both keywords appear", () => {

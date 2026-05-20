@@ -4,6 +4,7 @@ import {
   applyGroupSourceConfigsToTemplate,
   extractGroupSourceConfigs,
   mergeGroupSourceConfigs,
+  resolveClusterSourceScopeSlots,
   resolveSharedClusterSourceDisplay,
 } from "./groupSourceConfig";
 
@@ -77,5 +78,29 @@ describe("groupSourceConfig", () => {
         { filterMoHinh: "M1" },
       ]),
     ).toEqual({ selectedSheet: "A", filterMoHinh: "M1" });
+  });
+
+  it("resolveClusterSourceScopeSlots scopes by visual groupId only", () => {
+    const mixed: PageTemplate = {
+      ...template,
+      slots: [
+        ...template.slots,
+        slot({
+          slotId: "name-gr2",
+          groupId: "gr2",
+          bindingPath: "entity.name",
+          dataSourceConfig: { selectedSheet: "Sheet B" },
+        }),
+      ],
+    };
+    mixed.slots[0] = { ...mixed.slots[0], dataGroupId: "dg_shared" };
+    mixed.slots[2] = { ...mixed.slots[2], dataGroupId: "dg_shared" };
+
+    const gr2Only = resolveClusterSourceScopeSlots(
+      mixed,
+      [mixed.slots[2]],
+      isBindable,
+    );
+    expect(gr2Only.map((item) => item.slotId)).toEqual(["name-gr2"]);
   });
 });

@@ -2,13 +2,10 @@
 // Allocator trả mảng string warning thô khi pool entity không đủ partner cho
 // quota hoặc không đủ entity tổng. Component này phân loại + format VN +
 // cho phép user dismiss khỏi UI (không persist; reload lại sẽ hiện lại).
-//
-// Ngữ cảnh: trước đây caller (PackTabContent) vứt warnings đi → user không
-// biết job có tuân quota partner hay rơi vào fallback non-partner. Panel này
-// surface dữ liệu sẵn có chứ không đổi logic allocator.
 
 import { useMemo, useState } from "react";
 import { AlertTriangle, Info, X } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { parseWarning } from "./AllocationWarningsPanel.utils";
@@ -25,42 +22,47 @@ export function AllocationWarningsPanel({ warnings, className }: Props) {
   if (warnings.length === 0 || dismissed) return null;
 
   return (
-    <div
+    <Alert
       className={cn(
-        "rounded-md border border-amber-300/60 bg-amber-50/80 p-2 text-amber-900 shadow-sm dark:border-amber-700/40 dark:bg-amber-950/40 dark:text-amber-100",
+        "relative border-amber-500/50 bg-amber-500/10 text-amber-950 dark:text-amber-100",
         className,
       )}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-1.5 text-xs font-medium">
-          <AlertTriangle className="size-3.5" />
-          {warnings.length} cảnh báo phân bổ dữ liệu
-        </div>
+      <AlertTriangle className="text-amber-700 dark:text-amber-300" />
+      <div className="absolute right-2 top-2">
         <Button
           type="button"
           variant="ghost"
           size="icon"
-          className="-mt-0.5 size-5 text-amber-900 hover:bg-amber-100 dark:text-amber-100 dark:hover:bg-amber-900/40"
+          className="size-7 text-amber-900 hover:bg-amber-100 dark:text-amber-100 dark:hover:bg-amber-900/40"
           onClick={() => setDismissed(true)}
           aria-label="Ẩn cảnh báo"
         >
-          <X className="size-3" />
+          <X className="size-3.5" />
         </Button>
       </div>
-      <ul className="mt-1.5 space-y-1 text-[11px]">
-        {parsed.map((item, index) => (
-          <li key={`${index}-${item.label}`} className="flex items-start gap-1.5">
-            {item.level === "warning" ? (
-              <AlertTriangle className="mt-0.5 size-3 shrink-0" />
-            ) : (
-              <Info className="mt-0.5 size-3 shrink-0" />
-            )}
-            <span>
-              <span className="font-medium">{item.label}.</span> {item.detail}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
+      <AlertTitle>{warnings.length} cảnh báo phân bổ dữ liệu</AlertTitle>
+      <AlertDescription>
+        <ul className="flex flex-col gap-2 pt-1">
+          {parsed.map((item, index) => (
+            <li key={`${index}-${item.label}`} className="flex items-start gap-1.5 text-xs">
+              {item.level === "warning" ? (
+                <AlertTriangle className="mt-0.5 size-3 shrink-0" />
+              ) : (
+                <Info className="mt-0.5 size-3 shrink-0" />
+              )}
+              <span className="flex flex-col gap-0.5">
+                <span>
+                  <span className="font-medium">{item.label}.</span> {item.detail}
+                </span>
+                {item.hint ? (
+                  <span className="text-xs opacity-80">{item.hint}</span>
+                ) : null}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </AlertDescription>
+    </Alert>
   );
 }

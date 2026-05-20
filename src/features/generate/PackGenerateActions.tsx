@@ -15,20 +15,17 @@ export function PackGenerateActions({
   onGenerate,
 }: PackGenerateActionsProps) {
   return (
-    <div className="border-t pt-3 space-y-2">
+    <div className="border-t pt-3">
       <Button
         onClick={onGenerate}
         disabled={!canGenerate}
         className="w-full"
-        title={reason}
+        title={!canGenerate ? reason : undefined}
       >
         <Sparkles className="size-4 mr-2" /> Tạo bộ ảnh
       </Button>
-      <p className={"text-xs " + (canGenerate ? "text-muted-foreground" : "text-destructive")}>
-        {reason}
-      </p>
       {!hasEntities && (
-        <Button asChild variant="outline" size="sm" className="w-full">
+        <Button asChild variant="outline" size="sm" className="mt-2 w-full">
           <a href="/data">Nhập dữ liệu từ Google Sheet</a>
         </Button>
       )}

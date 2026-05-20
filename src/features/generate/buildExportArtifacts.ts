@@ -95,7 +95,8 @@ export async function assembleBundleArtifacts(
   let totalFailed = 0;
   const out: BundleArtifactOutput[] = [];
 
-  for (const bundle of input.bundles) {
+  for (let bundleIndex = 0; bundleIndex < input.bundles.length; bundleIndex++) {
+    const bundle = input.bundles[bundleIndex];
     const pageBlobs: Array<{ blob: Blob; pageData: ExportPageEntityData }> = [];
     let bundleFailed = 0;
 
@@ -129,15 +130,17 @@ export async function assembleBundleArtifacts(
     }));
 
     // Caption: ưu tiên AI (15s timeout), fallback local nếu AI fail/timeout.
+    // bundleIndex được wire qua để captionTones.pickCaptionTone chọn tone
+    // khác nhau cho từng Bộ (B1/B2/B3 cùng pack ra 3 tone khác).
     let captionBlob: Blob;
     try {
       captionBlob = await Promise.race([
         buildTikTokCaptionBlob({
           packName: input.packName,
           bundleLabel: bundle.bundleLabel,
+          bundleIndex,
           pages: pageBlobs.map((entry) => entry.pageData),
           entities: input.entities,
-          variantCount: 3,
         }),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("ai-caption-timeout")), 15_000),
@@ -147,9 +150,9 @@ export async function assembleBundleArtifacts(
       captionBlob = buildFallbackCaptionBlob({
         packName: input.packName,
         bundleLabel: bundle.bundleLabel,
+        bundleIndex,
         pages: pageBlobs.map((entry) => entry.pageData),
         entities: input.entities,
-        variantCount: 3,
       });
     }
     files.push({ name: "caption.txt", blob: captionBlob });

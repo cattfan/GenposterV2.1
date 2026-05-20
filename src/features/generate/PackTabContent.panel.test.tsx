@@ -11,8 +11,12 @@ const packTabContentSource = () =>
 describe("PackTabContent data panel", () => {
   it("keeps selected-slot controls without rendering an overview tab", () => {
     const source = packTabContentSource();
+    const bindPanelSource = readFileSync(
+      fileURLToPath(new URL("./GenerateBindPanel.tsx", import.meta.url)),
+      "utf8",
+    );
 
-    expect(source).toContain("Khối đang chọn");
+    expect(bindPanelSource).toContain("Khối đang chọn");
     expect(source).not.toContain('value="overview"');
     expect(source).not.toContain("Tổng quan");
   });

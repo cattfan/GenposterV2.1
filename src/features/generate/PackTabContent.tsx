@@ -5,29 +5,11 @@ import { useLiveQuery } from "@/storage/useLiveQuery";
 import { nanoid } from "nanoid";
 import { toast } from "sonner";
 import {
-  Sparkles,
-  ArrowLeft,
   Download,
-  FileDown,
-  FileUp,
   Package,
-  Copy,
-  Link2,
-  Link2Off,
-  AlertTriangle,
-  Image as ImageIcon,
-  Minus,
-  Plus,
   Type,
   Star,
-  Wand2,
   Loader2,
-  Eye,
-  Save,
-  Trash2,
-  Undo2,
-  Redo2,
-  MousePointerClick,
   Play as PlayIcon,
 } from "lucide-react";
 import type {
@@ -51,7 +33,6 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   TEXT_BINDING_OPTIONS,
@@ -67,24 +48,21 @@ import {
   parseEntityScopedTextBindingPath,
   resolveTextBinding,
 } from "@/engines/binding/dataBinding";
-import { BindCanvas } from "@/features/generate/BindCanvas";
-import { BindingIssuesPanel } from "@/features/generate/BindingIssuesPanel";
-import { AllocationWarningsPanel } from "@/features/generate/AllocationWarningsPanel";
 import { PageRenderer } from "@/features/render/PageRenderer";
-import {
-  TextListBindingPanel,
-  type TextListFieldOption,
-} from "@/features/generate/TextListBindingPanel";
-import { TextRewritePanel } from "@/features/generate/TextRewritePanel";
+import { type TextListFieldOption } from "@/features/generate/TextListBindingPanel";
 import { GeneratePageEditor } from "@/features/generate/GeneratePageEditor";
 import { isLikelyGeneratePageBackgroundSlot } from "@/features/generate/backgroundGuards";
 import { autoBindPlaceholdersForDrafts } from "@/features/generate/autoBindPlaceholders";
 import { allocatePackWorkspacePreview } from "@/features/generate/packWorkspacePreview";
+import {
+  buildPresetCardPreviewContexts,
+  type PresetCardPagePreviewContext,
+} from "@/features/generate/presetCardPreview";
 import { canResumePresetWorkspace } from "@/features/generate/presetWorkspacePersistence";
 import {
   applyGroupSourceConfigsToTemplate,
-  collectClusterBindableSlotIds,
   extractGroupSourceConfigs,
+  resolveClusterSourceScopeSlots,
   resolveSharedClusterSourceDisplay,
 } from "@/features/generate/groupSourceConfig";
 import {
@@ -93,6 +71,15 @@ import {
   shouldAutoDataGroupVisualSlots,
   type StickyGroupPin,
 } from "@/features/generate/stickyPreviewAllocation";
+import {
+  applyFormatAssignmentsToSlots,
+  buildFormatAssignments,
+  buildSlotFormatClipboard,
+  createDataGroupId,
+  resolveClusterPasteTargets,
+  sortSlotsForFormat,
+  type SlotFormatClipboard,
+} from "@/features/generate/slotFormatClipboard";
 import {
   buildTextSlotDisplayLabel,
   normalizeSlotDisplayLabel,
@@ -107,15 +94,14 @@ import {
 } from "@/features/generate/usePreviewPageDrafts";
 import { aiCaptionFromEntity, aiRewriteTextPreserveMeaning } from "@/features/ai/aiFeatures";
 import { generatePackJob } from "@/engines/selection/generate";
-import {
-  allocateEntityBindingsForTemplate,
-  buildEntityAllocationOrder,
-} from "@/engines/selection/entityBindAllocator";
 import { buildEntityBindingTargets, expandPageWithCardGroups } from "@/engines/binding/cardRepeater";
 import { filterRenderableAssets } from "@/engines/binding/assetImage";
 import { isDataGroupMarkerSlot } from "@/engines/binding/slotMarkers";
 import { getImageReferenceEntityIds } from "@/features/data/imageReferences";
-import { usePackBindOverrides } from "@/features/generate/usePackBindOverrides";
+import {
+  usePackBindOverrides,
+  type PackBindOverrides,
+} from "@/features/generate/usePackBindOverrides";
 import { isSlotInsideSelectionContainer } from "@/features/generate/selectionGeometry";
 import {
   downloadPng,
@@ -146,10 +132,20 @@ import {
 import { exportPresetJsonToDataServer } from "@/server/presetExport";
 import { formatTemplateDisplayName } from "@/lib/templateNames";
 import { usePageCommands, type CommandEntry } from "@/components/CommandPalette";
-import { EmptyState, createProgressToast } from "@/components/ux";
+import { createProgressToast } from "@/components/ux";
+import {
+  type BindPanelImageSlotRow,
+  type BindPanelTextSlotRow,
+} from "@/features/generate/GenerateBindPanel";
+import { GeneratePackWorkspace } from "@/features/generate/GeneratePackWorkspace";
+import { PresetGalleryView } from "@/features/generate/PresetGalleryView";
+import { BundleImageWarningsAlert } from "@/features/generate/BundleImageWarningsAlert";
+import {
+  toPageTabItems,
+  type ResolvedGeneratePageConfig,
+} from "@/features/generate/generatePanelProps";
 
 type Filter = "all" | "selected" | "errors" | "partner";
-type FormatSlotMode = "text" | "image";
 
 interface BundleImageIssue {
   entityId: string;
@@ -157,28 +153,6 @@ interface BundleImageIssue {
   pageNames: string[];
   partnerFlag: boolean;
   hasImageReference: boolean;
-}
-
-interface SlotFormatSnapshot {
-  sourceSlotId: string;
-  sourceLabel: string;
-  bindMode: FormatSlotMode;
-  bindingKey: string;
-  bindingPath?: string;
-  fieldParts?: Slot["fieldParts"];
-  allowedAssetRoles?: Slot["allowedAssetRoles"];
-  dataSourceConfig?: Slot["dataSourceConfig"];
-  dataGroupKey?: string;
-}
-
-interface SlotFormatClipboard {
-  label: string;
-  snapshots: SlotFormatSnapshot[];
-}
-
-interface SlotFormatAssignment {
-  snapshot: SlotFormatSnapshot;
-  dataGroupId?: string;
 }
 
 interface GenerateReadiness {
@@ -189,18 +163,24 @@ interface GenerateReadiness {
 const cloneJsonValue = <T,>(value: T | undefined): T | undefined =>
   value == null ? undefined : (JSON.parse(JSON.stringify(value)) as T);
 
+function resolveWorkingTemplateFromPrev(
+  prev: PreviewPageDrafts,
+  pageTemplateId: string,
+  basePages: PageTemplate[],
+  overrides: PackBindOverrides,
+): PageTemplate | undefined {
+  const base = basePages.find((page) => page.pageTemplateId === pageTemplateId);
+  if (!base) return undefined;
+  return createWorkingTemplate(
+    base,
+    overrides[pageTemplateId],
+    prev[pageTemplateId],
+    GENERATE_TEMPLATE_OPTIONS,
+  );
+}
+
 // DRAFT_HISTORY_LIMIT, clonePreviewPageDrafts, cloneTemplateDraftsWithSource:
 // đã chuyển sang [src/features/generate/usePreviewPageDrafts.ts] và import ở đầu file.
-
-function sortSlotsForFormat(slots: Slot[]) {
-  return slots
-    .slice()
-    .sort((a, b) => a.y - b.y || a.x - b.x || a.slotId.localeCompare(b.slotId));
-}
-
-function stringifyFormatValue(value: unknown) {
-  return JSON.stringify(value ?? null);
-}
 
 function formatPresetSaveError(error: unknown): string {
   if (error instanceof RemoteError) {
@@ -225,11 +205,6 @@ function isRetryablePresetSaveError(error: unknown): boolean {
   return false;
 }
 
-function createDataGroupId() {
-  return `dg_${nanoid(8)}`;
-}
-
-
 interface Props {
   packs: PackTemplate[];
   tpls: PageTemplate[];
@@ -251,8 +226,6 @@ interface Props {
   filter: Filter;
   setFilter: (f: Filter) => void;
 }
-
-type ResolvedGeneratePageConfig = Required<GeneratePageConfig>;
 
 const ALL_VALUE = "__all__";
 
@@ -701,58 +674,6 @@ export function PackTabContent({
     return buildOrderedEntityPool(page?.entityId);
   }, [buildOrderedEntityPool, entities]);
 
-  const buildPresetPreviewRenderContext = useCallback((
-    preset: GenerateBindingPreset,
-    template: PageTemplate,
-  ) => {
-    const cfg = preset.generateConfig ?? {};
-    const presetGlobalConfig = resolveGeneratePageConfig(globalGenerateConfig, {
-      selectedSheet: ALL_VALUE,
-      filterMoHinh: ALL_VALUE,
-      filterPhongCach: ALL_VALUE,
-      prioritizePartner: cfg.prioritizePartner,
-      onlyPartner: cfg.onlyPartner,
-      partnerQuotaPerPage: cfg.partnerQuotaPerPage,
-      maxEntities: cfg.maxEntities,
-    });
-    const presetPageConfig = resolveGeneratePageConfig(presetGlobalConfig, {
-      ...cfg.pageConfigs?.[template.pageTemplateId],
-      selectedSheet: ALL_VALUE,
-      filterMoHinh: ALL_VALUE,
-      filterPhongCach: ALL_VALUE,
-    });
-    const source = buildSourceFilteredEntities(entities, presetPageConfig);
-    const configuredPool = buildConfiguredEntityPool(source, presetPageConfig);
-    const pool =
-      configuredPool.length > 0
-        ? configuredPool
-        : filteredEntities;
-    const previewSeed = `${preset.presetId}:${template.pageTemplateId}:card-preview`;
-    const orderedPool = buildEntityAllocationOrder(
-      pool,
-      presetPageConfig.prioritizePartner,
-      previewSeed,
-    );
-    const owner = orderedPool[0];
-    const targetCount = buildEntityBindingTargets(template, orderedPool).length;
-    const allocation =
-      owner && targetCount > 0
-        ? allocateEntityBindingsForTemplate({
-            template,
-            orderedEntities: orderedPool,
-            pageOwner: targetCount <= 1 ? owner : undefined,
-            partnerQuota: presetPageConfig.partnerQuotaPerPage,
-            prioritizePartner: presetPageConfig.prioritizePartner,
-            batchState: { usedEntityIds: new Set<string>() },
-          })
-        : undefined;
-    return {
-      entity: owner,
-      entityPool: pool,
-      slotItems: allocation?.items ?? [],
-    };
-  }, [entities, filteredEntities, globalGenerateConfig]);
-
   const activeTargetCount = useMemo(
     () =>
       effectiveActive
@@ -1102,13 +1023,20 @@ export function PackTabContent({
   }, [selectedBindableSlots]);
   const clusterSourceSlots = useMemo(() => {
     if (!effectiveActive || selectedBindableSlots.length === 0) return [];
-    if (selectedClusterKeys.size !== 1) return [];
-    const clusterSlotIds = collectClusterBindableSlotIds(
-      effectiveActive,
-      selectedBindableSlots.map((slot) => slot.slotId),
-      (slot) => getSlotBindMode(slot) !== null,
+    const visualGroupIds = new Set(
+      selectedBindableSlots
+        .map((slot) => slot.groupId)
+        .filter((groupId): groupId is string => !!groupId),
     );
-    return effectiveActive.slots.filter((slot) => clusterSlotIds.has(slot.slotId));
+    if (visualGroupIds.size > 1) return [];
+    if (visualGroupIds.size === 0 && selectedClusterKeys.size !== 1) return [];
+    return sortSlotsForFormat(
+      resolveClusterSourceScopeSlots(
+        effectiveActive,
+        selectedBindableSlots,
+        (slot) => getSlotBindMode(slot) !== null,
+      ),
+    );
     // getSlotBindMode is a stable helper derived from effectiveActive.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveActive, selectedBindableSlots, selectedClusterKeys]);
@@ -1292,20 +1220,21 @@ export function PackTabContent({
     slots: Slot[],
     patch: Partial<NonNullable<Slot["dataSourceConfig"]>>,
   ) => {
-    if (!activePage || !effectiveActive) return;
-    const targetIds = collectClusterBindableSlotIds(
-      effectiveActive,
-      slots.map((slot) => slot.slotId),
-      (slot) => getSlotBindMode(slot) !== null,
-    );
+    if (!activePage) return;
+    const pageTemplateId = activePage.pageTemplateId;
     let changed = false;
+    let patchedTargetIds = new Set<string>();
+
     commitPreviewPageDrafts((prev) => {
-      const current = createWorkingTemplate(
-        effectiveActive,
-        undefined,
-        effectiveActive,
-        GENERATE_TEMPLATE_OPTIONS,
+      const current = resolveWorkingTemplateFromPrev(prev, pageTemplateId, packPages, packOv);
+      if (!current) return prev;
+
+      const isBindable = (slot: Slot) => getSlotBindMode(slot, current) !== null;
+      const targetIds = new Set(
+        resolveClusterSourceScopeSlots(current, slots, isBindable).map((slot) => slot.slotId),
       );
+      patchedTargetIds = targetIds;
+
       current.slots = current.slots.map((slot) => {
         if (!targetIds.has(slot.slotId)) return slot;
         const base = slot.dataSourceConfig ?? {};
@@ -1331,36 +1260,40 @@ export function PackTabContent({
       });
       if (!changed) return prev;
       current.updatedAt = Date.now();
-      return { ...prev, [activePage.pageTemplateId]: current };
+      return { ...prev, [pageTemplateId]: current };
     });
-    if (changed && activePage && effectiveActive) {
+
+    if (changed && patchedTargetIds.size > 0) {
+      const draftTemplate = previewPageDraftsRef.current[pageTemplateId];
+      const working =
+        draftTemplate ??
+        resolvePageWorkingTemplate(activePage, packOv[pageTemplateId], undefined, GENERATE_TEMPLATE_OPTIONS);
+      if (!working) return;
+
       const orderedEntities = buildOrderedEntityPool(previewEntityId, filteredEntities);
-      const targets = buildEntityBindingTargets(effectiveActive, orderedEntities);
-      const slotsById = new Map(effectiveActive.slots.map((slot) => [slot.slotId, slot]));
+      const targets = buildEntityBindingTargets(working, orderedEntities);
+      const slotsById = new Map(working.slots.map((slot) => [slot.slotId, slot]));
       const pagePins =
-        stickyPreviewPinsByPageRef.current.get(activePage.pageTemplateId) ?? new Map();
+        stickyPreviewPinsByPageRef.current.get(pageTemplateId) ?? new Map();
       for (const target of targets) {
-        if (!target.slotIds.some((slotId) => targetIds.has(slotId))) continue;
+        if (!target.slotIds.some((slotId) => patchedTargetIds.has(slotId))) continue;
         const clusterSlots = target.slotIds
           .map((slotId) => slotsById.get(slotId))
           .filter((slot): slot is Slot => !!slot);
         if (clusterSlots.length === 0) continue;
         pagePins.delete(resolveBindingGroupKey(clusterSlots, target.targetId));
       }
-      stickyPreviewPinsByPageRef.current.set(activePage.pageTemplateId, pagePins);
+      stickyPreviewPinsByPageRef.current.set(pageTemplateId, pagePins);
     }
   };
   const setDataGroupForSlots = (slots: Slot[], dataGroupId: string | undefined) => {
-    if (!activePage || !effectiveActive) return;
+    if (!activePage) return;
+    const pageTemplateId = activePage.pageTemplateId;
     const targetIds = new Set(slots.map((slot) => slot.slotId));
     let changed = false;
     commitPreviewPageDrafts((prev) => {
-      const current = createWorkingTemplate(
-        effectiveActive,
-        undefined,
-        effectiveActive,
-        GENERATE_TEMPLATE_OPTIONS,
-      );
+      const current = resolveWorkingTemplateFromPrev(prev, pageTemplateId, packPages, packOv);
+      if (!current) return prev;
       current.slots = current.slots.map((slot) => {
         if (!targetIds.has(slot.slotId)) return slot;
         if (slot.dataGroupId === dataGroupId) return slot;
@@ -1369,7 +1302,7 @@ export function PackTabContent({
       });
       if (!changed) return prev;
       current.updatedAt = Date.now();
-      return { ...prev, [activePage.pageTemplateId]: current };
+      return { ...prev, [pageTemplateId]: current };
     });
   };
   const groupSelectedDataSlots = () => {
@@ -1391,201 +1324,38 @@ export function PackTabContent({
     toast.success("Đã bỏ nhóm dữ liệu");
   };
   const copySelectedSlotFormat = () => {
-    const sourceSlots = sortSlotsForFormat(selectedBindableSlots);
-    if (sourceSlots.length === 0) {
-      toast.error("Chọn ít nhất 1 khối để sao chép liên kết dữ liệu");
-      return;
-    }
-
-    const sourceDataGroupCounts = new Map<string, number>();
-    sourceSlots.forEach((slot) => {
-      if (!slot.dataGroupId) return;
-      sourceDataGroupCounts.set(slot.dataGroupId, (sourceDataGroupCounts.get(slot.dataGroupId) ?? 0) + 1);
-    });
-
-    const snapshots = sourceSlots
-      .map((slot, index): SlotFormatSnapshot | null => {
+    if (!activePage || !effectiveActive) return;
+    const pageLabel = activePage.name?.trim() || `Trang ${activePageIdx + 1}`;
+    const result = buildSlotFormatClipboard({
+      template: effectiveActive,
+      selectedSlots: selectedBindableSlots,
+      pageTemplateId: activePage.pageTemplateId,
+      pageLabel,
+      isBindable: (slot) => getSlotBindMode(slot) !== null,
+      getBindMode: (slot) => {
         const mode = getSlotBindMode(slot);
-        if (!mode) return null;
-        const dataGroupKey =
-          slot.dataGroupId && (sourceDataGroupCounts.get(slot.dataGroupId) ?? 0) > 1
-            ? slot.dataGroupId
-            : undefined;
-        return {
-          sourceSlotId: slot.slotId,
-          sourceLabel: slotFormatLabel(slot, index),
-          bindMode: mode,
-          bindingKey: slotFormatBindingKey(slot),
-          bindingPath: slot.bindingPath,
-          fieldParts: cloneJsonValue(slot.fieldParts),
-          allowedAssetRoles: cloneJsonValue(slot.allowedAssetRoles),
-          dataSourceConfig: cloneJsonValue(slot.dataSourceConfig),
-          dataGroupKey,
-        };
-      })
-      .filter((snapshot): snapshot is SlotFormatSnapshot => !!snapshot);
-
-    if (snapshots.length === 0) {
-      toast.error("Khối đang chọn không có liên kết dữ liệu để sao chép");
+        return mode === "text" || mode === "image" ? mode : null;
+      },
+      getBindingKey: slotFormatBindingKey,
+      getSlotLabel: slotFormatLabel,
+    });
+    if ("error" in result) {
+      toast.error(result.error);
       return;
     }
-
-    const label = snapshots.length === 1 ? snapshots[0].sourceLabel : `${snapshots.length} khối`;
-    setFormatClipboard({ label, snapshots });
-    toast.success(`Đã sao chép liên kết dữ liệu của ${label}`);
+    setFormatClipboard(result.clipboard);
+    toast.success(`Đã sao chép liên kết dữ liệu · ${pageLabel}`);
   };
-  const buildFormatAssignments = (targets: Slot[]) => {
-    if (!formatClipboard) return new Map<string, SlotFormatAssignment>();
-
-    const sortedTargets = sortSlotsForFormat(targets).filter((target) => getSlotBindMode(target));
-    const byKey = new Map<string, SlotFormatSnapshot[]>();
-    const byMode = new Map<FormatSlotMode, SlotFormatSnapshot[]>();
-    for (const snapshot of formatClipboard.snapshots) {
-      const keyGroup = byKey.get(snapshot.bindingKey) ?? [];
-      keyGroup.push(snapshot);
-      byKey.set(snapshot.bindingKey, keyGroup);
-
-      const modeGroup = byMode.get(snapshot.bindMode) ?? [];
-      modeGroup.push(snapshot);
-      byMode.set(snapshot.bindMode, modeGroup);
-    }
-
-    if (
-      formatClipboard.snapshots.length > 1 &&
-      sortedTargets.length >= formatClipboard.snapshots.length &&
-      sortedTargets.length % formatClipboard.snapshots.length === 0
-    ) {
-      const chunkedAssignments = new Map<string, SlotFormatAssignment>();
-      const chunkSize = formatClipboard.snapshots.length;
-      for (let start = 0; start < sortedTargets.length; start += chunkSize) {
-        const chunk = sortedTargets.slice(start, start + chunkSize);
-        const chunkDataGroupIds = new Map<string, string>();
-        const chunkMatches = chunk.every((target, index) => {
-          const snapshot = formatClipboard.snapshots[index];
-          return snapshot && getSlotBindMode(target) === snapshot.bindMode;
-        });
-        if (!chunkMatches) {
-          chunkedAssignments.clear();
-          break;
-        }
-        chunk.forEach((target, index) => {
-          const snapshot = formatClipboard.snapshots[index];
-          let dataGroupId: string | undefined;
-          if (snapshot.dataGroupKey) {
-            dataGroupId = chunkDataGroupIds.get(snapshot.dataGroupKey);
-            if (!dataGroupId) {
-              dataGroupId = createDataGroupId();
-              chunkDataGroupIds.set(snapshot.dataGroupKey, dataGroupId);
-            }
-          }
-          chunkedAssignments.set(target.slotId, {
-            snapshot,
-            dataGroupId,
-          });
-        });
-      }
-      if (chunkedAssignments.size === sortedTargets.length) return chunkedAssignments;
-    }
-
-    if (sortedTargets.length === formatClipboard.snapshots.length) {
-      const orderedAssignments = new Map<string, SlotFormatAssignment>();
-      const dataGroupIds = new Map<string, string>();
-      sortedTargets.forEach((target, index) => {
-        const snapshot = formatClipboard.snapshots[index];
-        if (snapshot && getSlotBindMode(target) === snapshot.bindMode) {
-          let dataGroupId: string | undefined;
-          if (snapshot.dataGroupKey) {
-            dataGroupId = dataGroupIds.get(snapshot.dataGroupKey);
-            if (!dataGroupId) {
-              dataGroupId = createDataGroupId();
-              dataGroupIds.set(snapshot.dataGroupKey, dataGroupId);
-            }
-          }
-          orderedAssignments.set(target.slotId, { snapshot, dataGroupId });
-        }
-      });
-      if (orderedAssignments.size === sortedTargets.length) return orderedAssignments;
-    }
-
-    if (formatClipboard.snapshots.length > 1) {
-      const partialOrderedAssignments = new Map<string, SlotFormatAssignment>();
-      const dataGroupIds = new Map<string, string>();
-      sortedTargets.forEach((target, index) => {
-        const snapshot = formatClipboard.snapshots[index];
-        if (!snapshot || getSlotBindMode(target) !== snapshot.bindMode) return;
-        let dataGroupId: string | undefined;
-        if (snapshot.dataGroupKey) {
-          dataGroupId = dataGroupIds.get(snapshot.dataGroupKey);
-          if (!dataGroupId) {
-            dataGroupId = createDataGroupId();
-            dataGroupIds.set(snapshot.dataGroupKey, dataGroupId);
-          }
-        }
-        partialOrderedAssignments.set(target.slotId, {
-          snapshot,
-          dataGroupId,
-        });
-      });
-      if (partialOrderedAssignments.size > 0) return partialOrderedAssignments;
-    }
-
-    const modeOrderedAssignments = new Map<string, SlotFormatAssignment>();
-    const modeOrderedUseCount = new Map<FormatSlotMode, number>();
-    for (const target of sortedTargets) {
-      const mode = getSlotBindMode(target);
-      if (!mode) continue;
-      const modeMatches = byMode.get(mode) ?? [];
-      if (modeMatches.length === 0) continue;
-      const used = modeOrderedUseCount.get(mode) ?? 0;
-      if (formatClipboard.snapshots.length > 1 && used >= modeMatches.length) continue;
-      modeOrderedAssignments.set(target.slotId, {
-        snapshot:
-          formatClipboard.snapshots.length === 1
-            ? modeMatches[0]
-            : modeMatches[used],
-      });
-      modeOrderedUseCount.set(mode, used + 1);
-    }
-    if (modeOrderedAssignments.size === sortedTargets.length) return modeOrderedAssignments;
-
-    const keyUseCount = new Map<string, number>();
-    const modeUseCount = new Map<FormatSlotMode, number>();
-    const assignments = new Map<string, SlotFormatAssignment>();
-
-    for (const target of sortedTargets) {
-      const mode = getSlotBindMode(target);
-      if (!mode) continue;
-
-      const bindingKey = slotFormatBindingKey(target);
-      const exactMatches = byKey.get(bindingKey) ?? [];
-      if (exactMatches.length > 0) {
-        const used = keyUseCount.get(bindingKey) ?? 0;
-        if (formatClipboard.snapshots.length > 1 && used >= exactMatches.length) continue;
-        assignments.set(target.slotId, {
-          snapshot:
-            formatClipboard.snapshots.length === 1
-              ? exactMatches[0]
-              : exactMatches[used],
-        });
-        keyUseCount.set(bindingKey, used + 1);
-        continue;
-      }
-
-      const modeMatches = byMode.get(mode) ?? [];
-      if (modeMatches.length === 0) continue;
-      const used = modeUseCount.get(mode) ?? 0;
-      if (formatClipboard.snapshots.length > 1 && used >= modeMatches.length) continue;
-      assignments.set(target.slotId, {
-        snapshot:
-          formatClipboard.snapshots.length === 1
-            ? modeMatches[0]
-            : modeMatches[used],
-      });
-      modeUseCount.set(mode, used + 1);
-    }
-
-    return assignments;
-  };
+  const clusterPasteTargets = useMemo(() => {
+    if (!effectiveActive || !formatClipboard?.sourceVisualGroupId) return [];
+    return resolveClusterPasteTargets(
+      effectiveActive,
+      formatClipboard,
+      (slot) => getSlotBindMode(slot) !== null,
+    );
+    // getSlotBindMode is a stable helper derived from effectiveActive.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveActive, formatClipboard]);
   const applyCopiedSlotFormat = (targets: Slot[], scopeLabel: string) => {
     if (!activePage || !effectiveActive) return;
     if (!formatClipboard) {
@@ -1597,53 +1367,34 @@ export function PackTabContent({
       return;
     }
 
-    const assignments = buildFormatAssignments(targets);
+    const assignments = buildFormatAssignments(
+      formatClipboard,
+      targets,
+      (slot) => {
+        const mode = getSlotBindMode(slot);
+        return mode === "text" || mode === "image" ? mode : null;
+      },
+      slotFormatBindingKey,
+    );
     if (assignments.size === 0) {
       toast.error("Không có khối cùng loại để dán liên kết dữ liệu");
       return;
     }
 
-    const shouldApplyDataGroups = formatClipboard.snapshots.some((snapshot) => snapshot.dataGroupKey);
     let changed = false;
 
     commitPreviewPageDrafts((prev) => {
-      const current = createWorkingTemplate(
-        effectiveActive,
-        undefined,
-        effectiveActive,
-        GENERATE_TEMPLATE_OPTIONS,
+      const current = resolveWorkingTemplateFromPrev(
+        prev,
+        activePage.pageTemplateId,
+        packPages,
+        packOv,
       );
-      current.slots = current.slots.map((slot) => {
-        const assignment = assignments.get(slot.slotId);
-        if (!assignment) return slot;
-        const { snapshot } = assignment;
-
-        const nextFieldParts = cloneJsonValue(snapshot.fieldParts);
-        const nextAllowedAssetRoles = cloneJsonValue(snapshot.allowedAssetRoles);
-        const nextDataSourceConfig = cloneJsonValue(snapshot.dataSourceConfig);
-        const nextDataGroupId = shouldApplyDataGroups ? assignment.dataGroupId : slot.dataGroupId;
-        const nextSlot = {
-          ...slot,
-          bindingPath: snapshot.bindingPath,
-          fieldParts: nextFieldParts,
-          allowedAssetRoles: nextAllowedAssetRoles,
-          dataSourceConfig: nextDataSourceConfig,
-          dataGroupId: nextDataGroupId,
-        };
-        if (
-          slot.bindingPath !== nextSlot.bindingPath ||
-          stringifyFormatValue(slot.fieldParts) !== stringifyFormatValue(nextSlot.fieldParts) ||
-          stringifyFormatValue(slot.allowedAssetRoles) !==
-            stringifyFormatValue(nextSlot.allowedAssetRoles) ||
-          stringifyFormatValue(slot.dataSourceConfig) !==
-            stringifyFormatValue(nextSlot.dataSourceConfig) ||
-          slot.dataGroupId !== nextSlot.dataGroupId
-        ) {
-          changed = true;
-        }
-        return nextSlot;
-      });
+      if (!current) return prev;
+      const applied = applyFormatAssignmentsToSlots(current.slots, assignments);
+      changed = applied.changed;
       if (!changed) return prev;
+      current.slots = applied.slots;
       current.updatedAt = Date.now();
       return { ...prev, [activePage.pageTemplateId]: current };
     });
@@ -1657,6 +1408,17 @@ export function PackTabContent({
         onClick: undoPreviewPageDrafts,
       },
     });
+  };
+  const pasteToMatchingClusterOnPage = () => {
+    if (!formatClipboard?.sourceVisualGroupId) {
+      toast.error("Bản sao chép không gắn với cụm layout — hãy sao chép từ khối thuộc Gr1/Gr2");
+      return;
+    }
+    if (clusterPasteTargets.length === 0) {
+      toast.error("Trang này không có cụm layout tương ứng với bản sao chép");
+      return;
+    }
+    applyCopiedSlotFormat(clusterPasteTargets, "cùng cụm trang này");
   };
   const clearBindingsForSlots = (slots: Slot[], pageTemplateId: string) => {
     slots.forEach((slot) => clearBinding(pageTemplateId, slot.slotId));
@@ -1741,9 +1503,7 @@ export function PackTabContent({
           </div>
         )}
         <div>
-          <Label className="text-xs">
-            {slots.length > 1 ? "Nguồn dữ liệu của cụm" : "Nguồn dữ liệu"}
-          </Label>
+          <Label className="text-xs">Sheet</Label>
           <Select
             value={sourceConfig.selectedSheet}
             onValueChange={(sheetName) => applySlotSourcePatch(slots, { selectedSheet: sheetName })}
@@ -1977,35 +1737,78 @@ export function PackTabContent({
     };
   };
 
-  /** Thumbnail trước khi mở workspace — cache để click/hover không đổi data ngẫu nhiên. */
+  /** Thumbnail trước khi mở workspace — pack-order giống canvas workspace. */
   const presetCardPreviewContexts = useMemo(() => {
-    const map = new Map<
-      string,
-      ReturnType<typeof buildPresetPreviewRenderContext>
-    >();
+    const map = new Map<string, PresetCardPagePreviewContext>();
+
+    const resolvePresetStoredTemplate = (
+      preset: GenerateBindingPreset,
+      page: PageTemplate,
+    ) => {
+      const previewTemplateRaw = resolvePageWorkingTemplate(
+        page,
+        preset.bindOverrides?.[page.pageTemplateId],
+        preset.pageTemplateDrafts?.[page.pageTemplateId],
+        GENERATE_TEMPLATE_OPTIONS,
+      );
+      if (!previewTemplateRaw) return undefined;
+      const pageGroupSources = preset.generateConfig.groupSourceConfigs?.[page.pageTemplateId];
+      if (!pageGroupSources || Object.keys(pageGroupSources).length === 0) {
+        return previewTemplateRaw;
+      }
+      return applyGroupSourceConfigsToTemplate(
+        previewTemplateRaw,
+        pageGroupSources,
+        (slot) => getSlotBindMode(slot, previewTemplateRaw) !== null,
+      );
+    };
+
     for (const preset of matchingPresets ?? []) {
       const { pages } = getPresetPackPages(preset);
+      if (pages.length === 0) continue;
+
+      const cfg = preset.generateConfig ?? {};
+      const presetGlobalConfig = resolveGeneratePageConfig(globalGenerateConfig, {
+        selectedSheet: ALL_VALUE,
+        filterMoHinh: ALL_VALUE,
+        filterPhongCach: ALL_VALUE,
+        prioritizePartner: cfg.prioritizePartner,
+        onlyPartner: cfg.onlyPartner,
+        partnerQuotaPerPage: cfg.partnerQuotaPerPage,
+        maxEntities: cfg.maxEntities,
+      });
+      const source = buildSourceFilteredEntities(entities, presetGlobalConfig);
+      const configuredPool = buildConfiguredEntityPool(source, presetGlobalConfig);
+      const pool = configuredPool.length > 0 ? configuredPool : filteredEntities;
+      const previewEntity = pool[0];
+      const orderedEntities = previewEntity
+        ? buildOrderedEntityPool(previewEntity.entityId, pool)
+        : pool;
+
+      const perPage = buildPresetCardPreviewContexts({
+        packPages: pages,
+        resolveStoredTemplate: (page) => resolvePresetStoredTemplate(preset, page),
+        orderedEntities,
+        previewEntity,
+        resolvePageConfig: (page) => {
+          const pageCfg = resolveGeneratePageConfig(presetGlobalConfig, {
+            ...cfg.pageConfigs?.[page.pageTemplateId],
+            selectedSheet: ALL_VALUE,
+            filterMoHinh: ALL_VALUE,
+            filterPhongCach: ALL_VALUE,
+          });
+          return {
+            partnerQuota: pageCfg.partnerQuotaPerPage,
+            prioritizePartner: pageCfg.prioritizePartner,
+          };
+        },
+      });
+
       for (const page of pages) {
-        const previewTemplateRaw = resolvePageWorkingTemplate(
-          page,
-          preset.bindOverrides?.[page.pageTemplateId],
-          preset.pageTemplateDrafts?.[page.pageTemplateId],
-          GENERATE_TEMPLATE_OPTIONS,
-        );
-        if (!previewTemplateRaw) continue;
-        const pageGroupSources = preset.generateConfig.groupSourceConfigs?.[page.pageTemplateId];
-        const previewTemplate =
-          pageGroupSources && Object.keys(pageGroupSources).length > 0
-            ? applyGroupSourceConfigsToTemplate(
-                previewTemplateRaw,
-                pageGroupSources,
-                (slot) => getSlotBindMode(slot, previewTemplateRaw) !== null,
-              )
-            : previewTemplateRaw;
-        map.set(
-          `${preset.presetId}:${page.pageTemplateId}`,
-          buildPresetPreviewRenderContext(preset, previewTemplate),
-        );
+        const context = perPage.get(page.pageTemplateId);
+        if (context) {
+          map.set(`${preset.presetId}:${page.pageTemplateId}`, context);
+        }
       }
     }
     return map;
@@ -2013,7 +1816,10 @@ export function PackTabContent({
     matchingPresets,
     packs,
     tpls,
-    buildPresetPreviewRenderContext,
+    entities,
+    filteredEntities,
+    globalGenerateConfig,
+    buildOrderedEntityPool,
     matchingPresets?.map((item) => `${item.presetId}:${item.updatedAt}`).join("|"),
   ]);
 
@@ -2938,9 +2744,79 @@ export function PackTabContent({
     ),
   );
 
-  const canvasScale = effectiveActive
-    ? Math.min(560 / effectiveActive.canvas.width, 700 / effectiveActive.canvas.height)
-    : 0.5;
+  const pageTabs = useMemo(() => toPageTabItems(packPages, packOv), [packPages, packOv]);
+
+  const bindPanelTextRows = useMemo<BindPanelTextSlotRow[]>(
+    () =>
+      sortedSelectedTextSlots.map((slot, index) => ({
+        slot,
+        label: textSlotLabel(slot, index),
+        statusLabel: selectedSlotStatusLabel(slot),
+        bindingValue: textSlotBindingValue(slot),
+        bindingOptions: textBindingOptionsForSlot(slot),
+        bindingOptionLabel: textBindingOptionLabel,
+        fieldBindingValue: textSlotFieldBindingValue(slot),
+        showPerSlotSource:
+          !clusterSourceSlotIds.has(slot.slotId) &&
+          textSlotFieldBindingValue(slot) !== "_static" &&
+          slot.bindingPath !== "ai.rewrite",
+      })),
+    [
+      sortedSelectedTextSlots,
+      clusterSourceSlotIds,
+      textSlotLabel,
+      selectedSlotStatusLabel,
+      textSlotBindingValue,
+      textBindingOptionsForSlot,
+      textSlotFieldBindingValue,
+    ],
+  );
+
+  const bindPanelImageRows = useMemo<BindPanelImageSlotRow[]>(
+    () =>
+      sortedSelectedImageSlots.map((slot, index) => {
+        const rawValue = imageSlotBindingValue(slot);
+        const hasLinkedText = imageSlotHasLinkedText(slot);
+        const value =
+          !hasLinkedText && isEntityScopedImageBindingPath(rawValue) ? "_static" : rawValue;
+        const randomScope = parseAssetRandomScopeBindingPath(slot.bindingPath);
+        const randomScopeSheet = randomScope?.sheetName ?? slotSourceConfig(slot).selectedSheet;
+        const randomScopeFolder = randomScope?.folder ?? ALL_VALUE;
+        return {
+          slot,
+          label: imageSlotLabel(slot, index),
+          statusLabel: selectedSlotStatusLabel(slot),
+          selectValue: value,
+          imageOptions: imageBindingOptionsForSlot(slot),
+          imageOptionLabel: imageBindingOptionLabel,
+          hasLinkedText,
+          showRandomScope: value === ASSET_RANDOM_SCOPE_BINDING_VALUE,
+          randomScopeSheet,
+          randomScopeFolder,
+          randomImageFolderOptions: randomImageFolderOptionsForSheet(randomScopeSheet),
+        };
+      }),
+    [
+      sortedSelectedImageSlots,
+      imageSlotBindingValue,
+      imageSlotHasLinkedText,
+      imageSlotLabel,
+      selectedSlotStatusLabel,
+      imageBindingOptionsForSlot,
+      randomImageFolderOptionsForSheet,
+      slotSourceConfig,
+    ],
+  );
+
+  const presetGalleryItems = useMemo(
+    () =>
+      matchingPresets.map((preset) => ({
+        preset,
+        pages: getPresetPackPages(preset).pages,
+      })),
+    [matchingPresets, getPresetPackPages],
+  );
+
   const zoomedPageMeta = useMemo(
     () =>
       zoomedPageIndex == null
@@ -2990,862 +2866,149 @@ export function PackTabContent({
         onChange={handlePresetImportFile}
       />
       {!workspaceOpen ? (
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-            <div className="min-w-0 md:w-[380px]">
-              <Label className="text-xs">Bộ mẫu</Label>
-              <Select value={packId} onValueChange={setPackId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Chọn bộ mẫu..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {packs.map((p) => (
-                    <SelectItem key={p.packTemplateId} value={p.packTemplateId}>
-                      {formatTemplateDisplayName(p.name, "Bộ khuôn")} ({p.orderedPages.length} trang)
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => presetImportRef.current?.click()}
-              >
-                <FileUp className="mr-2 size-4" /> Nhập khuôn
-              </Button>
-              <Button type="button" onClick={createPresetAndOpen} disabled={!selectedPack}>
-                <Save className="mr-2 size-4" /> Tạo khuôn mới
-              </Button>
-            </div>
-          </div>
-
-          {matchingPresets.length === 0 ? (
-            <EmptyState
-              icon={<Package />}
-              title="Chưa có khuôn mẫu nào"
-              description={
-                selectedPack
-                  ? "Bấm 'Tạo khuôn mới' để bắt đầu thiết kế từ bộ mẫu đã chọn."
-                  : "Chọn một bộ mẫu ở trên, rồi bấm 'Tạo khuôn mới' để bắt đầu."
-              }
-              action={
-                selectedPack ? (
-                  <Button type="button" onClick={createPresetAndOpen}>
-                    <Save className="mr-2 size-4" /> Tạo khuôn mới
-                  </Button>
-                ) : null
-              }
-            />
-          ) : (
-            <div className="flex flex-col gap-4">
-              {matchingPresets.map((preset) => {
-                const { pages } = getPresetPackPages(preset);
-
-                return (
-                  <div key={preset.presetId} className="rounded-xl border bg-card shadow-sm">
-                    <div className="flex items-center justify-between gap-3 border-b p-4">
-                      <button
-                        type="button"
-                        className="min-w-0 flex-1 text-left"
-                        onClick={() => openPresetWorkspace(preset)}
-                      >
-                        <div className="truncate text-lg font-semibold">
-                          {formatTemplateDisplayName(preset.name, "Khuôn")}
-                        </div>
-                      </button>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          aria-label="Mở khuôn"
-                          title="Mở khuôn"
-                          onClick={() => openPresetWorkspace(preset)}
-                        >
-                          <Package className="size-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          aria-label="Xuất khuôn"
-                          title="Xuất khuôn"
-                          onClick={() => {
-                            void exportPreset(preset);
-                          }}
-                        >
-                          <FileDown className="size-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          aria-label="Xóa khuôn"
-                          title="Xóa khuôn"
-                          className="text-destructive hover:text-destructive"
-                          onClick={async () => {
-                            await db.generatePresets.delete(preset.presetId);
-                            if (selectedPresetId === preset.presetId) setSelectedPresetId("");
-                            toast.success("Đã xoá khuôn");
-                          }}
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
-                      </div>
-                    </div>
-
-                    <div className="overflow-x-auto p-4">
-                      {pages.length === 0 ? (
-                        <div className="grid min-h-28 place-items-center rounded-lg border border-dashed text-sm text-muted-foreground">
-                          Bộ mẫu hoặc trang mẫu không còn tồn tại.
-                        </div>
-                      ) : (
-                        <div className="flex min-w-full gap-3">
-                          {pages.map((page, index) => {
-                            const previewTemplateRaw = resolvePageWorkingTemplate(
-                              page,
-                              preset.bindOverrides?.[page.pageTemplateId],
-                              preset.pageTemplateDrafts?.[page.pageTemplateId],
-                              GENERATE_TEMPLATE_OPTIONS,
-                            );
-                            if (!previewTemplateRaw) return null;
-                            const pageGroupSources =
-                              preset.generateConfig.groupSourceConfigs?.[page.pageTemplateId];
-                            const previewTemplate =
-                              pageGroupSources && Object.keys(pageGroupSources).length > 0
-                                ? applyGroupSourceConfigsToTemplate(
-                                    previewTemplateRaw,
-                                    pageGroupSources,
-                                    (slot) => getSlotBindMode(slot, previewTemplateRaw) !== null,
-                                  )
-                                : previewTemplateRaw;
-                            const previewScale = Math.min(
-                              150 / previewTemplate.canvas.width,
-                              190 / previewTemplate.canvas.height,
-                            );
-                            const previewContext =
-                              presetCardPreviewContexts.get(
-                                `${preset.presetId}:${page.pageTemplateId}`,
-                              ) ??
-                              buildPresetPreviewRenderContext(preset, previewTemplate);
-
-                            return (
-                              <button
-                                key={`${preset.presetId}:${page.pageTemplateId}`}
-                                type="button"
-                                className="group flex w-[172px] shrink-0 flex-col gap-2 rounded-xl border bg-background p-2 text-left shadow-sm transition hover:border-primary/50"
-                                onClick={() => openPresetWorkspace(preset, index)}
-                              >
-                                <div className="flex min-w-0 items-center gap-2">
-                                  <Badge variant="secondary" className="shrink-0">
-                                    Trang {index + 1}
-                                  </Badge>
-                                  <div className="truncate text-sm font-medium">
-                                    {formatTemplateDisplayName(page.name, "Trang")}
-                                  </div>
-                                </div>
-                                <div className="grid h-[205px] place-items-center overflow-hidden rounded-md border bg-muted/20">
-                                  <PageRenderer
-                                    template={previewTemplate}
-                                    entities={entities}
-                                    assets={assets}
-                                    entity={previewContext.entity}
-                                    entityPool={previewContext.entityPool}
-                                    slotItems={previewContext.slotItems}
-                                    scale={previewScale}
-                                    seedKey={`${preset.presetId}:${page.pageTemplateId}:preview`}
-                                    hideImagePlaceholderText
-                                  />
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+        <PresetGalleryView
+          packs={packs}
+          packId={packId}
+          onPackIdChange={setPackId}
+          selectedPack={selectedPack}
+          presets={presetGalleryItems}
+          entities={entities}
+          assets={assets}
+          previewContextKey={(presetId, pageTemplateId) => `${presetId}:${pageTemplateId}`}
+          getPreviewContext={(key) => presetCardPreviewContexts.get(key)}
+          resolvePreviewTemplate={(preset, page) => {
+            const previewTemplateRaw = resolvePageWorkingTemplate(
+              page,
+              preset.bindOverrides?.[page.pageTemplateId],
+              preset.pageTemplateDrafts?.[page.pageTemplateId],
+              GENERATE_TEMPLATE_OPTIONS,
+            );
+            if (!previewTemplateRaw) return null;
+            const pageGroupSources =
+              preset.generateConfig.groupSourceConfigs?.[page.pageTemplateId];
+            return pageGroupSources && Object.keys(pageGroupSources).length > 0
+              ? applyGroupSourceConfigsToTemplate(
+                  previewTemplateRaw,
+                  pageGroupSources,
+                  (slot) => getSlotBindMode(slot, previewTemplateRaw) !== null,
+                )
+              : previewTemplateRaw;
+          }}
+          onImport={() => presetImportRef.current?.click()}
+          onCreatePreset={createPresetAndOpen}
+          onOpenPreset={openPresetWorkspace}
+          onExportPreset={(preset) => void exportPreset(preset)}
+          onDeletePreset={async (preset) => {
+            await db.generatePresets.delete(preset.presetId);
+            if (selectedPresetId === preset.presetId) setSelectedPresetId("");
+            toast.success("Đã xoá khuôn");
+          }}
+        />
       ) : (
         <>
-          <div className="mb-3 flex flex-wrap items-center gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => void closeWorkspace()}
-              title="Quay lại danh sách khuôn"
-            >
-              <ArrowLeft className="mr-2 size-4" /> Quay lại
-            </Button>
-          </div>
-
-          <div className="grid grid-cols-12 gap-4">
-            {/* Cột 1: Cấu hình */}
-            <Card className="col-span-12 lg:sticky lg:top-4 lg:col-span-3 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-hidden">
-              <CardHeader className="border-b pb-2">
-                <CardTitle className="flex items-center gap-2 text-sm">
-                  <Sparkles className="size-4 text-primary" /> Cấu hình bộ ảnh
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 pt-3 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pr-3">
-                <div>
-                  <Label className="text-xs">Số lượng tạo bộ ảnh</Label>
-                  <div className="mt-1 flex items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      className="size-9 shrink-0"
-                      onClick={() =>
-                        setMaxEntities((value) => Math.max(1, value - 1))
-                      }
-                      aria-label="Giảm số lượng tạo"
-                      title="Giảm số lượng tạo"
-                    >
-                      <Minus className="size-4" />
-                    </Button>
-                    <Input
-                      type="number"
-                      min={1}
-                      value={maxEntities}
-                      onChange={(e) =>
-                        setMaxEntities(normalizeCount(Number(e.target.value), 5))
-                      }
-                      className="h-9 text-center"
-                      aria-label="Số lượng tạo bộ ảnh"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      className="size-9 shrink-0"
-                      onClick={() =>
-                        setMaxEntities((value) => value + 1)
-                      }
-                      aria-label="Tăng số lượng tạo"
-                      title="Tăng số lượng tạo"
-                    >
-                      <Plus className="size-4" />
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="rounded-lg border bg-muted/10 p-3 text-sm space-y-3">
-                  <label className="flex items-start gap-2 text-sm">
-                    <Checkbox
-                      checked={activeGenerateConfig.prioritizePartner}
-                      onCheckedChange={(v) =>
-                        updateActiveGenerateConfig({ prioritizePartner: v === true })
-                      }
-                      className="mt-0.5"
-                    />
-                    <span className="min-w-0">
-                      <span className="block font-medium">Ưu tiên dữ liệu đối tác</span>
-                      <span className="block text-[11px] text-muted-foreground">
-                        Bật: ưu tiên xếp dữ liệu đối tác lên trước. Tắt: lấy ngẫu nhiên từ toàn bộ dữ liệu phù hợp.
-                      </span>
-                    </span>
-                  </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <Checkbox
-                      checked={activeGenerateConfig.onlyPartner}
-                      onCheckedChange={(v) =>
-                        updateActiveGenerateConfig({ onlyPartner: v === true })
-                      }
-                    />
-                    Chỉ dùng dữ liệu đối tác
-                  </label>
-
-                  <div>
-                    <Label className="text-xs">Số đối tác / trang</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={Math.max(1, activeTargetCount)}
-                      value={
-                        activeGenerateConfig.onlyPartner
-                          ? activeTargetCount || 1
-                          : activeGenerateConfig.partnerQuotaPerPage
-                      }
-                      disabled={activeGenerateConfig.onlyPartner}
-                      onChange={(e) =>
-                        updateActiveGenerateConfig({
-                          partnerQuotaPerPage: Math.max(0, Number(e.target.value) || 0),
-                        })
-                      }
-                    />
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      {activeGenerateConfig.onlyPartner
-                        ? "Đang chỉ dùng dữ liệu đối tác cho toàn bộ khung."
-                        : "Mặc định 1 trang là 1 đối tác."}
-                    </p>
-                  </div>
-
-                  <label className="flex cursor-pointer items-start gap-2 rounded-md border bg-background/60 p-2 text-sm">
-                    <Checkbox
-                      checked={varyFontsFromSecondBundle}
-                      onCheckedChange={(checked) =>
-                        setVaryFontsFromSecondBundle(checked === true)
-                      }
-                      className="mt-0.5"
-                    />
-                    <span className="min-w-0">
-                      <span className="block font-medium">
-                        Biến thể font nghệ thuật từ bộ thứ 2
-                      </span>
-                    </span>
-                  </label>
-                </div>
-
-                <div className="border-t pt-3 space-y-1.5 text-xs text-muted-foreground">
-                  <div className="flex justify-between">
-                    <span>Dữ liệu đang dùng</span>
-                    <b className="text-foreground">{filteredEntities.length}</b>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Trang trong bộ</span>
-                    <b className="text-foreground">{packPages.length}</b>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Khung đã gắn dữ liệu</span>
-                    <b className="text-foreground">{totalBound}</b>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Trang sẽ tạo</span>
-                    <b className="text-foreground">{estimateGeneratedPageCount}</b>
-                  </div>
-                </div>
-
-                <PackGenerateActions
-                  canGenerate={generateReadiness.canGenerate}
-                  reason={generateReadiness.reason}
-                  hasEntities={generationBaseEntities.length > 0}
-                  onGenerate={onGenerate}
-                />
-              </CardContent>
-            </Card>
-
-            {/* Cột 2: Canvas bind từng page */}
-            <Card className="col-span-12 lg:col-span-6 min-w-0 overflow-hidden">
-              <CardHeader className="pb-2">
-                <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 overflow-hidden rounded-lg border bg-muted/20 px-3 py-2">
-                  <div className="text-xs font-medium text-muted-foreground">Canvas</div>
-                  <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 overflow-hidden">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={undoPreviewPageDrafts}
-                    disabled={!canUndoPreviewDraft}
-                    className="h-7 shrink-0 px-2 text-xs"
-                    title="Hoàn tác (Ctrl+Z)"
-                  >
-                    <Undo2 className="size-3 mr-1" /> Hoàn tác
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={redoPreviewPageDrafts}
-                    disabled={!canRedoPreviewDraft}
-                    className="h-7 shrink-0 px-2 text-xs"
-                    title="Làm lại (Ctrl+Shift+Z)"
-                  >
-                    <Redo2 className="size-3 mr-1" /> Làm lại
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setSelectedSlotIds([]);
-                      setEditingPreviewOpen(true);
-                    }}
-                    disabled={!effectiveActive}
-                    className="h-7 shrink-0 px-2 text-xs"
-                  >
-                    <Type className="size-3 mr-1" /> Chỉnh bố cục
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={showFieldBadges ? "secondary" : "outline"}
-                    onClick={() => setShowFieldBadges((value) => !value)}
-                    disabled={!effectiveActive}
-                    className="h-7 shrink-0 px-2 text-xs"
-                    title="Bật/tắt pill tên trường trên mỗi khối đã liên kết"
-                  >
-                    <Link2 className="size-3 mr-1" />
-                    <span className="hidden xl:inline">Tên trường</span>
-                    <span className="xl:hidden">Nhãn</span>
-                    <span className="ml-1">{showFieldBadges ? "Bật" : "Tắt"}</span>
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={showSafeFrame ? "secondary" : "outline"}
-                    onClick={() => setShowSafeFrame((value) => !value)}
-                    disabled={!effectiveActive}
-                    className="h-7 shrink-0 px-2 text-xs"
-                    title="Bật/tắt khung an toàn và đường căn chỉnh"
-                  >
-                    <Eye className="size-3 mr-1" />
-                    <span className="hidden xl:inline">Đường căn chỉnh</span>
-                    <span className="xl:hidden">Căn chỉnh</span>
-                    <span className="ml-1">{showSafeFrame ? "Bật" : "Tắt"}</span>
-                  </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {packPages.length === 0 ? (
-                  <div className="border border-dashed rounded-lg h-[480px] grid place-items-center p-6">
-                    <EmptyState
-                      icon={<Package />}
-                      title="Chưa chọn bộ mẫu"
-                      description="Chọn một bộ mẫu ở cột trái để xem và chỉnh các trang."
-                      compact
-                    />
-                  </div>
-                ) : (
-                  <>
-                    {/* Page selector */}
-                    <div className="flex gap-1 overflow-x-auto pb-1">
-                      {packPages.map((tpl, idx) => {
-                        const ovCount = Object.values(packOv[tpl.pageTemplateId] ?? {}).filter(
-                          (v) => v && v !== "",
-                        ).length;
-                        return (
-                          <button
-                            key={tpl.pageTemplateId + idx}
-                            onClick={() => setActivePageIdx(idx)}
-                            className={
-                              "shrink-0 text-xs px-2.5 py-1 rounded-md border flex items-center gap-1.5 " +
-                              (activePageIdx === idx
-                                ? "bg-primary text-primary-foreground border-primary"
-                                : "bg-muted/40 border-border hover:bg-muted")
-                            }
-                          >
-                            <span>Trang {idx + 1}</span>
-                            <span className="font-medium">
-                              {formatTemplateDisplayName(tpl.name, "Trang")}
-                            </span>
-                            {ovCount > 0 && (
-                              <span className="text-[10px] bg-background/30 rounded px-1">
-                                {ovCount}
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {effectiveActive && (
-                      <div
-                        // Click vào vùng padding xung quanh canvas → clear
-                        // selection (giữ behavior cũ của surface marquee mà
-                        // không cần re-implement pointer capture). Marquee
-                        // selection thật do BindCanvas tự xử lý ở canvas root.
-                        onClick={(event) => {
-                          if (event.target === event.currentTarget) {
-                            setSelectedSlotIds([]);
-                          }
-                        }}
-                        className="relative grid select-none place-items-center overflow-auto rounded-lg border bg-background p-4"
-                        style={{ minHeight: 480 }}
-                      >
-                        <BindCanvas
-                          template={effectiveActive}
-                          scale={canvasScale}
-                          selectedSlotIds={selectedSlotIds}
-                          onSelectSlot={handleSelectSlot}
-                          entity={previewEntity}
-                          assets={assets}
-                          entityPool={previewEntityPool}
-                          sourceEntities={entities}
-                          slotItems={previewSlotItems}
-                          seedKey={`${effectiveActive.pageTemplateId}:${activePageIdx}`}
-                          showSafeFrame={showSafeFrame}
-                          showFieldBadges={showFieldBadges}
-                          flatPreview
-                        />
-                      </div>
-                    )}
-
-                    {effectiveActive && (
-                      <BindingIssuesPanel
-                        template={effectiveActive}
-                        entity={previewEntity}
-                        entityPool={previewEntityPool}
-                        assets={assets}
-                        globalAssets={assets}
-                        activeSheetName={previewEntity?.sheetName}
-                        onSelectSlot={(slotId) => handleSelectSlot(slotId)}
-                      />
-                    )}
-
-                    {previewAllocationWarnings.length > 0 && (
-                      <AllocationWarningsPanel warnings={previewAllocationWarnings} />
-                    )}
-
-                  </>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Cột 3: Bind panel + sheet fields */}
-            <Card className="col-span-12 lg:sticky lg:top-4 lg:col-span-3 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-hidden">
-              <CardContent className="space-y-3 p-6 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto lg:pr-3">
-                <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-xs font-medium">
-                  <span>Khối đang chọn</span>
-                  {selectedSlotIds.length > 0 && (
-                    <Badge variant="secondary" className="h-4 px-1 text-[10px]">
-                      {selectedSlotIds.length}
-                    </Badge>
-                  )}
-                </div>
-                <div className="space-y-3">
-                    {selectedSlots.length === 0 && (
-                      <EmptyState
-                        icon={<MousePointerClick />}
-                        title="Chưa chọn khối"
-                        description="Bấm vào một khối trên vùng thiết kế để chỉnh liên kết dữ liệu."
-                        compact
-                      />
-                    )}
-                    {selectedSlots.length > 0 && selectedBindableSlots.length === 0 && (
-                      <div className="rounded-md border border-dashed bg-muted/30 p-3 space-y-1">
-                        <div className="flex items-center gap-2 text-xs font-medium">
-                          <AlertTriangle className="size-3.5" />
-                          Khối đang chọn không thể liên kết dữ liệu
-                        </div>
-                      </div>
-                    )}
-                    {selectedBindableSlots.length > 0 && activePage && (
-                      <>
-                    {panelPreviewEntity && (
-                      <div className="rounded-md border border-dashed bg-muted/20 px-2 py-1.5 text-[11px] text-muted-foreground">
-                        <span className="font-medium text-foreground">Xem trước cụm:</span>{" "}
-                        {panelPreviewEntity.name}
-                        {panelPreviewEntity.sheetName ? (
-                          <span> · {panelPreviewEntity.sheetName}</span>
-                        ) : null}
-                      </div>
-                    )}
-                    <div className="rounded-xl border bg-muted/20 p-2">
-                      <div className="grid grid-cols-2 gap-2">
-                        {formatClipboard && (
-                          <Badge
-                            variant="outline"
-                            className="col-span-2 h-8 justify-center truncate px-2 text-[11px]"
-                          >
-                            Đã sao chép: {formatClipboard.label}
-                          </Badge>
-                        )}
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-8 justify-start px-2 text-[11px]"
-                          onClick={copySelectedSlotFormat}
-                          title="Chỉ sao chép trường dữ liệu và cách nhóm dữ liệu, không sao chép font hoặc định dạng"
-                        >
-                          <Copy className="mr-1 size-3" /> Sao chép liên kết dữ liệu
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-8 justify-start px-2 text-[11px]"
-                          disabled={!formatClipboard}
-                          onClick={() => applyCopiedSlotFormat(selectedBindableSlots, "đang chọn")}
-                          title={
-                            formatClipboard
-                              ? "Dán trường dữ liệu vào khối đang chọn, giữ nguyên định dạng hiện tại"
-                              : "Chưa sao chép liên kết dữ liệu"
-                          }
-                        >
-                          <Wand2 className="mr-1 size-3" /> Dán dữ liệu vào khối đang chọn
-                        </Button>
-                        {selectedBindableSlots.length > 1 && (
-                          <Button
-                            type="button"
-                            variant={selectedDataGroupIds.length === 1 ? "secondary" : "outline"}
-                            size="sm"
-                            className="h-8 justify-start px-2 text-[11px]"
-                            onClick={groupSelectedDataSlots}
-                          >
-                            <Link2 className="mr-1 size-3" /> Nhóm dữ liệu
-                          </Button>
-                        )}
-                        {selectedDataGroupIds.length > 0 && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 justify-start px-2 text-[11px]"
-                            onClick={clearSelectedDataGroups}
-                          >
-                            <Link2Off className="mr-1 size-3" /> Bỏ nhóm
-                          </Button>
-                        )}
-                        {relatedFormatTargetSlots.length > 1 && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 justify-start px-2 text-[11px]"
-                          disabled={!formatClipboard}
-                          onClick={() =>
-                            applyCopiedSlotFormat(relatedFormatTargetSlots, "trong cụm")
-                          }
-                        >
-                            Dán dữ liệu vào cụm
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                    {hasMultipleSelectedClusters && (
-                      <div className="rounded-md border border-dashed bg-muted/30 px-2 py-1.5 text-[11px] text-muted-foreground">
-                        Đang chọn khối từ nhiều cụm — chọn khối trong một cụm để đổi nguồn dữ liệu
-                        chung.
-                      </div>
-                    )}
-                    {shouldShowClusterSourceControls && clusterSourceConfig && (
-                      <div className="space-y-2">
-                        <Label className="text-xs">Nguồn dữ liệu của cụm</Label>
-                        {renderSourceControls(clusterSourceSlots, clusterSourceConfig, {
-                          description:
-                            "Cấu hình này áp dụng cho toàn bộ thuộc tính đã liên kết trong cụm trên trang.",
-                        })}
-                      </div>
-                    )}
-                    {sortedSelectedTextSlots.length > 0 && (
-                      <div className="space-y-2">
-                        <Label className="text-xs">
-                          Khung chữ{" "}
-                          {sortedSelectedTextSlots.length > 1
-                            ? `(${sortedSelectedTextSlots.length} khối)`
-                            : ""}
-                        </Label>
-                        {sortedSelectedTextSlots.map((slot, index) => (
-                          <div
-                            key={slot.slotId}
-                            className="space-y-1 rounded-lg border bg-muted/20 p-2"
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="min-w-0 truncate text-xs font-medium">
-                                {index + 1}. {textSlotLabel(slot, index)}
-                              </div>
-                              <Badge variant="outline" className="shrink-0 text-[10px]">
-                                {selectedSlotStatusLabel(slot)}
-                              </Badge>
-                            </div>
-                            <Select
-                              value={textSlotBindingValue(slot)}
-                              onValueChange={(v) => applyTextBindingSelection(slot, v)}
-                            >
-                              <SelectTrigger className="h-8">
-                                <SelectValue placeholder="Chọn trường" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="__list">
-                                  Danh sách nhiều dòng
-                                </SelectItem>
-                                {textBindingOptionsForSlot(slot).map((option) => {
-                                  const value = option.value || "_static";
-                                  return (
-                                    <SelectItem key={`${slot.slotId}-${value}`} value={value}>
-                                      {textBindingOptionLabel(value, option.label)}
-                                    </SelectItem>
-                                  );
-                                })}
-                              </SelectContent>
-                            </Select>
-                            {!clusterSourceSlotIds.has(slot.slotId) &&
-                              textSlotFieldBindingValue(slot) !== "_static" &&
-                              slot.bindingPath !== "ai.rewrite" &&
-                              renderSourceControls([slot], slotSourceConfig(slot))}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {sortedSelectedImageSlots.length > 0 && (
-                      <div className="space-y-2">
-                        <Label className="text-xs">
-                          Khung ảnh{" "}
-                          {sortedSelectedImageSlots.length > 1
-                            ? `(${sortedSelectedImageSlots.length} khối)`
-                            : ""}
-                        </Label>
-                        {sortedSelectedImageSlots.map((slot, index) => {
-                          const rawValue = imageSlotBindingValue(slot);
-                          const hasLinkedText = imageSlotHasLinkedText(slot);
-                          const value =
-                            !hasLinkedText && isEntityScopedImageBindingPath(rawValue)
-                              ? "_static"
-                              : rawValue;
-                          const randomScope = parseAssetRandomScopeBindingPath(slot.bindingPath);
-                          const randomScopeSheet =
-                            randomScope?.sheetName ?? slotSourceConfig(slot).selectedSheet;
-                          const randomScopeFolder = randomScope?.folder ?? ALL_VALUE;
-                          const randomImageFolderOptions =
-                            randomImageFolderOptionsForSheet(randomScopeSheet);
-                          const imageOptions = imageBindingOptionsForSlot(slot);
-                          return (
-                            <div
-                              key={slot.slotId}
-                              className="space-y-2 rounded-lg border bg-muted/20 p-2"
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="min-w-0 truncate text-xs font-medium">
-                                  {index + 1}. {imageSlotLabel(slot, index)}
-                                </div>
-                                <Badge variant="outline" className="shrink-0 text-[10px]">
-                                  {selectedSlotStatusLabel(slot)}
-                                </Badge>
-                              </div>
-                              <Select
-                                value={value}
-                                onValueChange={(nextValue) =>
-                                  applyImageBindingSelection(slot, nextValue)
-                                }
-                              >
-                                <SelectTrigger className="h-8">
-                                  <SelectValue placeholder="Chọn trường ảnh" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {imageOptions.map((option) => (
-                                    <SelectItem
-                                      key={`${slot.slotId}-${option.value || "_static"}`}
-                                      value={option.value || "_static"}
-                                    >
-                                      {imageBindingOptionLabel(option.value || "_static")}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              {!hasLinkedText && (
-                                <div className="text-[11px] leading-snug text-muted-foreground">
-                                  Muốn dùng ảnh theo quán, hãy nhóm khung ảnh với trường Tên/Địa chỉ/Giá.
-                                </div>
-                              )}
-                              {value === ASSET_RANDOM_SCOPE_BINDING_VALUE && (
-                                <div className="grid gap-2 rounded-md border bg-background/70 p-2">
-                                  <div>
-                                    <Label className="text-xs">Nguồn ảnh</Label>
-                                    <Select
-                                      value={randomScopeSheet}
-                                      onValueChange={(sheetName) =>
-                                        applyRandomImageScope(slot, {
-                                          sheetName,
-                                          folder: ALL_VALUE,
-                                        })
-                                      }
-                                    >
-                                      <SelectTrigger className="h-8">
-                                        <SelectValue />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        <SelectItem value={ALL_VALUE}>Tất cả nguồn</SelectItem>
-                                        {sheetOptions.map((sheet) => (
-                                          <SelectItem key={sheet} value={sheet}>
-                                            {sheet}
-                                          </SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
-                                  </div>
-                                  <div>
-                                    <Label className="text-xs">Thư mục ảnh</Label>
-                                    <Select
-                                      value={randomScopeFolder}
-                                      onValueChange={(folder) =>
-                                        applyRandomImageScope(slot, { folder })
-                                      }
-                                    >
-                                      <SelectTrigger className="h-8">
-                                        <SelectValue placeholder="Chọn thư mục / nhóm ảnh" />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        <SelectItem value={ALL_VALUE}>Tất cả thư mục</SelectItem>
-                                        {randomImageFolderOptions.map((folder) => (
-                                          <SelectItem key={folder} value={folder}>
-                                            {folder}
-                                          </SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                    {selectedTextSlots.length === 1 &&
-                      textSlotBindingValue(selectedTextSlots[0]) === "__list" && (
-                        <TextListBindingPanel
-                          selectedSlot={selectedTextSlots[0]}
-                          fieldOptions={textListFieldOptions}
-                          entityPool={previewEntityPool}
-                          prioritizePartnerDefault={prioritizePartner}
-                          onApply={(bindingPath) => {
-                            applyBindingToSlots(
-                              [selectedTextSlots[0]],
-                              activePage.pageTemplateId,
-                              bindingPath,
-                            );
-                            toast.success("Đã áp danh sách vào khung chữ");
-                          }}
-                        />
-                      )}
-                    {selectedTextSlots.length === 1 && (
-                      <div className="grid grid-cols-1 gap-2">
-                        <TextRewritePanel
-                          selectedSlotId={selectedTextSlots[0].slotId}
-                          currentText={getRewriteCurrentText(selectedTextSlots[0])}
-                          busy={rewriteBusy}
-                          onRewrite={runAiRewriteSelectedText}
-                        />
-                        {selectedSlot?.kind === "text" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="w-full"
-                            onClick={runAiCaption}
-                            disabled={captionBusy || !previewEntity}
-                          >
-                            {captionBusy ? (
-                              <Loader2 className="size-3 mr-1 animate-spin" />
-                            ) : (
-                              <Wand2 className="size-3 mr-1" />
-                            )}
-                            AI viết chú thích
-                          </Button>
-                        )}
-                      </div>
-                    )}
-                    {selectedBindableSlots.some((slot) => !!slot.bindingPath) && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="w-full"
-                        onClick={() =>
-                          clearBindingsForSlots(selectedBindableSlots, activePage.pageTemplateId)
-                        }
-                      >
-                        <Link2Off className="size-3 mr-1" /> Xoá liên kết đã chọn
-                      </Button>
-                    )}
-                  </>
-                )}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          <GeneratePackWorkspace
+            selectedSlotCount={selectedSlotIds.length}
+            generateReadiness={generateReadiness}
+            onBack={() => void closeWorkspace()}
+            onGenerate={onGenerate}
+            maxEntities={maxEntities}
+            setMaxEntities={setMaxEntities}
+            normalizeCount={normalizeCount}
+            activeGenerateConfig={activeGenerateConfig}
+            updateActiveGenerateConfig={updateActiveGenerateConfig}
+            varyFontsFromSecondBundle={varyFontsFromSecondBundle}
+            setVaryFontsFromSecondBundle={setVaryFontsFromSecondBundle}
+            activeTargetCount={activeTargetCount}
+            filteredEntityCount={filteredEntities.length}
+            packPageCount={packPages.length}
+            totalBound={totalBound}
+            estimateGeneratedPageCount={estimateGeneratedPageCount}
+            generationBaseEntitiesCount={generationBaseEntities.length}
+            pageTabs={pageTabs}
+            activePageIdx={activePageIdx}
+            setActivePageIdx={setActivePageIdx}
+            hasPackPages={packPages.length > 0}
+            effectiveActive={effectiveActive}
+            selectedSlotIds={selectedSlotIds}
+            handleSelectSlot={handleSelectSlot}
+            previewEntity={previewEntity}
+            assets={assets}
+            previewEntityPool={previewEntityPool}
+            entities={entities}
+            previewSlotItems={previewSlotItems}
+            showSafeFrame={showSafeFrame}
+            showFieldBadges={showFieldBadges}
+            setShowFieldBadges={setShowFieldBadges}
+            setShowSafeFrame={setShowSafeFrame}
+            previewAllocationWarnings={previewAllocationWarnings}
+            canUndoPreviewDraft={canUndoPreviewDraft}
+            canRedoPreviewDraft={canRedoPreviewDraft}
+            undoPreviewPageDrafts={undoPreviewPageDrafts}
+            redoPreviewPageDrafts={redoPreviewPageDrafts}
+            onEditLayout={() => {
+              setSelectedSlotIds([]);
+              setEditingPreviewOpen(true);
+            }}
+            selectedSlots={selectedSlots}
+            selectedBindableSlots={selectedBindableSlots}
+            panelPreviewEntity={panelPreviewEntity}
+            formatClipboard={formatClipboard}
+            hasMultipleSelectedClusters={hasMultipleSelectedClusters}
+            shouldShowClusterSourceControls={shouldShowClusterSourceControls}
+            clusterPasteTargetsCount={clusterPasteTargets.length}
+            showClusterPasteButton={!!formatClipboard?.sourceVisualGroupId}
+            relatedFormatTargetCount={relatedFormatTargetSlots.length}
+            selectedDataGroupCount={selectedDataGroupIds.length}
+            bindPanelTextRows={bindPanelTextRows}
+            bindPanelImageRows={bindPanelImageRows}
+            showTextListPanel={
+              selectedTextSlots.length === 1 &&
+              textSlotBindingValue(selectedTextSlots[0]) === "__list"
+            }
+            textListFieldOptions={textListFieldOptions}
+            prioritizePartner={prioritizePartner}
+            showTextRewrite={selectedTextSlots.length === 1}
+            rewriteSlotId={selectedTextSlots[0]?.slotId ?? ""}
+            rewriteCurrentText={
+              selectedTextSlots[0] ? getRewriteCurrentText(selectedTextSlots[0]) : ""
+            }
+            rewriteBusy={rewriteBusy}
+            showAiCaption={selectedSlot?.kind === "text"}
+            captionBusy={captionBusy}
+            captionDisabled={!previewEntity}
+            hasBindingsToClear={selectedBindableSlots.some((slot) => !!slot.bindingPath)}
+            sheetOptions={sheetOptions}
+            allValue={ALL_VALUE}
+            renderSourceControls={renderSourceControls}
+            clusterSourceSlots={clusterSourceSlots}
+            clusterSourceConfig={clusterSourceConfig}
+            slotSourceConfig={slotSourceConfig}
+            onCopyFormat={copySelectedSlotFormat}
+            onPasteToSelected={() => applyCopiedSlotFormat(selectedBindableSlots, "đang chọn")}
+            onPasteToCluster={pasteToMatchingClusterOnPage}
+            onPasteToRelatedCluster={() =>
+              applyCopiedSlotFormat(relatedFormatTargetSlots, "trong cụm")
+            }
+            onGroupSelected={groupSelectedDataSlots}
+            onClearGroups={clearSelectedDataGroups}
+            onTextBindingChange={applyTextBindingSelection}
+            onImageBindingChange={applyImageBindingSelection}
+            onRandomScopeSheetChange={(slot, sheetName) =>
+              applyRandomImageScope(slot, { sheetName, folder: ALL_VALUE })
+            }
+            onRandomScopeFolderChange={(slot, folder) => applyRandomImageScope(slot, { folder })}
+            onTextListApply={(bindingPath) => {
+              if (!activePage || selectedTextSlots.length !== 1) return;
+              applyBindingToSlots([selectedTextSlots[0]], activePage.pageTemplateId, bindingPath);
+              toast.success("Đã áp danh sách vào khung chữ");
+            }}
+            onRewrite={runAiRewriteSelectedText}
+            onAiCaption={runAiCaption}
+            onClearBindings={() => {
+              if (!activePage) return;
+              clearBindingsForSlots(selectedBindableSlots, activePage.pageTemplateId);
+            }}
+          />
 
           {/* Kết quả render */}
           {currentJob && currentJob.pages.length > 0 && (
@@ -3969,66 +3132,10 @@ export function PackTabContent({
                         </div>
                       )}
                     </div>
-                    {(() => {
-                      const imageIssues =
-                        bundleImageIssuesByIndex.get(bundle.bundleIndex) ?? [];
-                      if (imageIssues.length === 0) return null;
-                      const visibleIssues = imageIssues.slice(0, 8);
-                      const hiddenCount = imageIssues.length - visibleIssues.length;
-                      const referenceOnlyCount = imageIssues.filter(
-                        (issue) => issue.hasImageReference,
-                      ).length;
-                      const missingSourceCount = imageIssues.length - referenceOnlyCount;
-                      return (
-                        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-950">
-                          <div className="flex items-center gap-2 text-sm font-medium">
-                            <AlertTriangle className="size-4 shrink-0" />
-                            Một số quán chưa có ảnh trong thư viện ({bundle.bundleLabel})
-                          </div>
-                          <div className="mt-1 text-xs text-amber-800">
-                            Trang preview có thể vẫn hiển thị ảnh tạm hoặc ảnh ngẫu nhiên — đó
-                            không phải ảnh thật đã import cho quán.
-                            {referenceOnlyCount > 0
-                              ? ` ${referenceOnlyCount} quán đã có folder/link trong sheet nhưng chưa ghép/tải ảnh.`
-                              : ""}
-                            {missingSourceCount > 0
-                              ? ` ${missingSourceCount} quán chưa có nguồn ảnh trong sheet.`
-                              : ""}
-                          </div>
-                          <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                            {visibleIssues.map((issue) => (
-                              <span
-                                key={issue.entityId}
-                                className="inline-flex max-w-full items-center gap-1 rounded-full border border-amber-300 bg-background/80 px-2.5 py-1"
-                                title={`${issue.entityName} · ${issue.pageNames.join(", ")}`}
-                              >
-                                <span className="max-w-56 truncate font-medium">
-                                  {issue.entityName}
-                                </span>
-                                {issue.partnerFlag && (
-                                  <span className="rounded-full bg-amber-200 px-1.5 py-0.5 text-[10px] font-medium">
-                                    Đối tác
-                                  </span>
-                                )}
-                                {issue.hasImageReference && (
-                                  <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
-                                    Có folder/link
-                                  </span>
-                                )}
-                                <span className="text-amber-700">
-                                  · {issue.pageNames.join(", ")}
-                                </span>
-                              </span>
-                            ))}
-                            {hiddenCount > 0 && (
-                              <span className="inline-flex items-center rounded-full border border-amber-300 bg-background/80 px-2.5 py-1">
-                                +{hiddenCount} quán khác
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })()}
+                    <BundleImageWarningsAlert
+                      bundleLabel={bundle.bundleLabel}
+                      issues={bundleImageIssuesByIndex.get(bundle.bundleIndex) ?? []}
+                    />
                     <div className="overflow-x-auto pb-2">
                       <div className="flex w-max gap-4">
                       {bundle.pages.map((meta) => {
