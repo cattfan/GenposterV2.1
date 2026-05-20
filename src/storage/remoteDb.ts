@@ -30,6 +30,7 @@ const TABLE_SLUGS = {
   analyses: "analyses",
   symbols: "symbols",
   settings: "settings",
+  packDrafts: "pack_drafts",
 } as const;
 
 export type TableName = keyof typeof TABLE_SLUGS;
@@ -257,6 +258,7 @@ import type {
   GenerateBindingPreset,
   GenerationJob,
   ManualOverride,
+  PackDraftState,
   PackTemplate,
   PageTemplate,
   Project,
@@ -279,6 +281,7 @@ export const remoteDb = {
   analyses: makeTable("analyses", "analysisId") as unknown as DexieLikeTable<AnalysisRecord>,
   symbols: makeTable("symbols", "symbolId") as unknown as DexieLikeTable<SymbolDefinition>,
   settings: makeTable("settings", "id") as unknown as DexieLikeTable<AppSettings & { id: string }>,
+  packDrafts: makeTable("packDrafts", "packTemplateId") as unknown as DexieLikeTable<PackDraftState>,
 
   /**
    * Dexie's `transaction("rw", [tables], fn)` → best-effort mode: chạy fn

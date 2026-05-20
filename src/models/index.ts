@@ -1099,3 +1099,20 @@ export interface SymbolDefinition {
   createdAt: number;
   updatedAt: number;
 }
+
+// ─── Pack draft state (workspace autosave) ──────────────────────────────────
+// Lưu trạng thái workspace autosave của một pack đang được chỉnh ở /generate.
+// Primary key = packTemplateId (1 draft / pack).
+
+export interface PackDraftState {
+  /** Primary key — = packTemplateId */
+  packTemplateId: ID;
+  /** Bind override theo pageTemplateId → slotId → bindingPath */
+  packOv: Record<string, Record<string, string | undefined>>;
+  /** Draft template (rich) đã chỉnh trong workspace, theo pageTemplateId */
+  previewPageDrafts: Record<string, PageTemplate>;
+  /** Lần gần nhất user mở pack ở /generate */
+  lastOpenedAt: number;
+  /** Lần gần nhất autosave commit */
+  updatedAt: number;
+}
