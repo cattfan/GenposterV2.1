@@ -161,6 +161,92 @@ function buildRecentJobs(jobs: Job[]): DashboardJobRow[] {
   }));
 }
 
+function buildNextAction(args: {
+  entities: Entity[];
+  packs: PackTemplate[];
+  pageTemplates: PageTemplate[];
+  driveDownloadCandidateCount: number;
+  incompletePack: DashboardPackRef | undefined;
+  latestJob: Job | null;
+  latestJobWarnings: number;
+  aiConfigured: boolean;
+}): NextAction {
+  const {
+    entities,
+    packs,
+    pageTemplates,
+    driveDownloadCandidateCount,
+    incompletePack,
+    latestJob,
+    latestJobWarnings,
+    aiConfigured,
+  } = args;
+
+  if (entities.length === 0) {
+    return {
+      id: "no-data",
+      title: "Nhập dữ liệu để bắt đầu",
+      detail: "Cần ít nhất 1 sheet/CSV để generate.",
+      to: "/data",
+      tone: "danger",
+    };
+  }
+  if (packs.length === 0 || pageTemplates.length === 0) {
+    return {
+      id: "no-template",
+      title: "Tạo bộ khuôn đầu tiên",
+      detail: "Bộ khuôn quyết định layout và cách bind dữ liệu.",
+      to: "/templates",
+      tone: "danger",
+    };
+  }
+  if (driveDownloadCandidateCount > 0) {
+    return {
+      id: "download-images",
+      title: `Tải ${driveDownloadCandidateCount} ảnh từ sheet`,
+      detail: "Dòng có folder/link nhưng chưa có ảnh đọc được. Tải xong là sẵn sàng generate.",
+      to: "/data",
+      search: { tab: "images" },
+      tone: "warning",
+    };
+  }
+  if (incompletePack) {
+    return {
+      id: "incomplete-pack",
+      title: `Tiếp tục bind ${incompletePack.packName}`,
+      detail: `${incompletePack.boundCount}/${incompletePack.totalBindable} ô đã bind`,
+      to: "/generate",
+      search: { pack: incompletePack.packTemplateId },
+      tone: "warning",
+    };
+  }
+  if (latestJob && latestJobWarnings > 0) {
+    return {
+      id: "warnings",
+      title: `Xem ${latestJobWarnings} cảnh báo trong job "${latestJob.packTemplateName}"`,
+      detail: "Lượt tạo gần nhất có cảnh báo cần kiểm tra.",
+      to: "/history",
+      tone: "warning",
+    };
+  }
+  if (!aiConfigured) {
+    return {
+      id: "ai",
+      title: "Cấu hình AI để dùng caption tự động",
+      detail: "Đặt baseUrl và model trong cài đặt.",
+      to: "/settings",
+      tone: "neutral",
+    };
+  }
+  return {
+    id: "ready",
+    title: "Sẵn sàng tạo nội dung",
+    detail: "Mọi thứ OK. Tạo mẻ mới ở trang Tạo nội dung.",
+    to: "/generate",
+    tone: "success",
+  };
+}
+
 export function buildDashboardSummary(input: DashboardSummaryInput) {
   const {
     packTemplates,
@@ -172,6 +258,7 @@ export function buildDashboardSummary(input: DashboardSummaryInput) {
     presetCount,
     analysisCount,
     aiConfigured,
+    packDrafts,
   } = input;
 
   const sheetNames = Array.from(
@@ -291,6 +378,26 @@ export function buildDashboardSummary(input: DashboardSummaryInput) {
     });
   }
 
+  const incompletePack = pickIncompletePack(packDrafts, packTemplates, pageTemplates);
+  const recentPack = pickRecentPack(
+    packDrafts,
+    packTemplates,
+    pageTemplates,
+    jobs,
+    incompletePack?.packTemplateId,
+  );
+  const recentJobs = buildRecentJobs(jobs);
+  const nextAction = buildNextAction({
+    entities,
+    packs: packTemplates,
+    pageTemplates,
+    driveDownloadCandidateCount,
+    incompletePack,
+    latestJob,
+    latestJobWarnings,
+    aiConfigured,
+  });
+
   return {
     packTemplates: packTemplates.length,
     pageTemplates: pageTemplates.length,
@@ -319,5 +426,9 @@ export function buildDashboardSummary(input: DashboardSummaryInput) {
     mappedSlots,
     aiConfigured,
     issues,
+    incompletePack,
+    recentPack,
+    recentJobs,
+    nextAction,
   };
 }
