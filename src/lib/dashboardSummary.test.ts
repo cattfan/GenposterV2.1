@@ -49,6 +49,7 @@ describe("dashboardSummary", () => {
       presetCount: 0,
       analysisCount: 0,
       aiConfigured: false,
+      packDrafts: [],
     });
 
     expect(summary.entities).toBe(0);
@@ -76,6 +77,7 @@ describe("dashboardSummary", () => {
       presetCount: 2,
       analysisCount: 3,
       aiConfigured: true,
+      packDrafts: [],
     });
 
     expect(summary.packTemplates).toBe(1);

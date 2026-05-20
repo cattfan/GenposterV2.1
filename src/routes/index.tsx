@@ -59,6 +59,7 @@ function Dashboard() {
       presetCount,
       analysisCount,
       aiConfigured: Boolean(settings.ai?.baseUrl && settings.ai.model),
+      packDrafts: [],
     });
   }, []);
 

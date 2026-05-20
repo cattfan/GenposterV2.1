@@ -2,6 +2,7 @@ import type {
   Asset,
   Entity,
   GenerationJob as Job,
+  PackDraftState,
   PackTemplate,
   PageTemplate,
 } from "@/models";
@@ -19,6 +20,41 @@ export interface DashboardIssue {
   tone: "good" | "warning" | "danger" | "neutral";
 }
 
+export type NextActionId =
+  | "no-data"
+  | "no-template"
+  | "download-images"
+  | "incomplete-pack"
+  | "warnings"
+  | "ai"
+  | "ready";
+
+export interface NextAction {
+  id: NextActionId;
+  title: string;
+  detail: string;
+  to: string;
+  search?: { tab: "images" } | Record<string, string>;
+  tone: "danger" | "warning" | "neutral" | "success";
+}
+
+export interface DashboardPackRef {
+  packTemplateId: string;
+  packName: string;
+  boundCount: number;
+  totalBindable: number;
+  lastOpenedAt: number;
+}
+
+export interface DashboardJobRow {
+  jobId: string;
+  name: string;
+  pageCount: number;
+  warningCount: number;
+  createdAt: number;
+  status: "draft" | "generated" | "exported";
+}
+
 export interface DashboardSummaryInput {
   packTemplates: PackTemplate[];
   pageTemplates: PageTemplate[];
@@ -29,6 +65,100 @@ export interface DashboardSummaryInput {
   presetCount: number;
   analysisCount: number;
   aiConfigured: boolean;
+  packDrafts: PackDraftState[];
+}
+
+function countBindableSlots(pack: PackTemplate, pageTemplates: PageTemplate[]): number {
+  const byId = new Map(pageTemplates.map((p) => [p.pageTemplateId, p]));
+  let total = 0;
+  for (const id of pack.orderedPages ?? []) {
+    const tpl = byId.get(id);
+    if (!tpl) continue;
+    for (const slot of tpl.slots ?? []) {
+      if (slot.kind === "text" || slot.kind === "image" || slot.kind === "shape") total += 1;
+    }
+  }
+  return total;
+}
+
+function countBoundSlots(packOv: PackDraftState["packOv"]): number {
+  let total = 0;
+  for (const page of Object.values(packOv ?? {})) {
+    for (const value of Object.values(page ?? {})) {
+      if (value) total += 1;
+    }
+  }
+  return total;
+}
+
+function pickIncompletePack(
+  packDrafts: PackDraftState[],
+  packs: PackTemplate[],
+  pageTemplates: PageTemplate[],
+): DashboardPackRef | undefined {
+  const packById = new Map(packs.map((p) => [p.packTemplateId, p]));
+  const candidates: DashboardPackRef[] = [];
+  for (const draft of packDrafts) {
+    const pack = packById.get(draft.packTemplateId);
+    if (!pack) continue;
+    const bindable = countBindableSlots(pack, pageTemplates);
+    const bound = countBoundSlots(draft.packOv);
+    if (bound === 0 || bindable === 0 || bound >= bindable) continue;
+    candidates.push({
+      packTemplateId: draft.packTemplateId,
+      packName: pack.name,
+      boundCount: bound,
+      totalBindable: bindable,
+      lastOpenedAt: draft.lastOpenedAt,
+    });
+  }
+  candidates.sort((a, b) => b.lastOpenedAt - a.lastOpenedAt);
+  return candidates[0];
+}
+
+function pickRecentPack(
+  packDrafts: PackDraftState[],
+  packs: PackTemplate[],
+  pageTemplates: PageTemplate[],
+  jobs: Job[],
+  excludeId: string | undefined,
+): DashboardPackRef | undefined {
+  const packById = new Map(packs.map((p) => [p.packTemplateId, p]));
+  const latestJobByPack = new Map<string, number>();
+  for (const job of jobs) {
+    const previous = latestJobByPack.get(job.packTemplateId) ?? 0;
+    if (job.createdAt > previous) latestJobByPack.set(job.packTemplateId, job.createdAt);
+  }
+  const candidates: DashboardPackRef[] = [];
+  for (const draft of packDrafts) {
+    if (draft.packTemplateId === excludeId) continue;
+    const pack = packById.get(draft.packTemplateId);
+    if (!pack) continue;
+    const latestJobAt = latestJobByPack.get(draft.packTemplateId) ?? 0;
+    if (draft.lastOpenedAt <= latestJobAt) continue;
+    const bindable = countBindableSlots(pack, pageTemplates);
+    const bound = countBoundSlots(draft.packOv);
+    candidates.push({
+      packTemplateId: draft.packTemplateId,
+      packName: pack.name,
+      boundCount: bound,
+      totalBindable: bindable,
+      lastOpenedAt: draft.lastOpenedAt,
+    });
+  }
+  candidates.sort((a, b) => b.lastOpenedAt - a.lastOpenedAt);
+  return candidates[0];
+}
+
+function buildRecentJobs(jobs: Job[]): DashboardJobRow[] {
+  return jobs.slice(0, 5).map((job) => ({
+    jobId: job.jobId,
+    name: job.packTemplateName,
+    pageCount: job.pages.length,
+    warningCount: job.pages.reduce((sum, page) => sum + page.warnings.length, 0),
+    createdAt: job.createdAt,
+    status: job.status,
+  }));
 }
 
 export function buildDashboardSummary(input: DashboardSummaryInput) {
