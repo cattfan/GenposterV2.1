@@ -53,6 +53,11 @@ export const TABLES: readonly TableConfig[] = [
     indexedFields: ["name", "updatedAt"],
   },
   {
+    name: "pack_drafts",
+    primaryKey: "packTemplateId",
+    indexedFields: ["lastOpenedAt", "updatedAt"],
+  },
+  {
     name: "jobs",
     primaryKey: "jobId",
     indexedFields: ["packTemplateId", "createdAt", "status"],
