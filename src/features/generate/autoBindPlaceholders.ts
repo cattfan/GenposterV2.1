@@ -121,28 +121,3 @@ export function autoBindPlaceholdersForDrafts(
   }
   return { drafts: next, totalChanged, changes: allChanges };
 }
-
-/**
- * Dry-run: tính số slot có thể auto-bind (chia theo tầng) mà không mutate
- * template. Dùng cho UI preview trước khi user bấm.
- */
-export function previewAutoBindForDrafts(
-  drafts: Record<string, PageTemplate>,
-): {
-  totalChangeable: number;
-  byTier: Record<AutoBindTier, number>;
-} {
-  const byTier: Record<AutoBindTier, number> = { token: 0, name: 0, heuristic: 0 };
-  let totalChangeable = 0;
-  for (const template of Object.values(drafts)) {
-    for (const slot of template.slots) {
-      if (slot.bindingPath) continue;
-      if (slot.kind !== "text" && slot.kind !== "shape") continue;
-      const match = resolveFieldForSlot(slot);
-      if (!match) continue;
-      byTier[match.tier] += 1;
-      totalChangeable += 1;
-    }
-  }
-  return { totalChangeable, byTier };
-}

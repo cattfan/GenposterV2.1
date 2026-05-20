@@ -3,7 +3,6 @@ import type { PageTemplate, Slot } from "@/models";
 import {
   autoBindPlaceholders,
   autoBindPlaceholdersForDrafts,
-  previewAutoBindForDrafts,
 } from "./autoBindPlaceholders";
 
 function makeSlot(partial: Partial<Slot> & { slotId: string; kind: Slot["kind"] }): Slot {
@@ -248,28 +247,5 @@ describe("autoBindPlaceholders — tier priority", () => {
     const result = autoBindPlaceholders(tpl);
     expect(result.template.slots[0].bindingPath).toBe("entity.name");
     expect(result.changes[0]?.tier).toBe("name");
-  });
-});
-
-describe("previewAutoBindForDrafts", () => {
-  it("counts changeable slots split by tier", () => {
-    const drafts = {
-      a: makeTemplate([
-        makeSlot({ slotId: "s1", kind: "text", staticText: "{{name_0}}" }),
-        makeSlot({ slotId: "s2", kind: "text", name: "Địa chỉ", staticText: "123 Lê Lợi" }),
-        makeSlot({ slotId: "s3", kind: "text", staticText: "0905 123 456" }),
-        makeSlot({
-          slotId: "s4",
-          kind: "text",
-          // Đã có binding -> bỏ qua
-          bindingPath: "entity.name",
-        }),
-      ]),
-    };
-    const result = previewAutoBindForDrafts(drafts);
-    expect(result.totalChangeable).toBe(3);
-    expect(result.byTier.token).toBe(1);
-    expect(result.byTier.name).toBe(1);
-    expect(result.byTier.heuristic).toBe(1);
   });
 });

@@ -2,12 +2,12 @@ import type { Entity, RenderedItem } from "@/models";
 import { buildEntityBindingTargets } from "@/engines/binding/cardRepeater";
 import type { PageTemplate } from "@/models";
 
-export interface EntityBindBatchState {
+interface EntityBindBatchState {
   usedEntityIds: Set<string>;
   usedEntityKeys?: Set<string>;
 }
 
-export interface AllocateEntityBindingsResult {
+interface AllocateEntityBindingsResult {
   items: RenderedItem[];
   assignedEntities: Entity[];
   warnings: string[];

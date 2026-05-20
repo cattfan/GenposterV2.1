@@ -747,10 +747,6 @@ export function resolveImageBinding(
   return { src: fallback };
 }
 
-export function slotHasBinding(slot: Slot): boolean {
-  return !!slot.bindingPath && slot.bindingPath.length > 0;
-}
-
 // CSS filter string từ SlotStyle
 export function buildCssFilter(style: Slot["style"]): string | undefined {
   if (!style) return undefined;
