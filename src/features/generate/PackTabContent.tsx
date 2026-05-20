@@ -130,6 +130,7 @@ import {
   usePackBindOverrides,
   type PackBindOverrides,
 } from "@/features/generate/usePackBindOverrides";
+import { usePackDraftAutosave } from "@/features/generate/usePackDraftAutosave";
 import { isSlotInsideSelectionContainer } from "@/features/generate/selectionGeometry";
 import {
   ALL_VALUE,
@@ -296,9 +297,14 @@ export function PackTabContent({
     setBinding,
     clearBinding,
     resetPage,
-    replaceAll,
+    replaceAll: setPackOverrides,
   } = usePackBindOverrides();
   const [previewPageDrafts, setPreviewPageDrafts] = useState<PreviewPageDrafts>({});
+  usePackDraftAutosave({
+    packTemplateId: packId,
+    packOv,
+    previewPageDrafts,
+  });
   const [editingPageIndex, setEditingPageIndex] = useState<number | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState<string>("");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
@@ -616,6 +622,30 @@ export function PackTabContent({
     setEditingPageIndex(null);
     setEditingPreviewOpen(false);
     stickyPreviewPinsByPageRef.current = new Map();
+  }, [packId]);
+  useEffect(() => {
+    if (!packId) return;
+    let cancelled = false;
+    void (async () => {
+      const draft = await db.packDrafts.get(packId);
+      if (cancelled || !draft) return;
+      if (draft.packOv && Object.keys(draft.packOv).length > 0) {
+        setPackOverrides(draft.packOv);
+      }
+      if (draft.previewPageDrafts && Object.keys(draft.previewPageDrafts).length > 0) {
+        previewPageDraftsRef.current = draft.previewPageDrafts;
+        setPreviewPageDrafts(draft.previewPageDrafts);
+      }
+      // Touch lastOpenedAt without disturbing payload.
+      void db.packDrafts.put({
+        ...draft,
+        lastOpenedAt: Date.now(),
+        updatedAt: draft.updatedAt,
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [packId]);
   useEffect(() => {
     setSelectedSlotIds([]);
@@ -1815,7 +1845,7 @@ export function PackTabContent({
       });
     });
 
-    replaceAll(nextOverrides);
+    setPackOverrides(nextOverrides);
     stickyPreviewPinsByPageRef.current = new Map();
     // Auto-bind các slot có placeholder "{{name_0}}", "{{address_0}}", v.v.
     // Quan trọng cho template AI dựng (templateFromImage) — slot text có
