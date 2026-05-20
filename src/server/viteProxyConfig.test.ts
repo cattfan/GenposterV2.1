@@ -6,13 +6,13 @@ describe("createLocalBackendProxy", () => {
     const proxy = createLocalBackendProxy();
 
     expect(proxy["/api"]).toMatchObject({
-      target: "http://127.0.0.1:3001",
+      target: "http://127.0.0.1:3010",
       changeOrigin: true,
     });
     expect(proxy["/ws"]).toMatchObject({
-      target: "ws://127.0.0.1:3001",
+      target: "ws://127.0.0.1:3010",
       ws: true,
     });
-    expect(JSON.stringify(proxy)).not.toContain("localhost:3001");
+    expect(JSON.stringify(proxy)).not.toContain("localhost:3010");
   });
 });

@@ -1,7 +1,8 @@
 import type { ProxyOptions } from "vite";
+import { GENPOSTER_BACKEND_PORT } from "./devPorts";
 
-const BACKEND_HTTP_TARGET = "http://127.0.0.1:3001";
-const BACKEND_WS_TARGET = "ws://127.0.0.1:3001";
+const BACKEND_HTTP_TARGET = `http://127.0.0.1:${GENPOSTER_BACKEND_PORT}`;
+const BACKEND_WS_TARGET = `ws://127.0.0.1:${GENPOSTER_BACKEND_PORT}`;
 
 export function createLocalBackendProxy(): Record<string, ProxyOptions> {
   return {

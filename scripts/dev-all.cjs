@@ -9,12 +9,15 @@ const path = require("path");
 
 const isWindows = process.platform === "win32";
 const npmCmd = isWindows ? "npm.cmd" : "npm";
+const BACKEND_PORT = String(process.env.GENPOSTER_BACKEND_PORT || process.env.PORT || "3010");
+const FRONTEND_PORT = String(process.env.GENPOSTER_FRONTEND_PORT || "9090");
 
 const procs = [];
 
-function start(label, cwd, args, color) {
+function start(label, cwd, args, color, extraEnv = {}) {
   const child = spawn(npmCmd, args, {
     cwd,
+    env: { ...process.env, ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
     // Node 22+ requires shell:true on Windows when spawning .cmd shims
     // (e.g. npm.cmd). Without it: 'spawn EINVAL' on Windows.
@@ -69,10 +72,22 @@ process.on("SIGINT", () => {
 });
 process.on("SIGTERM", () => shutdown(0));
 
-console.log("[dev] Khoi dong backend (port 3001) + frontend (port 9090)...");
+console.log(`[dev] Khoi dong backend (port ${BACKEND_PORT}) + frontend (port ${FRONTEND_PORT})...`);
 
-start("backend", path.join(__dirname, "..", "backend"), ["run", "dev"], "36"); // cyan
+start(
+  "backend",
+  path.join(__dirname, "..", "backend"),
+  ["run", "dev"],
+  "36",
+  { PORT: BACKEND_PORT, GENPOSTER_BACKEND_PORT: BACKEND_PORT },
+);
 // Delay frontend 1.5s de backend listen truoc -> giam ECONNREFUSED proxy.
 setTimeout(() => {
-  start("frontend", path.join(__dirname, ".."), ["run", "dev:vite"], "35"); // magenta
+  start(
+    "frontend",
+    path.join(__dirname, ".."),
+    ["run", "dev:vite"],
+    "35",
+    { GENPOSTER_BACKEND_PORT: BACKEND_PORT, GENPOSTER_FRONTEND_PORT: FRONTEND_PORT },
+  );
 }, 1500);

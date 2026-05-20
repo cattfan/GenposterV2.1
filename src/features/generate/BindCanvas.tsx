@@ -143,10 +143,36 @@ export function BindCanvas({
     }
     if (slot.__cardEntityId) return entityLookup.get(slot.__cardEntityId);
     if (slotItems && slotItems.length > 0 && slot.bindingPath?.startsWith("entity.")) {
+      const relatedIds = getRenderedTargetSlotIds(
+        slot,
+        expanded.slots,
+        template,
+        slotItems,
+      );
+      for (const relatedId of relatedIds) {
+        const relatedOverride =
+          slotEntityOverride.get(relatedId) ??
+          slotEntityOverride.get(
+            expanded.slots.find((item) => item.slotId === relatedId)?.originalSlotId ??
+              relatedId,
+          );
+        if (relatedOverride?.entityId) {
+          return entityLookup.get(relatedOverride.entityId);
+        }
+      }
       return undefined;
     }
     return entity;
-  }, [bindingSources, entity, entityLookup, imageResolveEntities, slotEntityOverride, slotItems]);
+  }, [
+    bindingSources,
+    entity,
+    entityLookup,
+    expanded.slots,
+    imageResolveEntities,
+    slotEntityOverride,
+    slotItems,
+    template,
+  ]);
 
   const imagePlan: SlotImagePlan = useMemo(
     () =>

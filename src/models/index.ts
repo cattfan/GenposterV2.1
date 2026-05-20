@@ -332,6 +332,14 @@ export interface GeneratePresetConfig {
   batchCount?: number;
   varyFontsFromSecondBundle?: boolean;
   pageConfigs?: Record<ID, GeneratePageConfig>;
+  /** pageTemplateId → groupKey (gr:/dg:) → nguồn lọc cụm — backup khi draft slot thiếu dataSourceConfig */
+  groupSourceConfigs?: Record<ID, Record<string, SlotDataSourceConfig>>;
+}
+
+export interface SlotDataSourceConfig {
+  selectedSheet?: string;
+  filterMoHinh?: string;
+  filterPhongCach?: string;
 }
 
 export interface GeneratePageConfig {

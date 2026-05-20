@@ -1,5 +1,6 @@
 // Tab "Pack template (nâng cao)" — bind dữ liệu vào từng page của pack giống tab entity.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RemoteError } from "@/storage/remoteClient";
 import { useLiveQuery } from "@/storage/useLiveQuery";
 import { nanoid } from "nanoid";
 import { toast } from "sonner";
@@ -78,6 +79,20 @@ import { TextRewritePanel } from "@/features/generate/TextRewritePanel";
 import { GeneratePageEditor } from "@/features/generate/GeneratePageEditor";
 import { isLikelyGeneratePageBackgroundSlot } from "@/features/generate/backgroundGuards";
 import { autoBindPlaceholdersForDrafts } from "@/features/generate/autoBindPlaceholders";
+import { allocatePackWorkspacePreview } from "@/features/generate/packWorkspacePreview";
+import { canResumePresetWorkspace } from "@/features/generate/presetWorkspacePersistence";
+import {
+  applyGroupSourceConfigsToTemplate,
+  collectClusterBindableSlotIds,
+  extractGroupSourceConfigs,
+  resolveSharedClusterSourceDisplay,
+} from "@/features/generate/groupSourceConfig";
+import {
+  resolveBindingGroupKey,
+  resolvePreviewEntityForSlot,
+  shouldAutoDataGroupVisualSlots,
+  type StickyGroupPin,
+} from "@/features/generate/stickyPreviewAllocation";
 import {
   buildTextSlotDisplayLabel,
   normalizeSlotDisplayLabel,
@@ -92,7 +107,10 @@ import {
 } from "@/features/generate/usePreviewPageDrafts";
 import { aiCaptionFromEntity, aiRewriteTextPreserveMeaning } from "@/features/ai/aiFeatures";
 import { generatePackJob } from "@/engines/selection/generate";
-import { allocateEntityBindingsForTemplate } from "@/engines/selection/entityBindAllocator";
+import {
+  allocateEntityBindingsForTemplate,
+  buildEntityAllocationOrder,
+} from "@/engines/selection/entityBindAllocator";
 import { buildEntityBindingTargets, expandPageWithCardGroups } from "@/engines/binding/cardRepeater";
 import { filterRenderableAssets } from "@/engines/binding/assetImage";
 import { isDataGroupMarkerSlot } from "@/engines/binding/slotMarkers";
@@ -182,6 +200,29 @@ function sortSlotsForFormat(slots: Slot[]) {
 
 function stringifyFormatValue(value: unknown) {
   return JSON.stringify(value ?? null);
+}
+
+function formatPresetSaveError(error: unknown): string {
+  if (error instanceof RemoteError) {
+    if (error.status === 404) {
+      return "API backend không đúng (404). Kiểm tra port 3010 có bị app khác chiếm không, rồi chạy lại npm run dev.";
+    }
+    return error.message || `${error.status} ${error.statusText}`;
+  }
+  const raw = error instanceof Error ? error.message : String(error);
+  if (raw === "Failed to fetch" || /networkerror|load failed/i.test(raw)) {
+    return "Không kết nối được backend. Chạy npm run dev (cả backend lẫn frontend), không chỉ dev:vite.";
+  }
+  return raw;
+}
+
+function isRetryablePresetSaveError(error: unknown): boolean {
+  if (error instanceof RemoteError) return error.status >= 500;
+  if (error instanceof TypeError) return true;
+  if (error instanceof Error) {
+    return error.message === "Failed to fetch" || /networkerror|load failed/i.test(error.message);
+  }
+  return false;
 }
 
 function createDataGroupId() {
@@ -349,6 +390,8 @@ export function PackTabContent({
   const packRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const presetImportRef = useRef<HTMLInputElement>(null);
   const presetAutosaveTimer = useRef<number | null>(null);
+  const presetAutosaveErrorRef = useRef(false);
+  const presetSaveInFlightRef = useRef<Promise<void> | null>(null);
   const buildCurrentPresetPayloadRef = useRef<
     ((name: string, presetId?: string, createdAt?: number) => GenerateBindingPreset) | null
   >(null);
@@ -363,6 +406,8 @@ export function PackTabContent({
   const [editingPageIndex, setEditingPageIndex] = useState<number | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState<string>("");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const lastClosedPresetIdRef = useRef<string>("");
+  const stickyPreviewPinsByPageRef = useRef<Map<string, Map<string, StickyGroupPin>>>(new Map());
   const previewPageDraftsRef = useRef<PreviewPageDrafts>({});
   const previewDraftPastRef = useRef<PreviewPageDrafts[]>([]);
   const previewDraftFutureRef = useRef<PreviewPageDrafts[]>([]);
@@ -682,13 +727,19 @@ export function PackTabContent({
       configuredPool.length > 0
         ? configuredPool
         : filteredEntities;
-    const owner = pool[0];
-    const targetCount = buildEntityBindingTargets(template, pool).length;
+    const previewSeed = `${preset.presetId}:${template.pageTemplateId}:card-preview`;
+    const orderedPool = buildEntityAllocationOrder(
+      pool,
+      presetPageConfig.prioritizePartner,
+      previewSeed,
+    );
+    const owner = orderedPool[0];
+    const targetCount = buildEntityBindingTargets(template, orderedPool).length;
     const allocation =
       owner && targetCount > 0
         ? allocateEntityBindingsForTemplate({
             template,
-            orderedEntities: pool,
+            orderedEntities: orderedPool,
             pageOwner: targetCount <= 1 ? owner : undefined,
             partnerQuota: presetPageConfig.partnerQuotaPerPage,
             prioritizePartner: presetPageConfig.prioritizePartner,
@@ -735,6 +786,7 @@ export function PackTabContent({
     setPreviewDraftHistoryVersion((version) => version + 1);
     setEditingPageIndex(null);
     setEditingPreviewOpen(false);
+    stickyPreviewPinsByPageRef.current = new Map();
   }, [packId]);
   useEffect(() => {
     setSelectedSlotIds([]);
@@ -816,32 +868,65 @@ export function PackTabContent({
     [effectiveActive, selectedSlotIds],
   );
   const selectedSlot: Slot | undefined = selectedSlots[selectedSlots.length - 1];
-  const previewAllocation = useMemo(() => {
-    if (activePreviewRenderedPage) {
-      return { items: activePreviewRenderedPage.items, warnings: [] as string[] };
+  const packPreviewAllocations = useMemo(() => {
+    if (!workspaceOpen || !previewEntity || packPages.length === 0) {
+      return new Map<
+        string,
+        { items: import("@/models").RenderedItem[]; warnings: string[] }
+      >();
     }
-    if (!effectiveActive || !previewEntity) {
-      return { items: [], warnings: [] as string[] };
-    }
-    const shouldPinPreviewOwner = activeTargetCount <= 1;
-    const allocation = allocateEntityBindingsForTemplate({
-      template: effectiveActive,
+    return allocatePackWorkspacePreview({
+      packPages,
+      resolveEffectiveTemplate: (page) =>
+        resolvePageWorkingTemplate(
+          page,
+          packOv[page.pageTemplateId],
+          previewPageDrafts[page.pageTemplateId],
+          GENERATE_TEMPLATE_OPTIONS,
+        ),
       orderedEntities: buildOrderedEntityPool(previewEntityId, filteredEntities),
-      pageOwner: shouldPinPreviewOwner ? previewEntity : undefined,
-      partnerQuota: activeGenerateConfig.partnerQuotaPerPage,
-      prioritizePartner: activeGenerateConfig.prioritizePartner,
-      batchState: { usedEntityIds: new Set<string>() },
+      pinsByPage: stickyPreviewPinsByPageRef.current,
+      resolvePageConfig: (page) => {
+        const cfg = resolveGeneratePageConfig(
+          globalGenerateConfig,
+          sourceNeutralPageConfigs[page.pageTemplateId],
+        );
+        return {
+          partnerQuota: cfg.partnerQuotaPerPage,
+          prioritizePartner: cfg.prioritizePartner,
+        };
+      },
+      previewEntity,
     });
-    return { items: allocation.items, warnings: allocation.warnings };
   }, [
-    effectiveActive,
+    workspaceOpen,
+    packPages,
+    packOv,
+    previewPageDrafts,
     previewEntity,
-    activePreviewRenderedPage,
-    activeGenerateConfig,
-    activeTargetCount,
-    buildOrderedEntityPool,
     previewEntityId,
     filteredEntities,
+    buildOrderedEntityPool,
+    globalGenerateConfig,
+    sourceNeutralPageConfigs,
+  ]);
+
+  const previewAllocation = useMemo(() => {
+    // Workspace bind: phân bổ cả pack (không trùng quán). Job dry-run chỉ cho sidebar.
+    const useStickyBindPreview = workspaceOpen;
+    if (!useStickyBindPreview && activePreviewRenderedPage) {
+      return { items: activePreviewRenderedPage.items, warnings: [] as string[] };
+    }
+    if (!effectiveActive) {
+      return { items: [], warnings: [] as string[] };
+    }
+    const pageAlloc = packPreviewAllocations.get(effectiveActive.pageTemplateId);
+    return pageAlloc ?? { items: [], warnings: [] as string[] };
+  }, [
+    workspaceOpen,
+    activePreviewRenderedPage,
+    effectiveActive,
+    packPreviewAllocations,
   ]);
   const previewSlotItems = previewAllocation.items;
   const previewAllocationWarnings = previewAllocation.warnings;
@@ -897,6 +982,16 @@ export function PackTabContent({
     // getSlotBindMode is a stable helper that reads template + slot; safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveActive, selectedSlots]);
+  const panelPreviewEntity = useMemo(() => {
+    if (!effectiveActive || selectedBindableSlots.length === 0) return previewEntity;
+    return resolvePreviewEntityForSlot({
+      slot: selectedBindableSlots[0],
+      template: effectiveActive,
+      slotItems: previewSlotItems,
+      entities,
+      fallbackEntity: previewEntity,
+    });
+  }, [effectiveActive, selectedBindableSlots, previewSlotItems, entities, previewEntity]);
   const selectedTextSlots = selectedBindableSlots.filter((slot) => getSlotBindMode(slot) === "text");
   const selectedImageSlots = selectedBindableSlots.filter((slot) => getSlotBindMode(slot) === "image");
   const selectedDataGroupIds = Array.from(
@@ -932,13 +1027,6 @@ export function PackTabContent({
         .slice()
         .sort((a, b) => a.y - b.y || a.x - b.x || a.slotId.localeCompare(b.slotId)),
     [selectedImageSlots],
-  );
-  const selectedGroupIds = Array.from(
-    new Set(
-      selectedBindableSlots
-        .map((slot) => slot.groupId)
-        .filter((groupId): groupId is string => !!groupId),
-    ),
   );
   const textSlotBindingValue = (slot: Slot) =>
     parseEntityListBindingPath(slot.bindingPath)
@@ -1004,40 +1092,47 @@ export function PackTabContent({
       return true;
     });
   };
-  const sharedSourceSlots = useMemo(() => {
-    if (selectedBindableSlots.length <= 1) return [];
-    if (selectedDataGroupIds.length === 1) {
-      const [dataGroupId] = selectedDataGroupIds;
-      return selectedBindableSlots.filter((slot) => slot.dataGroupId === dataGroupId);
+  const selectedClusterKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const slot of selectedBindableSlots) {
+      if (slot.dataGroupId) keys.add(`dg:${slot.dataGroupId}`);
+      else if (slot.groupId) keys.add(`gr:${slot.groupId}`);
     }
-    if (selectedGroupIds.length === 1) {
-      const [groupId] = selectedGroupIds;
-      return selectedBindableSlots.filter((slot) => slot.groupId === groupId);
-    }
-    return [];
-  }, [selectedBindableSlots, selectedDataGroupIds, selectedGroupIds]);
-  const sharedSourceConfig = useMemo<ResolvedGeneratePageConfig | null>(() => {
-    if (sharedSourceSlots.length <= 1) return null;
-    const configs = sharedSourceSlots.map((slot) => slotSourceConfig(slot));
-    const sharedValue = (
-      key: keyof Pick<ResolvedGeneratePageConfig, "selectedSheet" | "filterMoHinh" | "filterPhongCach">,
-    ) => {
-      const values = Array.from(new Set(configs.map((config) => config[key])));
-      return values.length === 1 ? values[0] : ALL_VALUE;
-    };
+    return keys;
+  }, [selectedBindableSlots]);
+  const clusterSourceSlots = useMemo(() => {
+    if (!effectiveActive || selectedBindableSlots.length === 0) return [];
+    if (selectedClusterKeys.size !== 1) return [];
+    const clusterSlotIds = collectClusterBindableSlotIds(
+      effectiveActive,
+      selectedBindableSlots.map((slot) => slot.slotId),
+      (slot) => getSlotBindMode(slot) !== null,
+    );
+    return effectiveActive.slots.filter((slot) => clusterSlotIds.has(slot.slotId));
+    // getSlotBindMode is a stable helper derived from effectiveActive.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveActive, selectedBindableSlots, selectedClusterKeys]);
+  const clusterSourceSlotIds = useMemo(
+    () => new Set(clusterSourceSlots.map((slot) => slot.slotId)),
+    [clusterSourceSlots],
+  );
+  const clusterSourceConfig = useMemo<ResolvedGeneratePageConfig | null>(() => {
+    if (clusterSourceSlots.length === 0) return null;
+    const merged = resolveSharedClusterSourceDisplay(clusterSourceSlots, ALL_VALUE);
     return {
       ...activeGenerateConfig,
-      selectedSheet: sharedValue("selectedSheet") ?? ALL_VALUE,
-      filterMoHinh: sharedValue("filterMoHinh") ?? ALL_VALUE,
-      filterPhongCach: sharedValue("filterPhongCach") ?? ALL_VALUE,
+      selectedSheet: merged.selectedSheet ?? ALL_VALUE,
+      filterMoHinh: merged.filterMoHinh ?? ALL_VALUE,
+      filterPhongCach: merged.filterPhongCach ?? ALL_VALUE,
     };
-  }, [activeGenerateConfig, sharedSourceSlots, slotSourceConfig]);
-  const shouldShowSharedSourceControls =
-    sharedSourceSlots.length > 1 &&
-    sharedSourceSlots.some((slot) => {
+  }, [activeGenerateConfig, clusterSourceSlots]);
+  const shouldShowClusterSourceControls =
+    clusterSourceSlots.length > 0 &&
+    clusterSourceSlots.some((slot) => {
       const textBindingValue = textSlotFieldBindingValue(slot);
       return textBindingValue !== "_static" || slot.bindingPath === "asset.random";
     });
+  const hasMultipleSelectedClusters = selectedClusterKeys.size > 1;
   const textSlotLabel = (slot: Slot, index: number) =>
     buildTextSlotDisplayLabel(slot, index, {
       baseSlot: activeBaseSlotById.get(slot.slotId),
@@ -1162,6 +1257,22 @@ export function PackTabContent({
       return { ...prev, [pageTemplateId]: next };
     }, { history: false });
   };
+  const ensureAutoDataGroupForBoundSlots = (boundSlots: Slot[]) => {
+    if (!effectiveActive || boundSlots.length === 0) return;
+    const groupId = boundSlots[0]?.groupId;
+    if (!groupId) return;
+    const groupSlots = effectiveActive.slots.filter(
+      (item) => item.groupId === groupId && getSlotBindMode(item) !== null,
+    );
+    if (
+      !shouldAutoDataGroupVisualSlots(groupSlots, (item) => getSlotBindMode(item) !== null)
+    ) {
+      return;
+    }
+    const existing = groupSlots.find((item) => item.dataGroupId)?.dataGroupId;
+    setDataGroupForSlots(groupSlots, existing ?? createDataGroupId());
+  };
+
   const applyTextBindingSelection = (slot: Slot, value: string) => {
     if (!activePage) return;
     if (value === "__list") return;
@@ -1174,6 +1285,7 @@ export function PackTabContent({
       bindingPath = buildTextBindingPathForSlot(slot, value);
     }
     applyBindingToSlots([slot], activePage.pageTemplateId, bindingPath);
+    if (bindingPath) ensureAutoDataGroupForBoundSlots([slot]);
   };
 
   const applySlotSourcePatch = (
@@ -1181,29 +1293,11 @@ export function PackTabContent({
     patch: Partial<NonNullable<Slot["dataSourceConfig"]>>,
   ) => {
     if (!activePage || !effectiveActive) return;
-    // Mở rộng target: nếu slot thuộc dataGroup, apply cho tất cả slots cùng group
-    const baseIds = new Set(slots.map((slot) => slot.slotId));
-    const dataGroupIds = new Set(
-      slots.map((slot) => slot.dataGroupId).filter((id): id is string => !!id),
+    const targetIds = collectClusterBindableSlotIds(
+      effectiveActive,
+      slots.map((slot) => slot.slotId),
+      (slot) => getSlotBindMode(slot) !== null,
     );
-    const groupIds = new Set(
-      slots.map((slot) => slot.groupId).filter((id): id is string => !!id),
-    );
-    const targetIds = new Set(baseIds);
-    if (dataGroupIds.size > 0) {
-      for (const s of effectiveActive.slots) {
-        if (getSlotBindMode(s) !== null && s.dataGroupId && dataGroupIds.has(s.dataGroupId)) {
-          targetIds.add(s.slotId);
-        }
-      }
-    }
-    if (groupIds.size > 0) {
-      for (const s of effectiveActive.slots) {
-        if (getSlotBindMode(s) !== null && s.groupId && groupIds.has(s.groupId)) {
-          targetIds.add(s.slotId);
-        }
-      }
-    }
     let changed = false;
     commitPreviewPageDrafts((prev) => {
       const current = createWorkingTemplate(
@@ -1239,6 +1333,22 @@ export function PackTabContent({
       current.updatedAt = Date.now();
       return { ...prev, [activePage.pageTemplateId]: current };
     });
+    if (changed && activePage && effectiveActive) {
+      const orderedEntities = buildOrderedEntityPool(previewEntityId, filteredEntities);
+      const targets = buildEntityBindingTargets(effectiveActive, orderedEntities);
+      const slotsById = new Map(effectiveActive.slots.map((slot) => [slot.slotId, slot]));
+      const pagePins =
+        stickyPreviewPinsByPageRef.current.get(activePage.pageTemplateId) ?? new Map();
+      for (const target of targets) {
+        if (!target.slotIds.some((slotId) => targetIds.has(slotId))) continue;
+        const clusterSlots = target.slotIds
+          .map((slotId) => slotsById.get(slotId))
+          .filter((slot): slot is Slot => !!slot);
+        if (clusterSlots.length === 0) continue;
+        pagePins.delete(resolveBindingGroupKey(clusterSlots, target.targetId));
+      }
+      stickyPreviewPinsByPageRef.current.set(activePage.pageTemplateId, pagePins);
+    }
   };
   const setDataGroupForSlots = (slots: Slot[], dataGroupId: string | undefined) => {
     if (!activePage || !effectiveActive) return;
@@ -1601,6 +1711,7 @@ export function PackTabContent({
             })
           : value;
     applyBindingToSlots([slot], activePage.pageTemplateId, bindingPath);
+    if (bindingPath) ensureAutoDataGroupForBoundSlots([slot]);
   };
   const applyRandomImageScope = (slot: Slot, patch: { sheetName?: string; folder?: string }) => {
     if (!activePage) return;
@@ -1814,7 +1925,9 @@ export function PackTabContent({
 
     // Nguồn chính: fieldRegistry. Lọc theo trường có data thực trong sheet
     // (preview + filteredEntities) và đính kèm sample từ entity đầu có data.
-    const sampleSource = previewEntity ? [previewEntity, ...filteredEntities] : filteredEntities;
+    const sampleSource = panelPreviewEntity
+      ? [panelPreviewEntity, ...filteredEntities]
+      : filteredEntities;
     const baseOptions = entityFieldOptionsForUi(sampleSource).map<TextListFieldOption>(
       (option) => ({
         path: option.path,
@@ -1840,8 +1953,8 @@ export function PackTabContent({
         const path = `entity.metadata.${key}`;
         if (seen.has(path)) return;
         const sampleEntity =
-          previewEntity && previewEntity.metadata?.[key]
-            ? previewEntity
+          panelPreviewEntity && panelPreviewEntity.metadata?.[key]
+            ? panelPreviewEntity
             : filteredEntities.find((entity) => entity.metadata?.[key]);
         options.push({
           path,
@@ -1851,7 +1964,7 @@ export function PackTabContent({
       });
 
     return options.length ? options : [{ path: "entity.name", label: "Tên quán" }];
-  }, [filteredEntities, previewEntity]);
+  }, [filteredEntities, panelPreviewEntity]);
 
   const selectedPreset = matchingPresets.find((preset) => preset.presetId === selectedPresetId);
   const getPresetPackPages = (preset: GenerateBindingPreset) => {
@@ -1863,6 +1976,46 @@ export function PackTabContent({
       pages: pageIds.map((id) => pageMap.get(id)).filter((page): page is PageTemplate => !!page),
     };
   };
+
+  /** Thumbnail trước khi mở workspace — cache để click/hover không đổi data ngẫu nhiên. */
+  const presetCardPreviewContexts = useMemo(() => {
+    const map = new Map<
+      string,
+      ReturnType<typeof buildPresetPreviewRenderContext>
+    >();
+    for (const preset of matchingPresets ?? []) {
+      const { pages } = getPresetPackPages(preset);
+      for (const page of pages) {
+        const previewTemplateRaw = resolvePageWorkingTemplate(
+          page,
+          preset.bindOverrides?.[page.pageTemplateId],
+          preset.pageTemplateDrafts?.[page.pageTemplateId],
+          GENERATE_TEMPLATE_OPTIONS,
+        );
+        if (!previewTemplateRaw) continue;
+        const pageGroupSources = preset.generateConfig.groupSourceConfigs?.[page.pageTemplateId];
+        const previewTemplate =
+          pageGroupSources && Object.keys(pageGroupSources).length > 0
+            ? applyGroupSourceConfigsToTemplate(
+                previewTemplateRaw,
+                pageGroupSources,
+                (slot) => getSlotBindMode(slot, previewTemplateRaw) !== null,
+              )
+            : previewTemplateRaw;
+        map.set(
+          `${preset.presetId}:${page.pageTemplateId}`,
+          buildPresetPreviewRenderContext(preset, previewTemplate),
+        );
+      }
+    }
+    return map;
+  }, [
+    matchingPresets,
+    packs,
+    tpls,
+    buildPresetPreviewRenderContext,
+    matchingPresets?.map((item) => `${item.presetId}:${item.updatedAt}`).join("|"),
+  ]);
 
   const exportPreset = async (preset: GenerateBindingPreset) => {
     const { pack, pages } = getPresetPackPages(preset);
@@ -1900,6 +2053,14 @@ export function PackTabContent({
         .filter(([pageTemplateId]) => allowedPageIds.has(pageTemplateId))
         .map(([pageTemplateId, template]) => [pageTemplateId, clonePageTemplate(template)]),
     );
+    const groupSourceConfigs = Object.fromEntries(
+      Object.entries(pageTemplateDrafts)
+        .map(([pageTemplateId, template]) => [
+          pageTemplateId,
+          extractGroupSourceConfigs(template, (slot) => getSlotBindMode(slot, template) !== null),
+        ])
+        .filter(([, configs]) => Object.keys(configs).length > 0),
+    );
 
     return {
       presetId,
@@ -1922,6 +2083,8 @@ export function PackTabContent({
         batchCount: maxEntities,
         varyFontsFromSecondBundle,
         pageConfigs: savedPageConfigs,
+        groupSourceConfigs:
+          Object.keys(groupSourceConfigs).length > 0 ? groupSourceConfigs : undefined,
       },
       createdAt,
       updatedAt: Date.now(),
@@ -1932,6 +2095,94 @@ export function PackTabContent({
   useEffect(() => {
     buildCurrentPresetPayloadRef.current = buildCurrentPresetPayload;
   });
+
+  const mergePresetGroupSourcesIntoDrafts = (
+    preset: GenerateBindingPreset,
+    drafts: PreviewPageDrafts,
+  ): PreviewPageDrafts => {
+    const groupSourceConfigs = preset.generateConfig.groupSourceConfigs;
+    if (!groupSourceConfigs || Object.keys(groupSourceConfigs).length === 0) return drafts;
+    const next: PreviewPageDrafts = { ...drafts };
+    let changed = false;
+    for (const page of packPages) {
+      const pageId = page.pageTemplateId;
+      const pageGroups = groupSourceConfigs[pageId];
+      if (!pageGroups) continue;
+      const working =
+        next[pageId] ??
+        resolvePageWorkingTemplate(
+          page,
+          preset.bindOverrides?.[pageId],
+          undefined,
+          GENERATE_TEMPLATE_OPTIONS,
+        );
+      if (!working) continue;
+      const hydrated = applyGroupSourceConfigsToTemplate(
+        working,
+        pageGroups,
+        (slot) => getSlotBindMode(slot, working) !== null,
+      );
+      if (hydrated !== working) {
+        next[pageId] = hydrated;
+        changed = true;
+      }
+    }
+    return changed ? next : drafts;
+  };
+
+  const flushPresetSave = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (!selectedPreset || !selectedPack) return;
+      if (presetAutosaveTimer.current !== null) {
+        window.clearTimeout(presetAutosaveTimer.current);
+        presetAutosaveTimer.current = null;
+      }
+      const build = buildCurrentPresetPayloadRef.current;
+      if (!build) return;
+      const preset = build(
+        selectedPreset.name,
+        selectedPreset.presetId,
+        selectedPreset.createdAt,
+      );
+
+      const saveOnce = async () => {
+        await db.generatePresets.put(preset);
+        presetAutosaveErrorRef.current = false;
+      };
+
+      const runSave = async () => {
+        try {
+          await saveOnce();
+        } catch (error) {
+          if (!isRetryablePresetSaveError(error)) throw error;
+          await new Promise((resolve) => window.setTimeout(resolve, 800));
+          await saveOnce();
+        }
+      };
+
+      const pending = presetSaveInFlightRef.current
+        ? presetSaveInFlightRef.current.catch(() => undefined).then(runSave)
+        : runSave();
+      presetSaveInFlightRef.current = pending.catch(() => undefined);
+      await pending;
+      if (!options?.silent) toast.success("Đã lưu khuôn");
+    },
+    [selectedPreset, selectedPack],
+  );
+
+  const closeWorkspace = useCallback(async () => {
+    if (selectedPreset) {
+      lastClosedPresetIdRef.current = selectedPreset.presetId;
+      try {
+        await flushPresetSave({ silent: true });
+      } catch (error) {
+        toast.error("Không thể lưu khuôn: " + formatPresetSaveError(error));
+      }
+    } else {
+      lastClosedPresetIdRef.current = "";
+    }
+    setWorkspaceOpen(false);
+  }, [selectedPreset, flushPresetSave]);
 
   const applyPreset = (preset: GenerateBindingPreset) => {
     const cfg = preset.generateConfig;
@@ -1971,6 +2222,7 @@ export function PackTabContent({
     });
 
     replaceAll(nextOverrides);
+    stickyPreviewPinsByPageRef.current = new Map();
     // Auto-bind các slot có placeholder "{{name_0}}", "{{address_0}}", v.v.
     // Quan trọng cho template AI dựng (templateFromImage) — slot text có
     // staticText là token nhưng không có bindingPath, nếu không auto-bind
@@ -1979,7 +2231,8 @@ export function PackTabContent({
     const seedDrafts = preset.pageTemplateDrafts ?? {};
     const { drafts: hydratedDrafts, totalChanged } =
       autoBindPlaceholdersForDrafts(seedDrafts);
-    replacePreviewPageDrafts(hydratedDrafts, { history: false });
+    const withGroupSources = mergePresetGroupSourcesIntoDrafts(preset, hydratedDrafts);
+    replacePreviewPageDrafts(withGroupSources, { history: false });
     setSelectedSlotIds([]);
     setActivePageIdx(0);
     const baseMessage = "Đã áp khuôn" + (missing ? `, bỏ qua ${missing} khối thiếu` : "");
@@ -1990,9 +2243,32 @@ export function PackTabContent({
     }
   };
 
-  const openPresetWorkspace = (preset: GenerateBindingPreset) => {
-    setSelectedPresetId(preset.presetId);
-    applyPreset(preset);
+  const openPresetWorkspace = (preset: GenerateBindingPreset, pageIdx = 0) => {
+    const freshPreset =
+      matchingPresets?.find((item) => item.presetId === preset.presetId) ?? preset;
+    const resume = canResumePresetWorkspace({
+      presetId: freshPreset.presetId,
+      selectedPresetId,
+      lastClosedPresetId: lastClosedPresetIdRef.current,
+      drafts: previewPageDraftsRef.current,
+      packOverrides: packOv,
+    });
+    setSelectedPresetId(freshPreset.presetId);
+    if (resume) {
+      const merged = mergePresetGroupSourcesIntoDrafts(
+        freshPreset,
+        previewPageDraftsRef.current,
+      );
+      if (merged !== previewPageDraftsRef.current) {
+        replacePreviewPageDrafts(merged, { history: false });
+      }
+      setActivePageIdx(pageIdx);
+      setWorkspaceOpen(true);
+      return;
+    }
+    lastClosedPresetIdRef.current = "";
+    applyPreset(freshPreset);
+    setActivePageIdx(pageIdx);
     setWorkspaceOpen(true);
   };
 
@@ -2048,16 +2324,10 @@ export function PackTabContent({
     }
 
     presetAutosaveTimer.current = window.setTimeout(() => {
-      const preset = buildCurrentPresetPayloadRef.current?.(
-        selectedPreset.name,
-        selectedPreset.presetId,
-        selectedPreset.createdAt,
-      );
-      if (!preset) return;
-      db.generatePresets.put(preset).catch((error) => {
-        toast.error(
-          "Không thể tự lưu khuôn: " + (error instanceof Error ? error.message : String(error)),
-        );
+      void flushPresetSave({ silent: true }).catch((error) => {
+        if (presetAutosaveErrorRef.current) return;
+        presetAutosaveErrorRef.current = true;
+        toast.error("Không thể tự lưu khuôn: " + formatPresetSaveError(error));
       });
       presetAutosaveTimer.current = null;
     }, 500);
@@ -2086,6 +2356,7 @@ export function PackTabContent({
     varyFontsFromSecondBundle,
     selectedPreset,
     selectedPack,
+    flushPresetSave,
   ]);
 
   const runAiCaption = async () => {
@@ -2122,14 +2393,27 @@ export function PackTabContent({
     }
   };
 
-  const getRewriteCurrentText = (slot: Slot) =>
-    (slot.staticText ?? "").trim() ||
-    (slot.bindingPath
-      ? resolveTextBinding(slot.bindingPath, previewEntity, "", previewEntityPool, {
-          entities,
-          seed: `${activePage?.pageTemplateId ?? "preview"}:${slot.slotId}:rewrite`,
-        }).trim()
-      : "");
+  const getRewriteCurrentText = (slot: Slot) => {
+    const clusterEntity =
+      effectiveActive && previewSlotItems.length > 0
+        ? resolvePreviewEntityForSlot({
+            slot,
+            template: effectiveActive,
+            slotItems: previewSlotItems,
+            entities,
+            fallbackEntity: previewEntity,
+          })
+        : previewEntity;
+    return (
+      (slot.staticText ?? "").trim() ||
+      (slot.bindingPath
+        ? resolveTextBinding(slot.bindingPath, clusterEntity, "", previewEntityPool, {
+            entities,
+            seed: `${activePage?.pageTemplateId ?? "preview"}:${slot.slotId}:rewrite`,
+          }).trim()
+        : "")
+    );
+  };
 
   const runAiRewriteSelectedText = async (sourceText?: string) => {
     if (!activePage || selectedTextSlots.length !== 1) return;
@@ -2820,28 +3104,39 @@ export function PackTabContent({
                       ) : (
                         <div className="flex min-w-full gap-3">
                           {pages.map((page, index) => {
-                            const previewTemplate = resolvePageWorkingTemplate(
+                            const previewTemplateRaw = resolvePageWorkingTemplate(
                               page,
                               preset.bindOverrides?.[page.pageTemplateId],
-                              undefined,
+                              preset.pageTemplateDrafts?.[page.pageTemplateId],
                               GENERATE_TEMPLATE_OPTIONS,
                             );
-                            if (!previewTemplate) return null;
+                            if (!previewTemplateRaw) return null;
+                            const pageGroupSources =
+                              preset.generateConfig.groupSourceConfigs?.[page.pageTemplateId];
+                            const previewTemplate =
+                              pageGroupSources && Object.keys(pageGroupSources).length > 0
+                                ? applyGroupSourceConfigsToTemplate(
+                                    previewTemplateRaw,
+                                    pageGroupSources,
+                                    (slot) => getSlotBindMode(slot, previewTemplateRaw) !== null,
+                                  )
+                                : previewTemplateRaw;
                             const previewScale = Math.min(
                               150 / previewTemplate.canvas.width,
                               190 / previewTemplate.canvas.height,
                             );
-                            const previewContext = buildPresetPreviewRenderContext(
-                              preset,
-                              previewTemplate,
-                            );
+                            const previewContext =
+                              presetCardPreviewContexts.get(
+                                `${preset.presetId}:${page.pageTemplateId}`,
+                              ) ??
+                              buildPresetPreviewRenderContext(preset, previewTemplate);
 
                             return (
                               <button
                                 key={`${preset.presetId}:${page.pageTemplateId}`}
                                 type="button"
                                 className="group flex w-[172px] shrink-0 flex-col gap-2 rounded-xl border bg-background p-2 text-left shadow-sm transition hover:border-primary/50"
-                                onClick={() => openPresetWorkspace(preset)}
+                                onClick={() => openPresetWorkspace(preset, index)}
                               >
                                 <div className="flex min-w-0 items-center gap-2">
                                   <Badge variant="secondary" className="shrink-0">
@@ -2883,7 +3178,7 @@ export function PackTabContent({
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => setWorkspaceOpen(false)}
+              onClick={() => void closeWorkspace()}
               title="Quay lại danh sách khuôn"
             >
               <ArrowLeft className="mr-2 size-4" /> Quay lại
@@ -3201,48 +3496,7 @@ export function PackTabContent({
 
             {/* Cột 3: Bind panel + sheet fields */}
             <Card className="col-span-12 lg:sticky lg:top-4 lg:col-span-3 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-hidden">
-              <CardHeader className="border-b pb-2">
-                <div className="flex items-center justify-between gap-2">
-                  <CardTitle className="text-sm flex items-center gap-2">
-                    <Link2 className="size-4" /> Liên kết dữ liệu
-                  </CardTitle>
-                  {(() => {
-                    if (!effectiveActive) return null;
-                    const bindable = effectiveActive.slots.filter(
-                      (slot) => getSlotBindMode(slot, effectiveActive) !== null,
-                    ).length;
-                    const bound = effectiveActive.slots.filter(
-                      (slot) =>
-                        getSlotBindMode(slot, effectiveActive) !== null && !!slot.bindingPath,
-                    ).length;
-                    if (bindable === 0) return null;
-                    const allBound = bound === bindable;
-                    return (
-                      <div className="flex items-center gap-1 text-[11px]">
-                        <div
-                          className={`h-1.5 w-14 overflow-hidden rounded-full bg-muted`}
-                          title={`${bound}/${bindable} khối đã liên kết`}
-                        >
-                          <div
-                            className={`h-full transition-all ${
-                              allBound ? "bg-emerald-500" : "bg-primary"
-                            }`}
-                            style={{ width: `${Math.round((bound / bindable) * 100)}%` }}
-                          />
-                        </div>
-                        <span
-                          className={`font-medium tabular-nums ${
-                            allBound ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground"
-                          }`}
-                        >
-                          {bound}/{bindable}
-                        </span>
-                      </div>
-                    );
-                  })()}
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3 pt-3 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pr-3">
+              <CardContent className="space-y-3 p-6 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto lg:pr-3">
                 <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-xs font-medium">
                   <span>Khối đang chọn</span>
                   {selectedSlotIds.length > 0 && (
@@ -3270,6 +3524,15 @@ export function PackTabContent({
                     )}
                     {selectedBindableSlots.length > 0 && activePage && (
                       <>
+                    {panelPreviewEntity && (
+                      <div className="rounded-md border border-dashed bg-muted/20 px-2 py-1.5 text-[11px] text-muted-foreground">
+                        <span className="font-medium text-foreground">Xem trước cụm:</span>{" "}
+                        {panelPreviewEntity.name}
+                        {panelPreviewEntity.sheetName ? (
+                          <span> · {panelPreviewEntity.sheetName}</span>
+                        ) : null}
+                      </div>
+                    )}
                     <div className="rounded-xl border bg-muted/20 p-2">
                       <div className="grid grid-cols-2 gap-2">
                         {formatClipboard && (
@@ -3343,12 +3606,18 @@ export function PackTabContent({
                         )}
                       </div>
                     </div>
-                    {shouldShowSharedSourceControls && sharedSourceConfig && (
+                    {hasMultipleSelectedClusters && (
+                      <div className="rounded-md border border-dashed bg-muted/30 px-2 py-1.5 text-[11px] text-muted-foreground">
+                        Đang chọn khối từ nhiều cụm — chọn khối trong một cụm để đổi nguồn dữ liệu
+                        chung.
+                      </div>
+                    )}
+                    {shouldShowClusterSourceControls && clusterSourceConfig && (
                       <div className="space-y-2">
                         <Label className="text-xs">Nguồn dữ liệu của cụm</Label>
-                        {renderSourceControls(sharedSourceSlots, sharedSourceConfig, {
+                        {renderSourceControls(clusterSourceSlots, clusterSourceConfig, {
                           description:
-                            "Cấu hình này áp dụng cho toàn bộ thuộc tính đã liên kết trong cụm đang chọn.",
+                            "Cấu hình này áp dụng cho toàn bộ thuộc tính đã liên kết trong cụm trên trang.",
                         })}
                       </div>
                     )}
@@ -3394,7 +3663,7 @@ export function PackTabContent({
                                 })}
                               </SelectContent>
                             </Select>
-                            {!shouldShowSharedSourceControls &&
+                            {!clusterSourceSlotIds.has(slot.slotId) &&
                               textSlotFieldBindingValue(slot) !== "_static" &&
                               slot.bindingPath !== "ai.rewrite" &&
                               renderSourceControls([slot], slotSourceConfig(slot))}
@@ -3714,14 +3983,16 @@ export function PackTabContent({
                         <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-950">
                           <div className="flex items-center gap-2 text-sm font-medium">
                             <AlertTriangle className="size-4 shrink-0" />
-                            Chưa có ảnh đọc được trong {bundle.bundleLabel}
+                            Một số quán chưa có ảnh trong thư viện ({bundle.bundleLabel})
                           </div>
                           <div className="mt-1 text-xs text-amber-800">
+                            Trang preview có thể vẫn hiển thị ảnh tạm hoặc ảnh ngẫu nhiên — đó
+                            không phải ảnh thật đã import cho quán.
                             {referenceOnlyCount > 0
-                              ? `${referenceOnlyCount} dòng đã có tên folder/link trong sheet nhưng chưa ghép/tải ảnh.`
+                              ? ` ${referenceOnlyCount} quán đã có folder/link trong sheet nhưng chưa ghép/tải ảnh.`
                               : ""}
                             {missingSourceCount > 0
-                              ? ` ${missingSourceCount} dòng chưa có nguồn ảnh trong sheet.`
+                              ? ` ${missingSourceCount} quán chưa có nguồn ảnh trong sheet.`
                               : ""}
                           </div>
                           <div className="mt-2 flex flex-wrap gap-2 text-xs">

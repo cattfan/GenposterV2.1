@@ -284,6 +284,35 @@ describe("entityBindAllocator", () => {
     expect(targets.map((target) => target.slotIds)).toEqual([["name-1"], ["name-2"]]);
   });
 
+  it("honors pinnedAssignments for stable preview when rebinding fields in a group", () => {
+    const e1 = entity("e1", "Cafe A", "Address A");
+    const e2 = entity("e2", "Cafe B", "Address B");
+    const first = allocateEntityBindingsForTemplate({
+      template,
+      orderedEntities: [e1, e2],
+      partnerQuota: 0,
+      prioritizePartner: false,
+      batchState: { usedEntityIds: new Set<string>(), usedEntityKeys: new Set<string>() },
+    });
+    const groupOneEntity = first.items.find((item) => item.slotId === "name-1")?.entityId;
+    expect(groupOneEntity).toBeTruthy();
+    const targets = buildEntityBindingTargets(template, [e1, e2]);
+    const groupTarget = targets.find((target) => target.slotIds.includes("name-1"));
+    expect(groupTarget).toBeTruthy();
+
+    const second = allocateEntityBindingsForTemplate({
+      template,
+      orderedEntities: [e2, e1],
+      partnerQuota: 0,
+      prioritizePartner: false,
+      batchState: { usedEntityIds: new Set<string>(), usedEntityKeys: new Set<string>() },
+      pinnedAssignments: new Map([[groupTarget!.targetId, groupOneEntity!]]),
+    });
+
+    expect(second.items.find((item) => item.slotId === "name-1")?.entityId).toBe(groupOneEntity);
+    expect(second.items.find((item) => item.slotId === "address-1")?.entityId).toBe(groupOneEntity);
+  });
+
   it("does not assign the same venue name to multiple groups on one page", () => {
     const duplicateA = entity("e1", "Tiệm nướng Hoàng Hôn", "Hẻm 118 Đồi Dã Chiến");
     const duplicateB = entity("e2", "Tiem nuong Hoang Hon", "Đường Hoa Cẩm Tú Cầu");

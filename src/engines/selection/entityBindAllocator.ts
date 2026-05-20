@@ -148,8 +148,11 @@ export function allocateEntityBindingsForTemplate(params: {
   partnerQuota: number;
   prioritizePartner: boolean;
   batchState: EntityBindBatchState;
+  /** targetId → entityId: giữ assignment preview khi chỉnh nhóm/trường khác. */
+  pinnedAssignments?: Map<string, string>;
 }): AllocateEntityBindingsResult {
-  const { template, orderedEntities, pageOwner, partnerQuota, batchState } = params;
+  const { template, orderedEntities, pageOwner, partnerQuota, batchState, pinnedAssignments } =
+    params;
   const targets = buildEntityBindingTargets(template, orderedEntities);
   const warnings: string[] = [];
 
@@ -176,6 +179,22 @@ export function allocateEntityBindingsForTemplate(params: {
       pageUsedIds.add(pageOwner.entityId);
       pageUsedKeys.add(entityContentKey(pageOwner));
       if (pageOwner.partnerFlag) remainingPartnerQuota -= 1;
+    }
+  }
+
+  if (pinnedAssignments?.size) {
+    for (const target of targets) {
+      if (assignments.has(target.targetId)) continue;
+      const pinnedId = pinnedAssignments.get(target.targetId);
+      if (!pinnedId) continue;
+      const pinned = target.candidateEntities.find((entity) => entity.entityId === pinnedId);
+      if (!pinned) continue;
+      assignments.set(target.targetId, pinned);
+      pageUsedIds.add(pinned.entityId);
+      pageUsedKeys.add(entityContentKey(pinned));
+      if (pinned.partnerFlag && remainingPartnerQuota > 0) {
+        remainingPartnerQuota -= 1;
+      }
     }
   }
 
