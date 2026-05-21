@@ -16,9 +16,38 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
-import { initThemeOnce, useTheme } from "@/hooks/useTheme";
+import { initThemeOnce, useTheme, type ThemeMode } from "@/hooks/useTheme";
 import { GlobalCommandPaletteHost } from "@/components/CommandPalette";
 import { ShortcutsDialog, useShortcutsDialogHotkey } from "@/components/ux";
+import { getSettings } from "@/storage/settings";
+
+const THEME_STORAGE_KEY = "cpg_theme_mode";
+
+async function hydrateThemeFromSettings(): Promise<void> {
+  if (typeof window === "undefined") return;
+  // Only fall back to DB when localStorage has no preference yet.
+  if (window.localStorage.getItem(THEME_STORAGE_KEY)) return;
+  try {
+    const settings = await getSettings();
+    const theme = settings.theme;
+    if (theme === "light" || theme === "dark" || theme === "system") {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+      // Apply class immediately. useTheme listeners will reconcile on next state change.
+      const root = document.documentElement;
+      const effective: ThemeMode =
+        theme === "system"
+          ? window.matchMedia("(prefers-color-scheme: dark)").matches
+            ? "dark"
+            : "light"
+          : theme;
+      if (effective === "dark") root.classList.add("dark");
+      else root.classList.remove("dark");
+      root.dataset.theme = effective;
+    }
+  } catch {
+    /* settings load failed — keep localStorage default */
+  }
+}
 
 const SIDEBAR_COLLAPSED_KEY = "cpg_sidebar_collapsed";
 
@@ -154,6 +183,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // Apply persisted theme ASAP (before React effects) to minimise flash-of-wrong-theme.
   useEffect(() => {
     initThemeOnce();
+    // If localStorage is empty for theme, fall back to AppSettings.theme stored in DB.
+    void hydrateThemeFromSettings();
   }, []);
 
   // Load persisted collapsed state after mount (client-only).
