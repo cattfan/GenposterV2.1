@@ -45,12 +45,16 @@ export function usePackDraftAutosave(params: Params) {
     if (signature === lastSavedSignatureRef.current) return;
 
     // Debounce: nếu timer đã được schedule trước đó, để nó tiếp tục chạy.
-    // Khi firing nó sẽ đọc snapshot mới nhất từ latestRef.
+    // Khi firing nó sẽ đọc snapshot mới nhất từ latestRef và check rằng
+    // packTemplateId chưa đổi — tránh ghi đè draft của pack khác.
     if (timerRef.current !== null) return;
 
+    const targetPackId = packTemplateId;
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
-      void flushSnapshot(latestRef.current, lastSavedSignatureRef);
+      const snap = latestRef.current;
+      if (snap.packTemplateId !== targetPackId) return;
+      void flushSnapshot(snap, lastSavedSignatureRef);
     }, DEBOUNCE_MS);
   }, [packTemplateId, packOv, previewPageDrafts]);
 
