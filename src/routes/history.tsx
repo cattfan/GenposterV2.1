@@ -22,15 +22,15 @@ function HistoryPage() {
     <PageContainer className="max-w-5xl">
       <PageHeader
         icon={<History className="size-5" />}
-        title="Lịch sử Job"
+        title="Lịch sử"
         description="Các lần export gần đây. Có thể mở lại để tiếp tục chỉnh sửa."
       />
       {jobs === undefined && <SkeletonList count={3} height="h-20" />}
       {jobs && jobs.length === 0 && (
         <EmptyState
           icon={<History />}
-          title="Chưa có lịch sử job"
-          description="Mỗi lần bạn xuất ZIP, job sẽ được lưu ở đây để mở lại và chỉnh sửa."
+          title="Chưa có lịch sử"
+          description="Mỗi lần bạn xuất ZIP, mục sẽ được lưu ở đây để mở lại và chỉnh sửa."
         />
       )}
       <div className="space-y-2">
@@ -40,7 +40,7 @@ function HistoryPage() {
               <div className="min-w-0 flex-1">
                 <div className="truncate font-semibold">{j.packTemplateName}</div>
                 <div className="text-xs text-muted-foreground">
-                  {new Date(j.createdAt).toLocaleString("vi-VN")} · {j.pages.length} page ·{" "}
+                  {new Date(j.createdAt).toLocaleString("vi-VN")} · {j.pages.length} trang ·{" "}
                   {j.pages.filter((p) => p.selected).length} chọn ·{" "}
                   {j.pages.flatMap((p) => p.items).filter((i) => i.partnerFlag).length} lần đối tác
                   xuất hiện
@@ -52,7 +52,7 @@ function HistoryPage() {
                 variant="outline"
                 onClick={() => {
                   setJob(j);
-                  toast.success("Đã load job vào màn Tạo nội dung");
+                  toast.success("Đã mở vào màn Tạo nội dung");
                 }}
               >
                 Mở lại
@@ -61,7 +61,7 @@ function HistoryPage() {
                 size="sm"
                 variant="ghost"
                 onClick={async () => {
-                  if (!confirm("Xóa job này?")) return;
+                  if (!confirm("Xóa mục này?")) return;
                   await db.jobs.delete(j.jobId);
                 }}
               >
