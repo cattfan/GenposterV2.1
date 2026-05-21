@@ -6,9 +6,15 @@ const DEFAULTS: AppSettings = {
   captionProvider: "local",
   exportScale: 2,
   defaultCanvas: { width: 1588, height: 2248, background: "#ffffff" },
-  theme: "light",
+  theme: "system",
   driveRootFolderUrl:
     "https://drive.google.com/drive/folders/1f_gOfPyy0QbezU4y_W6EtESpo4Z_Hz9k?hl=vi",
+  generateDefaults: {
+    maxEntities: 5,
+    prioritizePartner: true,
+    onlyPartner: false,
+    partnerQuotaPerPage: 1,
+  },
 };
 
 export async function getSettings(): Promise<AppSettings> {

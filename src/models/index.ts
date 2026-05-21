@@ -502,16 +502,24 @@ export interface DriveDownloadCheckpoint {
   imageLimit: "all" | number;
 }
 
+export interface GenerateDefaults {
+  maxEntities: number;
+  prioritizePartner: boolean;
+  onlyPartner: boolean;
+  partnerQuotaPerPage: number;
+}
+
 export interface AppSettings {
   language: "vi";
   captionProvider: "local" | "openai";
   captionApiKey?: string;
   exportScale: number;
   defaultCanvas: CanvasSize;
-  theme?: "light" | "dark";
+  theme?: "light" | "dark" | "system";
   ai?: AiProviderConfig;
   driveRootFolderUrl?: string;
   driveDownloadCheckpoint?: DriveDownloadCheckpoint;
+  generateDefaults?: GenerateDefaults;
 }
 
 export type AnalysisMode = "quick" | "deep_draft" | "draft_only";
