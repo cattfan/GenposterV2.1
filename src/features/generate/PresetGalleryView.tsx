@@ -1,20 +1,6 @@
-import {
-  FileDown,
-  FileUp,
-  MoreHorizontal,
-  Package,
-  Save,
-  Trash2,
-} from "lucide-react";
+import { FileDown, FileUp, Package, Save, Trash2 } from "lucide-react";
 import type { Asset, Entity, GenerateBindingPreset, PageTemplate } from "@/models";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -133,28 +119,41 @@ export function PresetGalleryView({
                     {formatTemplateDisplayName(preset.name, "Khuôn")}
                   </div>
                 </button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button type="button" variant="outline" size="icon" aria-label="Thao tác khuôn">
-                      <MoreHorizontal className="size-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => onOpenPreset(preset)}>
-                      <Package className="mr-2 size-4" /> Mở khuôn
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onExportPreset(preset)}>
-                      <FileDown className="mr-2 size-4" /> Xuất khuôn
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      className="text-destructive focus:text-destructive"
-                      onClick={() => onDeletePreset(preset)}
-                    >
-                      <Trash2 className="mr-2 size-4" /> Xóa khuôn
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => onOpenPreset(preset)}
+                    title="Mở khuôn"
+                    aria-label="Mở khuôn"
+                    className="shrink-0 text-muted-foreground"
+                  >
+                    <Package className="size-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => onExportPreset(preset)}
+                    title="Xuất khuôn"
+                    aria-label="Xuất khuôn"
+                    className="shrink-0 text-muted-foreground"
+                  >
+                    <FileDown className="size-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => onDeletePreset(preset)}
+                    title="Xóa khuôn"
+                    aria-label="Xóa khuôn"
+                    className="shrink-0 text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </div>
               </div>
 
               <div className="p-4">
