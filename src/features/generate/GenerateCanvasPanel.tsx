@@ -6,13 +6,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/ux";
 import { BindCanvas } from "@/features/generate/BindCanvas";
-import { BindingIssuesPanel } from "@/features/generate/BindingIssuesPanel";
 import { AllocationWarningsPanel } from "@/features/generate/AllocationWarningsPanel";
 import { GenerateCanvasToolbar } from "@/features/generate/GenerateCanvasToolbar";
-import {
-  CanvasBindingPickerOverlay,
-  type CanvasBindingPickerState,
-} from "@/features/generate/CanvasBindingPickerOverlay";
 import type { GeneratePageTabItem } from "./generatePanelProps";
 
 interface Props {
@@ -43,8 +38,6 @@ interface Props {
   onShowFieldBadgesChange: (value: boolean) => void;
   onShowSafeFrameChange: (value: boolean) => void;
   onClearSelection: () => void;
-  canvasBindingPicker?: CanvasBindingPickerState | null;
-  onCanvasBindingSelect?: (value: string) => void;
 }
 
 function useContainerWidth(element: HTMLElement | null): number {
@@ -61,19 +54,22 @@ function useContainerWidth(element: HTMLElement | null): number {
 
     const observer = new ResizeObserver(update);
     observer.observe(element);
-    return () => observer.disconnect();
+    window.addEventListener("resize", update);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", update);
+    };
   }, [element]);
 
   return width;
 }
 
-function computeCanvasScale(template: PageTemplate, containerWidth: number): number {
+export function computeCanvasScale(template: PageTemplate, containerWidth: number): number {
   if (containerWidth <= 0) return 0.45;
 
-  const inset = 20;
-  const maxW = Math.max(260, containerWidth - inset);
+  const inset = 12;
+  const maxW = Math.max(240, containerWidth - inset);
 
-  // Lấp đầy chiều ngang cột giữa; phần cao dư cuộn trong stage.
   return Math.min(maxW / template.canvas.width, 1);
 }
 
@@ -101,8 +97,6 @@ export function GenerateCanvasPanel({
   onShowFieldBadgesChange,
   onShowSafeFrameChange,
   onClearSelection,
-  canvasBindingPicker,
-  onCanvasBindingSelect,
 }: Props) {
   const stageRef = useRef<HTMLDivElement>(null);
   const [stageElement, setStageElement] = useState<HTMLDivElement | null>(null);
@@ -124,7 +118,7 @@ export function GenerateCanvasPanel({
   return (
     <Card className="min-w-0 overflow-hidden border-0 shadow-none lg:border lg:shadow-sm">
       {hasPages ? (
-        <div className="border-b bg-muted/30">
+        <div className="shrink-0 border-b bg-muted/30">
           <Tabs
             value={String(activePageIdx)}
             onValueChange={(v) => onActivePageChange(Number(v))}
@@ -147,7 +141,8 @@ export function GenerateCanvasPanel({
       ) : null}
 
       {hasPages && effectiveActive ? (
-        <GenerateCanvasToolbar
+        <div className="shrink-0">
+          <GenerateCanvasToolbar
           canUndo={canUndo}
           canRedo={canRedo}
           onUndo={onUndo}
@@ -159,6 +154,7 @@ export function GenerateCanvasPanel({
           showSafeFrame={showSafeFrame}
           onShowSafeFrameChange={onShowSafeFrameChange}
         />
+        </div>
       ) : null}
 
       <CardContent className="flex flex-col gap-3 p-0">
@@ -179,67 +175,35 @@ export function GenerateCanvasPanel({
                   stageRef.current = node;
                   setStageElement(node);
                 }}
-                className="border-b bg-muted/20"
+                className="bg-muted/20 p-3"
               >
-                <div className="max-h-[min(78vh,960px)] overflow-auto p-3">
+                <div
+                  onClick={(event) => {
+                    if (event.target === event.currentTarget) onClearSelection();
+                  }}
+                  className="mx-auto flex w-full select-none justify-center"
+                >
                   <div
-                    onClick={(event) => {
-                      if (event.target === event.currentTarget) onClearSelection();
-                    }}
-                    className="mx-auto flex min-h-[420px] w-full select-none items-start justify-center"
+                    className="relative shrink-0 overflow-hidden bg-background shadow-md ring-1 ring-border/70"
+                    style={{ width: canvasSize.width, height: canvasSize.height }}
                   >
-                    <div
-                      className="relative shrink-0 overflow-hidden bg-background shadow-md ring-1 ring-border/70"
-                      style={{ width: canvasSize.width, height: canvasSize.height }}
-                    >
-                      <BindCanvas
-                        template={effectiveActive}
-                        scale={canvasScale}
-                        selectedSlotIds={selectedSlotIds}
-                        onSelectSlot={onSelectSlot}
-                        entity={previewEntity}
-                        assets={assets}
-                        entityPool={previewEntityPool}
-                        sourceEntities={sourceEntities}
-                        slotItems={previewSlotItems}
-                        seedKey={`${effectiveActive.pageTemplateId}:${activePageIdx}`}
-                        showSafeFrame={showSafeFrame}
-                        showFieldBadges={showFieldBadges}
-                        flatPreview
-                      />
-                      {canvasBindingPicker && onCanvasBindingSelect ? (
-                        <CanvasBindingPickerOverlay
-                          slot={canvasBindingPicker.slot}
-                          scale={canvasScale}
-                          enabled
-                          value={canvasBindingPicker.value}
-                          options={canvasBindingPicker.options}
-                          quickValues={canvasBindingPicker.quickValues}
-                          searchPlaceholder={
-                            canvasBindingPicker.mode === "image"
-                              ? "Tìm kiểu ảnh..."
-                              : "Tìm trường..."
-                          }
-                          onSelect={onCanvasBindingSelect}
-                        />
-                      ) : null}
-                    </div>
+                    <BindCanvas
+                      template={effectiveActive}
+                      scale={canvasScale}
+                      selectedSlotIds={selectedSlotIds}
+                      onSelectSlot={onSelectSlot}
+                      entity={previewEntity}
+                      assets={assets}
+                      entityPool={previewEntityPool}
+                      sourceEntities={sourceEntities}
+                      slotItems={previewSlotItems}
+                      seedKey={`${effectiveActive.pageTemplateId}:${activePageIdx}`}
+                      showSafeFrame={showSafeFrame}
+                      showFieldBadges={showFieldBadges}
+                      flatPreview
+                    />
                   </div>
                 </div>
-              </div>
-            ) : null}
-
-            {effectiveActive ? (
-              <div className="flex flex-col gap-3 px-3 pb-3">
-                <BindingIssuesPanel
-                  template={effectiveActive}
-                  entity={previewEntity}
-                  entityPool={previewEntityPool}
-                  assets={assets}
-                  globalAssets={assets}
-                  activeSheetName={previewEntity?.sheetName}
-                  onSelectSlot={(slotId) => onSelectSlot(slotId)}
-                />
               </div>
             ) : null}
 

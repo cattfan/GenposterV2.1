@@ -24,17 +24,12 @@ function makeEntity(overrides: Partial<Entity> = {}): Entity {
 }
 
 describe("bindingPickerOptions", () => {
-  it("includes metadata fields with samples for text binding", () => {
+  it("does not include metadata fields in text binding options", () => {
     const options = buildTextBindingPickerOptions({
       entities: [makeEntity()],
     });
 
-    const metadata = options.find((option) => option.value === "entity.metadata.Loai_dich_vu");
-    expect(metadata).toMatchObject({
-      label: "Loai_dich_vu",
-      sample: "Cafe specialty",
-      group: "Metadata",
-    });
+    expect(options.some((option) => option.value.startsWith("entity.metadata."))).toBe(false);
   });
 
   it("formats label with sample preview", () => {

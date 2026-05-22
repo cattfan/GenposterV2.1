@@ -40,10 +40,6 @@ import {
 } from "@/components/ui/tooltip";
 import { BindingFieldPicker } from "@/features/generate/BindingFieldPicker";
 import type { BindingPickerOption } from "@/features/generate/bindingPickerOptions";
-import {
-  IMAGE_BINDING_QUICK_VALUES,
-  TEXT_BINDING_QUICK_VALUES,
-} from "@/features/generate/bindingPickerOptions";
 import { TextListBindingPanel, type TextListFieldOption } from "@/features/generate/TextListBindingPanel";
 import { TextRewritePanel } from "@/features/generate/TextRewritePanel";
 import type { SlotFormatClipboard } from "@/features/generate/slotFormatClipboard";
@@ -311,23 +307,10 @@ function BindPanelActionsBar({
   );
 }
 
-function BindSlotRow({
-  title,
-  statusLabel,
-  children,
-}: {
-  title: string;
-  statusLabel: string;
-  children: ReactNode;
-}) {
+function BindSlotRow({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-2 rounded-lg border bg-muted/20 p-2">
-      <div className="flex min-w-0 items-center justify-between gap-2">
-        <span className="truncate text-xs font-medium">{title}</span>
-        <Badge variant="outline" className="max-w-[55%] shrink truncate text-xs">
-          {statusLabel}
-        </Badge>
-      </div>
+      <div className="truncate text-xs font-medium">{title}</div>
       {children}
     </div>
   );
@@ -371,6 +354,21 @@ function BindPanelBody(props: Props) {
 
   return (
     <div className="flex flex-col gap-3">
+      {shouldShowClusterSourceControls && clusterSourceConfig ? (
+        <Collapsible defaultOpen>
+          <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs font-medium">
+            Nguồn dữ liệu của cụm
+            <ChevronDown className="size-4" />
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-2">
+            {renderSourceControls(clusterSourceSlots, clusterSourceConfig, {
+              description:
+                "Cấu hình này áp dụng cho toàn bộ thuộc tính đã liên kết trong cụm trên trang.",
+            })}
+          </CollapsibleContent>
+        </Collapsible>
+      ) : null}
+
       {selectedSlotsEmpty ? <div className="min-h-10 rounded-md border border-dashed bg-muted/20" /> : null}
 
       {!selectedSlotsEmpty && selectedBindableEmpty ? (
@@ -388,21 +386,6 @@ function BindPanelBody(props: Props) {
             </p>
           ) : null}
 
-          {shouldShowClusterSourceControls && clusterSourceConfig ? (
-            <Collapsible defaultOpen>
-              <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs font-medium">
-                Nguồn dữ liệu của cụm
-                <ChevronDown className="size-4" />
-              </CollapsibleTrigger>
-              <CollapsibleContent className="mt-2">
-                {renderSourceControls(clusterSourceSlots, clusterSourceConfig, {
-                  description:
-                    "Cấu hình này áp dụng cho toàn bộ thuộc tính đã liên kết trong cụm trên trang.",
-                })}
-              </CollapsibleContent>
-            </Collapsible>
-          ) : null}
-
           {textSlots.length > 0 ? (
             <div className="flex flex-col gap-2">
               {textSlots.length > 1 ? (
@@ -411,15 +394,10 @@ function BindPanelBody(props: Props) {
                 </div>
               ) : null}
               {textSlots.map((row, index) => (
-                <BindSlotRow
-                  key={row.slot.slotId}
-                  title={`${index + 1}. ${row.label}`}
-                  statusLabel={row.statusLabel}
-                >
+                <BindSlotRow key={row.slot.slotId} title={`${index + 1}. ${row.label}`}>
                   <BindingFieldPicker
                     value={row.bindingValue}
                     options={row.pickerOptions}
-                    quickValues={TEXT_BINDING_QUICK_VALUES}
                     onSelect={(value) => onTextBindingChange(row.slot, value)}
                   />
                   {row.showPerSlotSource
@@ -438,16 +416,11 @@ function BindPanelBody(props: Props) {
                 </div>
               ) : null}
               {imageSlots.map((row, index) => (
-                <BindSlotRow
-                  key={row.slot.slotId}
-                  title={`${index + 1}. ${row.label}`}
-                  statusLabel={row.statusLabel}
-                >
+                <BindSlotRow key={row.slot.slotId} title={`${index + 1}. ${row.label}`}>
                   <BindingFieldPicker
                     value={row.selectValue}
                     options={row.pickerOptions}
-                    quickValues={IMAGE_BINDING_QUICK_VALUES}
-                    searchPlaceholder="Tìm kiểu ảnh..."
+                    placeholder="Chọn trường ảnh"
                     onSelect={(value) => onImageBindingChange(row.slot, value)}
                   />
                   {row.showRandomScope ? (

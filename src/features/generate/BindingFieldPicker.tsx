@@ -5,7 +5,6 @@ import {
   Command,
   CommandEmpty,
   CommandGroup,
-  CommandInput,
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
@@ -18,14 +17,12 @@ import {
 } from "@/features/generate/bindingPickerOptions";
 import { cn } from "@/lib/utils";
 
-const GROUP_ORDER: BindingPickerGroup[] = ["Cố định", "Dữ liệu", "Metadata", "Ảnh"];
+const GROUP_ORDER: BindingPickerGroup[] = ["Cố định", "Dữ liệu", "Ảnh"];
 
 export interface BindingFieldPickerPanelProps {
   value: string;
   options: BindingPickerOption[];
   onSelect: (value: string) => void;
-  quickValues?: readonly string[];
-  searchPlaceholder?: string;
   className?: string;
 }
 
@@ -33,8 +30,6 @@ export function BindingFieldPickerPanel({
   value,
   options,
   onSelect,
-  quickValues = [],
-  searchPlaceholder = "Tìm trường...",
   className,
 }: BindingFieldPickerPanelProps) {
   const grouped = useMemo(() => {
@@ -50,44 +45,15 @@ export function BindingFieldPickerPanel({
     );
   }, [options]);
 
-  const quickOptions = useMemo(
-    () =>
-      quickValues
-        .map((quickValue) => findBindingPickerOption(options, quickValue))
-        .filter((option): option is BindingPickerOption => !!option),
-    [options, quickValues],
-  );
-
   return (
     <div className={cn("flex flex-col", className)}>
-      {quickOptions.length > 0 ? (
-        <div className="flex flex-wrap gap-1 border-b p-2">
-          {quickOptions.map((option) => (
-            <Button
-              key={option.value}
-              type="button"
-              size="sm"
-              variant={value === option.value ? "default" : "outline"}
-              className="h-7 px-2 text-xs"
-              onClick={() => onSelect(option.value)}
-            >
-              {option.label}
-            </Button>
-          ))}
-        </div>
-      ) : null}
-      <Command>
-        <CommandInput placeholder={searchPlaceholder} className="h-9" />
+      <Command shouldFilter={false}>
         <CommandList className="max-h-64">
           <CommandEmpty>Không có trường phù hợp.</CommandEmpty>
           {grouped.map(({ group, items }) => (
             <CommandGroup key={group} heading={group}>
               {items.map((option) => (
-                <CommandItem
-                  key={option.value}
-                  value={`${option.label} ${option.sample ?? ""} ${option.value}`}
-                  onSelect={() => onSelect(option.value)}
-                >
+                <CommandItem key={option.value} value={option.value} onSelect={() => onSelect(option.value)}>
                   <Check
                     className={cn("size-3.5", value === option.value ? "opacity-100" : "opacity-0")}
                   />
@@ -116,8 +82,6 @@ export function BindingFieldPicker({
   value,
   options,
   onSelect,
-  quickValues,
-  searchPlaceholder,
   triggerClassName,
   placeholder = "Chọn trường",
   disabled,
@@ -150,8 +114,6 @@ export function BindingFieldPicker({
         <BindingFieldPickerPanel
           value={value}
           options={options}
-          quickValues={quickValues}
-          searchPlaceholder={searchPlaceholder}
           onSelect={(next) => {
             onSelect(next);
             setOpen(false);

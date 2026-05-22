@@ -7,7 +7,7 @@ import {
 import { entityFieldOptionsForUi } from "@/engines/normalize/fieldRegistry";
 import type { Entity } from "@/models";
 
-export type BindingPickerGroup = "Cố định" | "Dữ liệu" | "Metadata" | "Ảnh";
+export type BindingPickerGroup = "Cố định" | "Dữ liệu" | "Ảnh";
 
 export interface BindingPickerOption {
   value: string;
@@ -93,6 +93,7 @@ export function buildTextBindingPickerOptions(params: {
   const seen = new Set(options.map((option) => option.value));
   const registryOptions = entityFieldOptionsForUi(entities);
   for (const field of registryOptions) {
+    if (field.path.startsWith("entity.metadata.")) continue;
     if (seen.has(field.path)) continue;
     if (!fieldVisibleForEntities(field.path, entities, currentValue)) continue;
     seen.add(field.path);
@@ -100,31 +101,9 @@ export function buildTextBindingPickerOptions(params: {
       value: field.path,
       label: field.label,
       sample: field.sample ? truncate(field.sample) : undefined,
-      group: field.path.startsWith("entity.metadata.") ? "Metadata" : "Dữ liệu",
+      group: "Dữ liệu",
     });
   }
-
-  const metadataKeys = new Set<string>();
-  entities.forEach((entity) => {
-    Object.entries(entity.metadata ?? {}).forEach(([key, value]) => {
-      if (value != null && value !== "") metadataKeys.add(key);
-    });
-  });
-
-  Array.from(metadataKeys)
-    .sort((a, b) => a.localeCompare(b, "vi"))
-    .forEach((key) => {
-      const path = `entity.metadata.${key}`;
-      if (seen.has(path)) return;
-      if (!fieldVisibleForEntities(path, entities, currentValue)) return;
-      const sampleEntity = entities.find((entity) => entity.metadata?.[key]);
-      options.push({
-        value: path,
-        label: key,
-        sample: truncate(sampleEntity?.metadata?.[key]),
-        group: "Metadata",
-      });
-    });
 
   return options;
 }
@@ -162,9 +141,6 @@ export function buildImageBindingPickerOptions(params: {
     };
   });
 }
-
-export const TEXT_BINDING_QUICK_VALUES = ["entity.name", "entity.address", "entity.phone"] as const;
-export const IMAGE_BINDING_QUICK_VALUES = ["asset.random"] as const;
 
 export function formatBindingPickerLabel(option: BindingPickerOption): string {
   return option.sample ? `${option.label} · ${option.sample}` : option.label;

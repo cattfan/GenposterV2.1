@@ -54,8 +54,6 @@ import { type TextListFieldOption } from "@/features/generate/TextListBindingPan
 import {
   buildImageBindingPickerOptions,
   buildTextBindingPickerOptions,
-  IMAGE_BINDING_QUICK_VALUES,
-  TEXT_BINDING_QUICK_VALUES,
 } from "@/features/generate/bindingPickerOptions";
 import { GeneratePageEditor } from "@/features/generate/GeneratePageEditor";
 import { isLikelyGeneratePageBackgroundSlot } from "@/features/generate/backgroundGuards";
@@ -925,14 +923,29 @@ export function PackTabContent({
     return keys;
   }, [selectedBindableSlots]);
   const clusterSourceSlots = useMemo(() => {
-    if (!effectiveActive || selectedBindableSlots.length === 0) return [];
+    if (!effectiveActive) return [];
+
+    const bindableOnPage = effectiveActive.slots.filter((slot) => getSlotBindMode(slot) !== null);
+    if (selectedBindableSlots.length === 0) {
+      const groupIds = new Set(
+        bindableOnPage.map((slot) => slot.groupId).filter((groupId): groupId is string => !!groupId),
+      );
+      if (groupIds.size === 1) {
+        const [groupId] = groupIds;
+        return sortSlotsForFormat(bindableOnPage.filter((slot) => slot.groupId === groupId));
+      }
+      return sortSlotsForFormat(bindableOnPage);
+    }
+
     const visualGroupIds = new Set(
       selectedBindableSlots
         .map((slot) => slot.groupId)
         .filter((groupId): groupId is string => !!groupId),
     );
     if (visualGroupIds.size > 1) return [];
-    if (visualGroupIds.size === 0 && selectedClusterKeys.size !== 1) return [];
+    if (visualGroupIds.size === 0 && selectedClusterKeys.size !== 1) {
+      return sortSlotsForFormat(bindableOnPage);
+    }
     return sortSlotsForFormat(
       resolveClusterSourceScopeSlots(
         effectiveActive,
@@ -957,12 +970,7 @@ export function PackTabContent({
       filterPhongCach: merged.filterPhongCach ?? ALL_VALUE,
     };
   }, [activeGenerateConfig, clusterSourceSlots]);
-  const shouldShowClusterSourceControls =
-    clusterSourceSlots.length > 0 &&
-    clusterSourceSlots.some((slot) => {
-      const textBindingValue = textSlotFieldBindingValue(slot);
-      return textBindingValue !== "_static" || slot.bindingPath === "asset.random";
-    });
+  const shouldShowClusterSourceControls = clusterSourceSlots.length > 0;
   const hasMultipleSelectedClusters = selectedClusterKeys.size > 1;
   const textSlotLabel = (slot: Slot, index: number) =>
     buildTextSlotDisplayLabel(slot, index, {
@@ -2514,54 +2522,6 @@ export function PackTabContent({
     ],
   );
 
-  const canvasBindingPicker = useMemo(() => {
-    if (selectedBindableSlots.length !== 1) return null;
-    const slot = selectedBindableSlots[0];
-    const mode = getSlotBindMode(slot);
-    if (mode === "text") {
-      if (textSlotBindingValue(slot) === "__list") return null;
-      const sourceEntities = buildSourceFilteredEntities(entities, slotSourceConfig(slot));
-      return {
-        slot,
-        mode,
-        value: textSlotBindingValue(slot),
-        options: buildTextBindingPickerOptions({
-          entities: sourceEntities,
-          currentValue: textSlotFieldBindingValue(slot),
-        }),
-        quickValues: TEXT_BINDING_QUICK_VALUES,
-      };
-    }
-    if (mode === "image") {
-      const rawValue = imageSlotBindingValue(slot);
-      const hasLinkedText = imageSlotHasLinkedText(slot);
-      const value =
-        !hasLinkedText && isEntityScopedImageBindingPath(rawValue) ? "_static" : rawValue;
-      return {
-        slot,
-        mode,
-        value,
-        options: buildImageBindingPickerOptions({
-          entities: buildSourceFilteredEntities(entities, slotSourceConfig(slot)),
-          assets,
-          currentValue: value,
-        }),
-        quickValues: IMAGE_BINDING_QUICK_VALUES,
-      };
-    }
-    return null;
-  }, [
-    selectedBindableSlots,
-    getSlotBindMode,
-    textSlotBindingValue,
-    textSlotFieldBindingValue,
-    entities,
-    assets,
-    slotSourceConfig,
-    imageSlotBindingValue,
-    imageSlotHasLinkedText,
-  ]);
-
   const presetGalleryItems = useMemo(
     () =>
       matchingPresets.map((preset) => ({
@@ -2762,7 +2722,6 @@ export function PackTabContent({
               if (!activePage) return;
               clearBindingsForSlots(selectedBindableSlots, activePage.pageTemplateId);
             }}
-            canvasBindingPicker={canvasBindingPicker}
           />
 
           {/* Kết quả render — sticky toolbar gộp các thao tác global + danh
