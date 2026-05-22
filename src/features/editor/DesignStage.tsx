@@ -1,9 +1,6 @@
-import { useCallback, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef, type MouseEvent as ReactMouseEvent } from "react";
 import { RotateCw } from "lucide-react";
-import {
-  ContextMenu,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Slider } from "@/components/ui/slider";
 import { buildTextStyle, textVerticalFlexAlign } from "@/engines/binding/dataBinding";
 import { LayoutGuides } from "@/features/render/LayoutGuides";
@@ -46,6 +43,8 @@ import {
   type ResizePayload,
   type SnapLine,
 } from "./designCanvasInteraction";
+
+type ContextMenuTarget = { kind: "canvas" } | { kind: "element"; elementId: string };
 
 export function DesignStage({
   page,
@@ -137,7 +136,35 @@ export function DesignStage({
   const [previewSnapLines, setPreviewSnapLines] = useState<SnapLine[]>([]);
   const [previewSnapTargetIds, setPreviewSnapTargetIds] = useState<string[]>([]);
   const [activeTransformKind, setActiveTransformKind] = useState<"move" | "resize" | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    target: ContextMenuTarget;
+  } | null>(null);
   const previewSnapSignatureRef = useRef("");
+  const contextMenuTriggerRef = useRef<HTMLSpanElement>(null);
+  const openContextMenu = useCallback((event: ReactMouseEvent, target: ContextMenuTarget) => {
+    event.preventDefault();
+    setContextMenu({ x: event.clientX, y: event.clientY, target });
+  }, []);
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+  useEffect(() => {
+    if (!contextMenu || !contextMenuTriggerRef.current) return;
+    const trigger = contextMenuTriggerRef.current;
+    trigger.style.left = `${contextMenu.x}px`;
+    trigger.style.top = `${contextMenu.y}px`;
+    trigger.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: contextMenu.x,
+        clientY: contextMenu.y,
+      }),
+    );
+  }, [contextMenu]);
   const canvasCenterLines =
     activeTransformKind !== null
       ? [
@@ -175,17 +202,29 @@ export function DesignStage({
       .map((id) => elements.find((element) => element.elementId === id))
       .filter((element): element is DesignElement => !!element),
   );
+  const contextMenuElementId =
+    contextMenu?.target.kind === "element" ? contextMenu.target.elementId : null;
+  const contextMenuElement = contextMenuElementId
+    ? (elements.find((element) => element.elementId === contextMenuElementId) ?? null)
+    : null;
 
   return (
-    <div className="relative bg-transparent p-0 shadow-none">
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div
-            className="design-canvas-page relative overflow-visible bg-background touch-none"
-            data-design-canvas
-            style={{ width: page.width * scale, height: page.height * scale }}
-            onPointerDown={onStagePointerDown}
-          >
+    <>
+      <div className="relative bg-transparent p-0 shadow-none">
+        <div
+          className="design-canvas-page relative overflow-visible bg-background touch-none"
+          data-design-canvas
+          style={{ width: page.width * scale, height: page.height * scale }}
+          onPointerDown={onStagePointerDown}
+          onContextMenu={(event) => {
+            const elementNode = (event.target as HTMLElement).closest("[data-design-element-id]");
+            const elementId = elementNode?.getAttribute("data-design-element-id");
+            openContextMenu(
+              event,
+              elementId ? { kind: "element", elementId } : { kind: "canvas" },
+            );
+          }}
+        >
             {showGuides
               ? page.guides?.map((guide) => (
                   <div
@@ -325,14 +364,11 @@ export function DesignStage({
                     selected || primary
                       ? 1_000_000 + Math.max(selectionLayerIndex, 0)
                       : (element.zIndex ?? 0);
-                  const overlay = (
+                  return (
                     <div
+                      key={element.elementId}
                       data-design-element
                       data-design-element-id={element.elementId}
-                      onContextMenu={(event) => {
-                        event.stopPropagation();
-                        if (!selected) onSelect(element.elementId, false);
-                      }}
                       onDoubleClick={(event) => {
                         if (element.kind === "text" || element.kind === "shape") {
                           event.stopPropagation();
@@ -706,7 +742,6 @@ export function DesignStage({
                               };
                               startPointerSession(event, { onMove, onEnd, onCancel });
                             }}
-                            onContextMenu={(event) => event.stopPropagation()}
                             style={{
                               position: "absolute",
                               left: "50%",
@@ -830,7 +865,6 @@ export function DesignStage({
                                 };
                                 startPointerSession(event, { onMove, onEnd, onCancel });
                               }}
-                              onContextMenu={(event) => event.stopPropagation()}
                               style={{
                                 position: "absolute",
                                 width: 16,
@@ -849,13 +883,6 @@ export function DesignStage({
                         </>
                       ) : null}
                     </div>
-                  );
-
-                  return (
-                    <ContextMenu key={element.elementId}>
-                      <ContextMenuTrigger asChild>{overlay}</ContextMenuTrigger>
-                      {renderElementContextMenu(element)}
-                    </ContextMenu>
                   );
                 })}
 
@@ -970,7 +997,6 @@ export function DesignStage({
                         };
                         startPointerSession(event, { onMove, onEnd, onCancel });
                       }}
-                      onContextMenu={(event) => event.stopPropagation()}
                       style={{
                         position: "absolute",
                         width: 16,
@@ -1062,9 +1088,31 @@ export function DesignStage({
               })()}
             </div>
           </div>
+      </div>
+
+      <ContextMenu
+        onOpenChange={(open) => {
+          if (!open) closeContextMenu();
+        }}
+      >
+        <ContextMenuTrigger asChild>
+          <span
+            ref={contextMenuTriggerRef}
+            aria-hidden
+            className="fixed z-[2147483646] h-px w-px"
+            style={{
+              left: -9999,
+              top: -9999,
+              pointerEvents: "none",
+            }}
+          />
         </ContextMenuTrigger>
-        {renderCanvasContextMenu()}
+        {contextMenu
+          ? contextMenuElement
+            ? renderElementContextMenu(contextMenuElement)
+            : renderCanvasContextMenu()
+          : null}
       </ContextMenu>
-    </div>
+    </>
   );
 }

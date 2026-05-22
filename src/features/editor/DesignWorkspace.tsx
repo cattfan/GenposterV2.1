@@ -43,10 +43,8 @@ import {
   RotateCw,
   ScanLine,
   Save,
-  Settings2,
   Shapes,
   SquareDashed,
-  SlidersHorizontal,
   Table2,
   Trash2,
   Type,
@@ -197,6 +195,16 @@ const ICON_PICKER_RESULT_LIMIT = 360;
 const LETTER_SPACING_MIN = -5;
 const LETTER_SPACING_MAX = 32;
 const LETTER_SPACING_STEP = 0.5;
+const INSPECTOR_OPEN_KEY = "ux:inspector:open";
+
+function readInspectorOpenPreference(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    return localStorage.getItem(INSPECTOR_OPEN_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
 
 async function registerFontAsset(fontAsset: FontAsset) {
   const src = await resolveImageSrcAsync(fontAsset.sourceValue);
@@ -263,7 +271,10 @@ export function DesignWorkspace({
   );
   const editor = useDesignEditor(workspaceDocument);
   const [leftOpen, setLeftOpen] = useState(true);
-  const [rightOpen, setRightOpen] = useState(false);
+  const inspectorManuallyClosedRef = useRef(
+    typeof window !== "undefined" && localStorage.getItem(INSPECTOR_OPEN_KEY) === "0",
+  );
+  const [rightOpen, setRightOpen] = useState(readInspectorOpenPreference);
   const [leftTab, setLeftTab] = useState("insert");
   const [rightTab, setRightTab] = useState("properties");
   const [assetSearch, setAssetSearch] = useState("");
@@ -464,6 +475,12 @@ export function DesignWorkspace({
   });
   const selected = editor.selectedElements;
   const primary = selected.at(-1) ?? null;
+
+  useEffect(() => {
+    if (editor.state.selection.ids.length > 0 && !inspectorManuallyClosedRef.current) {
+      setRightOpen(true);
+    }
+  }, [editor.state.selection.ids]);
 
   // Paste images from the OS clipboard into the canvas (Ctrl+V / long-press paste).
   // Only reacts when focus is outside an input/textarea and the clipboard has image data.
@@ -1125,7 +1142,30 @@ export function DesignWorkspace({
     });
   };
 
+  const toggleRightPanel = () => {
+    setRightOpen((current) => {
+      const next = !current;
+      if (typeof window !== "undefined") {
+        try {
+          localStorage.setItem(INSPECTOR_OPEN_KEY, next ? "1" : "0");
+        } catch {
+          /* ignore storage errors */
+        }
+      }
+      inspectorManuallyClosedRef.current = !next;
+      return next;
+    });
+  };
+
   const openPropertiesPanel = () => {
+    inspectorManuallyClosedRef.current = false;
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem(INSPECTOR_OPEN_KEY, "1");
+      } catch {
+        /* ignore storage errors */
+      }
+    }
     setRightOpen(true);
     setRightTab("properties");
   };
@@ -1896,7 +1936,7 @@ export function DesignWorkspace({
             size="icon"
             variant={rightOpen ? "default" : "ghost"}
             className="size-8"
-            onClick={() => setRightOpen((value) => !value)}
+            onClick={toggleRightPanel}
             aria-label="Bật tắt panel phải"
             aria-pressed={rightOpen}
           >
@@ -1915,7 +1955,7 @@ export function DesignWorkspace({
           {autosaveStatus === "pending" || autosaveStatus === "saving"
             ? "Đang lưu"
             : autosaveStatus === "error"
-              ? "Đang lưu"
+              ? "Lỗi lưu"
               : "Đã lưu"}
         </span>
       ) : null}
@@ -2342,7 +2382,7 @@ export function DesignWorkspace({
                   <Copy className="size-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Sao chÃ©p</TooltipContent>
+              <TooltipContent>Sao chép</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -2353,7 +2393,7 @@ export function DesignWorkspace({
                   disabled={!primary}
                   onClick={() => editor.duplicateSelection()}
                 >
-                  <ClipboardPaste className="size-4" />
+                  <Layers className="size-4" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Nhân bản</TooltipContent>
@@ -2404,559 +2444,6 @@ export function DesignWorkspace({
               </TooltipTrigger>
               <TooltipContent>Xóa</TooltipContent>
             </Tooltip>
-          </ToolbarGroup>
-
-          <ToolbarDivider />
-
-          <ToolbarGroup>
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button size="sm" variant="ghost" className="h-8 gap-1.5 px-2">
-                  <Settings2 className="size-4" />
-                  Trang
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent align="start" className="max-h-[70vh] w-80 overflow-y-auto p-3">
-                <div className="flex flex-col gap-3">
-                  <InspectorSection
-                    title="Trang"
-                    action={
-                      <Button
-                        size="sm"
-                        variant={editor.state.documentSettings.snapToGrid ? "default" : "outline"}
-                        className="h-7 gap-1.5 px-2 text-[11px]"
-                        onClick={() =>
-                          editor.updateDocumentSettings({
-                            snapToGrid: !editor.state.documentSettings.snapToGrid,
-                          })
-                        }
-                      >
-                        <Grid2X2 className="size-3.5" />
-                        Hút lưới {editor.state.documentSettings.snapToGrid ? "Bật" : "Tắt"}
-                      </Button>
-                    }
-                  >
-                    <div className="grid grid-cols-2 gap-2">
-                      <NumberField
-                        label="W"
-                        value={activePage.width}
-                        onChange={(value) => editor.updatePage(activePage.pageId, { width: value })}
-                      />
-                      <NumberField
-                        label="H"
-                        value={activePage.height}
-                        onChange={(value) =>
-                          editor.updatePage(activePage.pageId, { height: value })
-                        }
-                      />
-                    </div>
-                    <CompactColorControl
-                      brandColors={brandKitColors}
-                      label="Nền"
-                      value={activePage.background ?? "#ffffff"}
-                      onChange={(color) =>
-                        updatePagePreview(activePage.pageId, { background: color })
-                      }
-                      onCommit={(color) =>
-                        commitPagePatch(activePage.pageId, { background: color })
-                      }
-                    />
-                    <div className="grid grid-cols-3 gap-2">
-                      <Button
-                        size="sm"
-                        variant={editor.state.documentSettings.showSafeZone ? "default" : "outline"}
-                        onClick={toggleSafeZone}
-                      >
-                        Vùng an toàn
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={editor.state.documentSettings.showGrid ? "default" : "outline"}
-                        onClick={() =>
-                          editor.updateDocumentSettings({
-                            showGrid: !editor.state.documentSettings.showGrid,
-                          })
-                        }
-                      >
-                        Lưới
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={editor.state.documentSettings.showGuides ? "default" : "outline"}
-                        onClick={() =>
-                          editor.updateDocumentSettings({
-                            showGuides: !editor.state.documentSettings.showGuides,
-                          })
-                        }
-                      >
-                        Đường căn
-                      </Button>
-                    </div>
-                  </InspectorSection>
-                </div>
-              </PopoverContent>
-            </Popover>
-
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button
-                  size="sm"
-                  variant={primary ? "ghost" : "outline"}
-                  className="h-8 gap-1.5 px-2"
-                  disabled={!primary}
-                >
-                  <SlidersHorizontal className="size-4" />
-                  Đối tượng
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent align="start" className="max-h-[70vh] w-96 overflow-y-auto p-3">
-                {primary ? (
-                  <div className="flex flex-col gap-3">
-                    <InspectorSection
-                      title="Đối tượng"
-                      action={
-                        <span className="rounded-md bg-muted px-2 py-1 text-[11px] font-medium capitalize text-muted-foreground">
-                          {selected.length > 1 ? `${selected.length} mục` : primary.kind}
-                        </span>
-                      }
-                    >
-                      <div className="flex flex-col gap-2">
-                        <Label className="text-[11px] font-medium text-muted-foreground">
-                          Tên layer
-                        </Label>
-                        <Input
-                          value={primary.name ?? ""}
-                          onChange={(event) => updatePrimaryElement({ name: event.target.value })}
-                          placeholder="Tên layer"
-                          className="h-8"
-                        />
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumberField
-                          label="X"
-                          value={primary.x}
-                          onChange={(value) =>
-                            editor.updateSelectedElements({ x: value }, { history: false })
-                          }
-                        />
-                        <NumberField
-                          label="Y"
-                          value={primary.y}
-                          onChange={(value) =>
-                            editor.updateSelectedElements({ y: value }, { history: false })
-                          }
-                        />
-                        <NumberField
-                          label="W"
-                          value={primary.width}
-                          onChange={(value) =>
-                            editor.updateSelectedElements({ width: value }, { history: false })
-                          }
-                        />
-                        <NumberField
-                          label="H"
-                          value={primary.height}
-                          onChange={(value) =>
-                            editor.updateSelectedElements({ height: value }, { history: false })
-                          }
-                        />
-                      </div>
-                      <div className="grid grid-cols-[1fr_auto_auto] items-end gap-2">
-                        <NumberField
-                          label="Xoay"
-                          value={primary.rotation ?? 0}
-                          suffix="°"
-                          onChange={(value) =>
-                            editor.updateSelectedElements({ rotation: value }, { history: false })
-                          }
-                        />
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-8 w-10 px-0"
-                          onClick={() =>
-                            editor.updateSelectedElements(
-                              { rotation: (primary.rotation ?? 0) - 15 },
-                              { history: false },
-                            )
-                          }
-                        >
-                          <RotateCcw className="size-4" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-8 w-10 px-0"
-                          onClick={() =>
-                            editor.updateSelectedElements(
-                              { rotation: (primary.rotation ?? 0) + 15 },
-                              { history: false },
-                            )
-                          }
-                        >
-                          <RotateCw className="size-4" />
-                        </Button>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => editor.copySelection()}
-                        >
-                          <Copy className="mr-2 size-4" /> Sao chép
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => editor.duplicateSelection()}
-                        >
-                          <Layers className="mr-2 size-4" /> Nhân bản
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant={primary.hidden ? "default" : "outline"}
-                          onClick={() =>
-                            updatePrimaryElementWithDescendants({ hidden: !primary.hidden })
-                          }
-                        >
-                          {primary.hidden ? "Hiện" : "Ẩn"}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant={primary.locked ? "default" : "outline"}
-                          onClick={() =>
-                            updatePrimaryElementWithDescendants({ locked: !primary.locked })
-                          }
-                        >
-                          {primary.locked ? "Mở khóa" : "Khóa"}
-                        </Button>
-                      </div>
-                    </InspectorSection>
-
-                    <InspectorSection title="Thứ tự">
-                      <div className="grid grid-cols-2 gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="justify-start"
-                          onClick={() => editor.orderSelection("front")}
-                        >
-                          Lên cùng
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="justify-start"
-                          onClick={() => editor.orderSelection("forward")}
-                        >
-                          Lên 1 lớp
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="justify-start"
-                          onClick={() => editor.orderSelection("backward")}
-                        >
-                          Xuống 1 lớp
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="justify-start"
-                          onClick={() => editor.orderSelection("back")}
-                        >
-                          Xuống cùng
-                        </Button>
-                      </div>
-                    </InspectorSection>
-
-                    {primary.kind === "text" ? (
-                      <InspectorSection title="Chữ">
-                        <textarea
-                          value={primary.text}
-                          onChange={(event) =>
-                            updatePrimaryElement({
-                              text: event.target.value,
-                            } as Partial<DesignElement>)
-                          }
-                          className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm"
-                        />
-                        <CompactColorControl
-                      brandColors={brandKitColors}
-                          label="Màu chữ"
-                          value={primary.style?.color ?? "#0f172a"}
-                          onChange={(color) => updatePrimaryStyle({ color })}
-                          onCommit={(color) => commitPrimaryStyle({ color })}
-                        />
-                        <LetterSpacingControl
-                          value={Number(primary.style?.letterSpacing ?? 0)}
-                          onChange={(value) => updatePrimaryStyle({ letterSpacing: value })}
-                        />
-                      </InspectorSection>
-                    ) : null}
-
-                    {primary.kind === "image" || primary.kind === "shape" ? (
-                      <InspectorSection title="Hiển thị">
-                        <div className="flex flex-col gap-2">
-                          <div className="flex items-center justify-between">
-                            <Label className="text-xs">Bo góc</Label>
-                            <span className="text-[10px] tabular-nums text-muted-foreground">
-                              {primary.style?.borderRadius ?? 0}px
-                            </span>
-                          </div>
-                          <Slider
-                            value={[Number(primary.style?.borderRadius ?? 0)]}
-                            min={0}
-                            max={160}
-                            step={2}
-                            onValueChange={([value]) => updatePrimaryStyle({ borderRadius: value })}
-                          />
-                        </div>
-                        {primary.kind === "shape" ? (
-                          <CompactColorControl
-                      brandColors={brandKitColors}
-                            label="Màu nền"
-                            value={primary.style?.fill ?? "#f97316"}
-                            onChange={(color) => updatePrimaryStyle({ fill: color })}
-                            onCommit={(color) => commitPrimaryStyle({ fill: color })}
-                          />
-                        ) : null}
-                        {primary.kind === "image" ? (
-                          <>
-                            <div className="flex flex-col gap-2">
-                              <Label className="text-xs">Cách khớp</Label>
-                              <Select
-                                value={primary.style?.fit ?? "cover"}
-                                onValueChange={(value) =>
-                                  updatePrimaryStyle({
-                                    fit: value as "cover" | "contain" | "stretch",
-                                  })
-                                }
-                              >
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="cover">Phủ kín</SelectItem>
-                                  <SelectItem value="contain">Vừa khung</SelectItem>
-                                  <SelectItem value="stretch">Kéo giãn</SelectItem>
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            <div className="grid grid-cols-2 gap-3">
-                              {(
-                                [
-                                  ["Độ sáng", "brightness", 0, 200, 100],
-                                  ["Tương phản", "contrast", 0, 200, 100],
-                                  ["Độ bão hòa", "saturate", 0, 200, 100],
-                                  ["Làm mờ", "blur", 0, 20, 0],
-                                ] as const
-                              ).map(([label, key, min, max, fallback]) => {
-                                const raw = Number(
-                                  primary.style?.[key] ?? (key === "blur" ? 0 : 1),
-                                );
-                                const value = key === "blur" ? raw : raw * 100;
-                                return (
-                                  <div key={key} className="flex flex-col gap-2">
-                                    <div className="flex items-center justify-between">
-                                      <Label className="text-xs">{label}</Label>
-                                      <span className="text-[10px] tabular-nums text-muted-foreground">
-                                        {Math.round(value)}
-                                        {key === "blur" ? "px" : "%"}
-                                      </span>
-                                    </div>
-                                    <Slider
-                                      value={[Number.isFinite(value) ? value : fallback]}
-                                      min={min}
-                                      max={max}
-                                      step={key === "blur" ? 0.5 : 5}
-                                      onValueChange={([next]) =>
-                                        updatePrimaryStyle({
-                                          [key]: key === "blur" ? next : next / 100,
-                                        } as Partial<ElementStyle>)
-                                      }
-                                    />
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </>
-                        ) : null}
-                      </InspectorSection>
-                    ) : null}
-
-                    {primary.kind === "shape" || primary.kind === "text" ? (
-                      <InspectorSection
-                        title="Màu chuyển"
-                        action={
-                          <Button
-                            size="sm"
-                            variant={primary.style?.gradientEnabled ? "default" : "outline"}
-                            onClick={() =>
-                              updatePrimaryStyle({
-                                gradientEnabled: !primary.style?.gradientEnabled,
-                                gradientFrom: primary.style?.gradientFrom ?? "#f97316",
-                                gradientTo: primary.style?.gradientTo ?? "#ec4899",
-                                gradientAngle: primary.style?.gradientAngle ?? 90,
-                              })
-                            }
-                          >
-                            {primary.style?.gradientEnabled ? "Bật" : "Tắt"}
-                          </Button>
-                        }
-                      >
-                        <div className="grid grid-cols-2 gap-2">
-                          <CompactColorControl
-                      brandColors={brandKitColors}
-                            label="Từ"
-                            value={primary.style?.gradientFrom ?? "#f97316"}
-                            onChange={(color) =>
-                              updatePrimaryStyle({
-                                gradientEnabled: true,
-                                gradientFrom: color,
-                                gradientTo: primary.style?.gradientTo ?? "#ec4899",
-                              })
-                            }
-                            onCommit={(color) =>
-                              commitPrimaryStyle({
-                                gradientEnabled: true,
-                                gradientFrom: color,
-                                gradientTo: primary.style?.gradientTo ?? "#ec4899",
-                              })
-                            }
-                          />
-                          <CompactColorControl
-                      brandColors={brandKitColors}
-                            label="Đến"
-                            value={primary.style?.gradientTo ?? "#ec4899"}
-                            onChange={(color) =>
-                              updatePrimaryStyle({
-                                gradientEnabled: true,
-                                gradientFrom: primary.style?.gradientFrom ?? "#f97316",
-                                gradientTo: color,
-                              })
-                            }
-                            onCommit={(color) =>
-                              commitPrimaryStyle({
-                                gradientEnabled: true,
-                                gradientFrom: primary.style?.gradientFrom ?? "#f97316",
-                                gradientTo: color,
-                              })
-                            }
-                          />
-                        </div>
-                        <div className="flex flex-col gap-2">
-                          <div className="flex items-center justify-between">
-                            <Label className="text-xs">Góc</Label>
-                            <span className="text-[10px] tabular-nums text-muted-foreground">
-                              {primary.style?.gradientAngle ?? 90}°
-                            </span>
-                          </div>
-                          <Slider
-                            value={[primary.style?.gradientAngle ?? 90]}
-                            min={0}
-                            max={360}
-                            step={15}
-                            onValueChange={([value]) =>
-                              updatePrimaryStyle({
-                                gradientEnabled: true,
-                                gradientAngle: value,
-                                gradientFrom: primary.style?.gradientFrom ?? "#f97316",
-                                gradientTo: primary.style?.gradientTo ?? "#ec4899",
-                              })
-                            }
-                          />
-                        </div>
-                      </InspectorSection>
-                    ) : null}
-
-                    <InspectorSection
-                      title="Đổ bóng"
-                      action={
-                        <Button
-                          size="sm"
-                          variant={primary.style?.shadowColor ? "default" : "outline"}
-                          onClick={() =>
-                            updatePrimaryStyle({
-                              shadowColor: primary.style?.shadowColor ? undefined : "#000000",
-                              shadowBlur: primary.style?.shadowBlur ?? 8,
-                              shadowX: primary.style?.shadowX ?? 0,
-                              shadowY: primary.style?.shadowY ?? 4,
-                            })
-                          }
-                        >
-                          {primary.style?.shadowColor ? "Bật" : "Tắt"}
-                        </Button>
-                      }
-                    >
-                      <CompactColorControl
-                      brandColors={brandKitColors}
-                        label="Màu"
-                        value={primary.style?.shadowColor ?? "#000000"}
-                        onChange={(color) =>
-                          updatePrimaryStyle({
-                            shadowColor: color,
-                            shadowBlur: primary.style?.shadowBlur ?? 8,
-                            shadowX: primary.style?.shadowX ?? 0,
-                            shadowY: primary.style?.shadowY ?? 4,
-                          })
-                        }
-                        onCommit={(color) =>
-                          commitPrimaryStyle({
-                            shadowColor: color,
-                            shadowBlur: primary.style?.shadowBlur ?? 8,
-                            shadowX: primary.style?.shadowX ?? 0,
-                            shadowY: primary.style?.shadowY ?? 4,
-                          })
-                        }
-                      />
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center justify-between">
-                          <Label className="text-xs">Mờ</Label>
-                          <span className="text-[10px] tabular-nums text-muted-foreground">
-                            {primary.style?.shadowBlur ?? 8}px
-                          </span>
-                        </div>
-                        <Slider
-                          value={[primary.style?.shadowBlur ?? 8]}
-                          min={0}
-                          max={40}
-                          step={1}
-                          onValueChange={([value]) =>
-                            updatePrimaryStyle({
-                              shadowColor: primary.style?.shadowColor ?? "#000000",
-                              shadowBlur: value,
-                            })
-                          }
-                        />
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumberField
-                          label="X"
-                          value={primary.style?.shadowX ?? 0}
-                          onChange={(value) =>
-                            updatePrimaryStyle({
-                              shadowColor: primary.style?.shadowColor ?? "#000000",
-                              shadowX: value,
-                            })
-                          }
-                        />
-                        <NumberField
-                          label="Y"
-                          value={primary.style?.shadowY ?? 4}
-                          onChange={(value) =>
-                            updatePrimaryStyle({
-                              shadowColor: primary.style?.shadowColor ?? "#000000",
-                              shadowY: value,
-                            })
-                          }
-                        />
-                      </div>
-                    </InspectorSection>
-                  </div>
-                ) : null}
-              </PopoverContent>
-            </Popover>
           </ToolbarGroup>
 
           {headerLeading ? null : renderWorkspaceActions("ml-auto")}
@@ -4651,7 +4138,7 @@ export function DesignWorkspace({
                                 <Label className="text-xs text-muted-foreground">Màu</Label>
                                 <CompactColorControl
                       brandColors={brandKitColors}
-                                  label="MÃ u"
+                                  label="Màu"
                                   value={primary.style.shadowColor ?? "#000000"}
                                   onChange={(color) =>
                                     updateElementStyle(primary.elementId, {
