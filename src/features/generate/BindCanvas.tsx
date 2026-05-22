@@ -10,6 +10,7 @@ import {
   buildGradient,
   buildTextStyle,
   isEntityScopedImageBindingPath,
+  parseEntityListBindingPath,
   resolveImageBinding,
   resolveTextBinding,
   shapeBorderRadius,
@@ -446,6 +447,7 @@ export function BindCanvas({
           slots={visiblePrimarySlots}
           template={template}
           scale={scale}
+          resolveEntity={resolveEntityForSlot}
           onSelect={(slotId, mode) =>
             onSelectSlot(
               slotId,
@@ -474,28 +476,40 @@ interface FieldBadgeLayerProps {
   slots: Array<Slot & ExpandedSlot>;
   template: PageTemplate;
   scale: number;
+  resolveEntity: (slot: Slot & ExpandedSlot) => Entity | undefined;
   onSelect: (slotId: string, mode: BindCanvasSelectionMode) => void;
 }
 
+function fieldBadgePreviewLabel(slot: Slot, entity: Entity | undefined): string {
+  if (!slot.bindingPath) return "";
+  if (parseEntityListBindingPath(slot.bindingPath)) return "Danh sách";
+  const mode = slot.kind === "text" ? "text" : slot.kind === "image" ? "image" : slot.staticText?.trim() ? "text" : "image";
+  if (mode === "image") return bindingStatusLabel(slot);
+  if (slot.bindingPath === "ai.rewrite") return "AI viết lại";
+  const preview = resolveTextBinding(slot.bindingPath, entity, slot.staticText);
+  if (preview.trim()) {
+    return preview.length > 18 ? `${preview.slice(0, 17)}…` : preview;
+  }
+  const field = lookupByBindingPath(slot.bindingPath);
+  return field?.labelVi ?? bindingStatusLabel(slot);
+}
+
 /**
- * Lớp pill badge nổi trên canvas, hiển thị tên field đã bind cho mỗi slot
- * có `bindingPath`. Click pill → select slot tương ứng (giống click slot).
- * Render absolute trong canvas wrapper, pointer events tách biệt khỏi slot
- * thật để click qua được khi slot ở dưới.
+ * Lớp pill badge nổi trên canvas, hiển thị preview hoặc tên field đã bind.
+ * Click pill → select slot tương ứng (giống click slot).
  */
-function FieldBadgeLayer({ slots, template, scale, onSelect }: FieldBadgeLayerProps) {
+function FieldBadgeLayer({ slots, template, scale, resolveEntity, onSelect }: FieldBadgeLayerProps) {
   const items = useMemo(() => {
     const out: Array<{ slot: Slot; label: string }> = [];
     for (const slot of slots) {
       if (!slot.bindingPath) continue;
       if (!isDataBindableSlot(slot, template)) continue;
-      const field = lookupByBindingPath(slot.bindingPath);
-      const label = field?.labelVi ?? bindingStatusLabel(slot);
+      const label = fieldBadgePreviewLabel(slot, resolveEntity(slot));
       if (!label) continue;
       out.push({ slot, label });
     }
     return out;
-  }, [slots, template]);
+  }, [slots, template, resolveEntity]);
 
   if (items.length === 0) return null;
 

@@ -9,6 +9,7 @@ import {
   type BindPanelImageSlotRow,
   type BindPanelTextSlotRow,
 } from "@/features/generate/GenerateBindPanel";
+import type { CanvasBindingPickerState } from "@/features/generate/CanvasBindingPickerOverlay";
 import type { GeneratePageTabItem, SourceControlsRenderer } from "@/features/generate/generatePanelProps";
 import type { ResolvedGeneratePageConfig } from "@/features/generate/generatePanelProps";
 
@@ -99,6 +100,7 @@ export interface GeneratePackWorkspaceProps {
   onRewrite: () => void;
   onAiCaption: () => void;
   onClearBindings: () => void;
+  canvasBindingPicker?: CanvasBindingPickerState | null;
 }
 
 export function GeneratePackWorkspace(props: GeneratePackWorkspaceProps) {
@@ -185,6 +187,7 @@ export function GeneratePackWorkspace(props: GeneratePackWorkspaceProps) {
     onRewrite,
     onAiCaption,
     onClearBindings,
+    canvasBindingPicker,
   } = props;
 
   const configPanel = (
@@ -239,6 +242,15 @@ export function GeneratePackWorkspace(props: GeneratePackWorkspaceProps) {
       onShowFieldBadgesChange={(value) => setShowFieldBadges(value)}
       onShowSafeFrameChange={(value) => setShowSafeFrame(value)}
       onClearSelection={() => handleSelectSlot(null)}
+      canvasBindingPicker={canvasBindingPicker}
+      onCanvasBindingSelect={(value) => {
+        if (!canvasBindingPicker) return;
+        if (canvasBindingPicker.mode === "text") {
+          onTextBindingChange(canvasBindingPicker.slot, value);
+          return;
+        }
+        onImageBindingChange(canvasBindingPicker.slot, value);
+      }}
     />
   );
 

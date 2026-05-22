@@ -39,6 +39,7 @@ import {
   IMAGE_BINDING_OPTIONS,
   ASSET_RANDOM_SCOPE_BINDING_VALUE,
   buildAssetRandomScopeBindingPath,
+  buildEntityListBindingPath,
   buildEntityScopedTextBindingPath,
   getEntityScopedTextBindingBasePath,
   isAssetRandomScopeBindingPath,
@@ -50,6 +51,12 @@ import {
 } from "@/engines/binding/dataBinding";
 import { PageRenderer } from "@/features/render/PageRenderer";
 import { type TextListFieldOption } from "@/features/generate/TextListBindingPanel";
+import {
+  buildImageBindingPickerOptions,
+  buildTextBindingPickerOptions,
+  IMAGE_BINDING_QUICK_VALUES,
+  TEXT_BINDING_QUICK_VALUES,
+} from "@/features/generate/bindingPickerOptions";
 import { GeneratePageEditor } from "@/features/generate/GeneratePageEditor";
 import { isLikelyGeneratePageBackgroundSlot } from "@/features/generate/backgroundGuards";
 import { autoBindPlaceholdersForDrafts } from "@/features/generate/autoBindPlaceholders";
@@ -1102,7 +1109,20 @@ export function PackTabContent({
 
   const applyTextBindingSelection = (slot: Slot, value: string) => {
     if (!activePage) return;
-    if (value === "__list") return;
+    if (value === "__list") {
+      const bindingPath = buildEntityListBindingPath({
+        fields: ["entity.name"],
+        count: Math.min(12, Math.max(1, previewEntityPool.length || 12)),
+        separator: " - ",
+        bullet: "dot",
+        randomize: true,
+        prioritizePartner: prioritizePartner,
+        seed: String(Date.now()),
+      });
+      applyBindingToSlots([slot], activePage.pageTemplateId, bindingPath);
+      ensureAutoDataGroupForBoundSlots([slot]);
+      return;
+    }
     let bindingPath: string | undefined;
     if (value === "_static") {
       bindingPath = undefined;
@@ -1476,12 +1496,22 @@ export function PackTabContent({
     estimateGeneratedPageCount,
     getSlotBindMode,
   });
-  const selectedSlotStatusLabel = (slot: Slot) => {
+  const selectedSlotStatusLabel = (slot: Slot, entity?: Entity) => {
     if (!slot.bindingPath) return "Tĩnh";
     const listConfig = parseEntityListBindingPath(slot.bindingPath);
     if (listConfig) return "Danh sách";
+    const previewEntityForStatus = entity ?? panelPreviewEntity;
     const textValue = textSlotFieldBindingValue(slot);
     if (textValue !== "_static") {
+      if (slot.bindingPath === "ai.rewrite") return "AI viết lại";
+      const preview = resolveTextBinding(
+        slot.bindingPath,
+        previewEntityForStatus,
+        slot.staticText,
+      );
+      if (preview.trim()) {
+        return preview.length > 24 ? `${preview.slice(0, 23)}…` : preview;
+      }
       return (
         TEXT_BINDING_OPTIONS.find((option) => (option.value || "_static") === textValue)?.label ??
         "Dữ liệu"
@@ -2384,19 +2414,35 @@ export function PackTabContent({
 
   const bindPanelTextRows = useMemo<BindPanelTextSlotRow[]>(
     () =>
-      sortedSelectedTextSlots.map((slot, index) => ({
-        slot,
-        label: textSlotLabel(slot, index),
-        statusLabel: selectedSlotStatusLabel(slot),
-        bindingValue: textSlotBindingValue(slot),
-        bindingOptions: textBindingOptionsForSlot(slot),
-        bindingOptionLabel: textBindingOptionLabel,
-        fieldBindingValue: textSlotFieldBindingValue(slot),
-        showPerSlotSource:
-          !clusterSourceSlotIds.has(slot.slotId) &&
-          textSlotFieldBindingValue(slot) !== "_static" &&
-          slot.bindingPath !== "ai.rewrite",
-      })),
+      sortedSelectedTextSlots.map((slot, index) => {
+        const sourceEntities = buildSourceFilteredEntities(entities, slotSourceConfig(slot));
+        const previewEntityForSlot = effectiveActive
+          ? resolvePreviewEntityForSlot({
+              slot,
+              template: effectiveActive,
+              slotItems: previewSlotItems,
+              entities,
+              fallbackEntity: previewEntity,
+            })
+          : previewEntity;
+        return {
+          slot,
+          label: textSlotLabel(slot, index),
+          statusLabel: selectedSlotStatusLabel(slot, previewEntityForSlot),
+          bindingValue: textSlotBindingValue(slot),
+          bindingOptions: textBindingOptionsForSlot(slot),
+          bindingOptionLabel: textBindingOptionLabel,
+          fieldBindingValue: textSlotFieldBindingValue(slot),
+          pickerOptions: buildTextBindingPickerOptions({
+            entities: sourceEntities,
+            currentValue: textSlotFieldBindingValue(slot),
+          }),
+          showPerSlotSource:
+            !clusterSourceSlotIds.has(slot.slotId) &&
+            textSlotFieldBindingValue(slot) !== "_static" &&
+            slot.bindingPath !== "ai.rewrite",
+        };
+      }),
     [
       sortedSelectedTextSlots,
       clusterSourceSlotIds,
@@ -2405,6 +2451,10 @@ export function PackTabContent({
       textSlotBindingValue,
       textBindingOptionsForSlot,
       textSlotFieldBindingValue,
+      entities,
+      effectiveActive,
+      previewSlotItems,
+      previewEntity,
     ],
   );
 
@@ -2418,13 +2468,28 @@ export function PackTabContent({
         const randomScope = parseAssetRandomScopeBindingPath(slot.bindingPath);
         const randomScopeSheet = randomScope?.sheetName ?? slotSourceConfig(slot).selectedSheet;
         const randomScopeFolder = randomScope?.folder ?? ALL_VALUE;
+        const sourceEntities = buildSourceFilteredEntities(entities, slotSourceConfig(slot));
+        const previewEntityForSlot = effectiveActive
+          ? resolvePreviewEntityForSlot({
+              slot,
+              template: effectiveActive,
+              slotItems: previewSlotItems,
+              entities,
+              fallbackEntity: previewEntity,
+            })
+          : previewEntity;
         return {
           slot,
           label: imageSlotLabel(slot, index),
-          statusLabel: selectedSlotStatusLabel(slot),
+          statusLabel: selectedSlotStatusLabel(slot, previewEntityForSlot),
           selectValue: value,
           imageOptions: imageBindingOptionsForSlot(slot),
           imageOptionLabel: imageBindingOptionLabel,
+          pickerOptions: buildImageBindingPickerOptions({
+            entities: sourceEntities,
+            assets,
+            currentValue: value,
+          }),
           hasLinkedText,
           showRandomScope: value === ASSET_RANDOM_SCOPE_BINDING_VALUE,
           randomScopeSheet,
@@ -2441,8 +2506,61 @@ export function PackTabContent({
       imageBindingOptionsForSlot,
       randomImageFolderOptionsForSheet,
       slotSourceConfig,
+      entities,
+      assets,
+      effectiveActive,
+      previewSlotItems,
+      previewEntity,
     ],
   );
+
+  const canvasBindingPicker = useMemo(() => {
+    if (selectedBindableSlots.length !== 1) return null;
+    const slot = selectedBindableSlots[0];
+    const mode = getSlotBindMode(slot);
+    if (mode === "text") {
+      if (textSlotBindingValue(slot) === "__list") return null;
+      const sourceEntities = buildSourceFilteredEntities(entities, slotSourceConfig(slot));
+      return {
+        slot,
+        mode,
+        value: textSlotBindingValue(slot),
+        options: buildTextBindingPickerOptions({
+          entities: sourceEntities,
+          currentValue: textSlotFieldBindingValue(slot),
+        }),
+        quickValues: TEXT_BINDING_QUICK_VALUES,
+      };
+    }
+    if (mode === "image") {
+      const rawValue = imageSlotBindingValue(slot);
+      const hasLinkedText = imageSlotHasLinkedText(slot);
+      const value =
+        !hasLinkedText && isEntityScopedImageBindingPath(rawValue) ? "_static" : rawValue;
+      return {
+        slot,
+        mode,
+        value,
+        options: buildImageBindingPickerOptions({
+          entities: buildSourceFilteredEntities(entities, slotSourceConfig(slot)),
+          assets,
+          currentValue: value,
+        }),
+        quickValues: IMAGE_BINDING_QUICK_VALUES,
+      };
+    }
+    return null;
+  }, [
+    selectedBindableSlots,
+    getSlotBindMode,
+    textSlotBindingValue,
+    textSlotFieldBindingValue,
+    entities,
+    assets,
+    slotSourceConfig,
+    imageSlotBindingValue,
+    imageSlotHasLinkedText,
+  ]);
 
   const presetGalleryItems = useMemo(
     () =>
@@ -2644,6 +2762,7 @@ export function PackTabContent({
               if (!activePage) return;
               clearBindingsForSlots(selectedBindableSlots, activePage.pageTemplateId);
             }}
+            canvasBindingPicker={canvasBindingPicker}
           />
 
           {/* Kết quả render — sticky toolbar gộp các thao tác global + danh

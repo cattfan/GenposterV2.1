@@ -7,16 +7,9 @@ import {
   Link2Off,
   Loader2,
   MoreHorizontal,
-  MousePointerClick,
   Wand2,
 } from "lucide-react";
 import type { Entity, Slot } from "@/models";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -45,7 +38,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { EmptyState } from "@/components/ux";
+import { BindingFieldPicker } from "@/features/generate/BindingFieldPicker";
+import type { BindingPickerOption } from "@/features/generate/bindingPickerOptions";
+import {
+  IMAGE_BINDING_QUICK_VALUES,
+  TEXT_BINDING_QUICK_VALUES,
+} from "@/features/generate/bindingPickerOptions";
 import { TextListBindingPanel, type TextListFieldOption } from "@/features/generate/TextListBindingPanel";
 import { TextRewritePanel } from "@/features/generate/TextRewritePanel";
 import type { SlotFormatClipboard } from "@/features/generate/slotFormatClipboard";
@@ -61,6 +59,7 @@ export interface BindPanelTextSlotRow {
   bindingOptions: Array<{ value: string; label: string }>;
   bindingOptionLabel: (value: string, label: string) => string;
   fieldBindingValue: string;
+  pickerOptions: BindingPickerOption[];
   showPerSlotSource: boolean;
 }
 
@@ -71,6 +70,7 @@ export interface BindPanelImageSlotRow {
   selectValue: string;
   imageOptions: Array<{ value: string; label: string }>;
   imageOptionLabel: (value: string) => string;
+  pickerOptions: BindingPickerOption[];
   hasLinkedText: boolean;
   showRandomScope: boolean;
   randomScopeSheet: string;
@@ -311,6 +311,28 @@ function BindPanelActionsBar({
   );
 }
 
+function BindSlotRow({
+  title,
+  statusLabel,
+  children,
+}: {
+  title: string;
+  statusLabel: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border bg-muted/20 p-2">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <span className="truncate text-xs font-medium">{title}</span>
+        <Badge variant="outline" className="max-w-[55%] shrink truncate text-xs">
+          {statusLabel}
+        </Badge>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function BindPanelBody(props: Props) {
   const {
     selectedSlotsEmpty,
@@ -349,21 +371,12 @@ function BindPanelBody(props: Props) {
 
   return (
     <div className="flex flex-col gap-3">
-      {selectedSlotsEmpty ? (
-        <EmptyState
-          icon={<MousePointerClick />}
-          title="Chưa chọn khối"
-          description="Bấm vào một khối trên vùng thiết kế để chỉnh liên kết dữ liệu."
-          compact
-        />
-      ) : null}
+      {selectedSlotsEmpty ? <div className="min-h-10 rounded-md border border-dashed bg-muted/20" /> : null}
 
       {!selectedSlotsEmpty && selectedBindableEmpty ? (
-        <div className="flex flex-col gap-1 rounded-md border border-dashed bg-muted/30 p-3">
-          <div className="flex items-center gap-2 text-xs font-medium">
-            <AlertTriangle className="size-3.5" />
-            Khối đang chọn không thể liên kết dữ liệu
-          </div>
+        <div className="flex items-center gap-2 rounded-md border border-dashed bg-muted/30 p-3 text-xs font-medium">
+          <AlertTriangle className="size-3.5 shrink-0" />
+          Không liên kết được
         </div>
       ) : null}
 
@@ -371,7 +384,7 @@ function BindPanelBody(props: Props) {
         <>
           {hasMultipleSelectedClusters ? (
             <p className="rounded-md border border-dashed bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">
-              Đang chọn khối từ nhiều cụm — chọn khối trong một cụm để đổi nguồn dữ liệu chung.
+              Nhiều cụm — chọn khối trong một cụm để đổi nguồn chung.
             </p>
           ) : null}
 
@@ -391,155 +404,101 @@ function BindPanelBody(props: Props) {
           ) : null}
 
           {textSlots.length > 0 ? (
-            <Collapsible defaultOpen>
-              <CollapsibleTrigger className="flex w-full items-center justify-between text-xs font-medium">
-                Khung chữ{textSlots.length > 1 ? ` (${textSlots.length} khối)` : ""}
-                <ChevronDown className="size-4" />
-              </CollapsibleTrigger>
-              <CollapsibleContent className="mt-2">
-                <Accordion type="multiple" className="flex flex-col gap-2">
-                  {textSlots.map((row, index) => (
-                    <AccordionItem
-                      key={row.slot.slotId}
-                      value={row.slot.slotId}
-                      className="rounded-lg border bg-muted/20 px-2"
-                    >
-                      <AccordionTrigger className="py-2 text-xs hover:no-underline">
-                        <span className="flex min-w-0 flex-1 items-center justify-between gap-2 pr-2">
-                          <span className="truncate font-medium">
-                            {index + 1}. {row.label}
-                          </span>
-                          <Badge variant="outline" className="shrink-0 text-xs">
-                            {row.statusLabel}
-                          </Badge>
-                        </span>
-                      </AccordionTrigger>
-                      <AccordionContent className="flex flex-col gap-2 pb-3">
-                        <Select
-                          value={row.bindingValue}
-                          onValueChange={(v) => onTextBindingChange(row.slot, v)}
-                        >
-                          <SelectTrigger className="h-9 max-lg:h-10">
-                            <SelectValue placeholder="Chọn trường" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__list">Danh sách nhiều dòng</SelectItem>
-                            {row.bindingOptions.map((option) => {
-                              const value = option.value || "_static";
-                              return (
-                                <SelectItem key={`${row.slot.slotId}-${value}`} value={value}>
-                                  {row.bindingOptionLabel(value, option.label)}
-                                </SelectItem>
-                              );
-                            })}
-                          </SelectContent>
-                        </Select>
-                        {row.showPerSlotSource
-                          ? renderSourceControls([row.slot], slotSourceConfig(row.slot))
-                          : null}
-                      </AccordionContent>
-                    </AccordionItem>
-                  ))}
-                </Accordion>
-              </CollapsibleContent>
-            </Collapsible>
+            <div className="flex flex-col gap-2">
+              {textSlots.length > 1 ? (
+                <div className="text-xs font-medium text-muted-foreground">
+                  Khung chữ ({textSlots.length})
+                </div>
+              ) : null}
+              {textSlots.map((row, index) => (
+                <BindSlotRow
+                  key={row.slot.slotId}
+                  title={`${index + 1}. ${row.label}`}
+                  statusLabel={row.statusLabel}
+                >
+                  <BindingFieldPicker
+                    value={row.bindingValue}
+                    options={row.pickerOptions}
+                    quickValues={TEXT_BINDING_QUICK_VALUES}
+                    onSelect={(value) => onTextBindingChange(row.slot, value)}
+                  />
+                  {row.showPerSlotSource
+                    ? renderSourceControls([row.slot], slotSourceConfig(row.slot))
+                    : null}
+                </BindSlotRow>
+              ))}
+            </div>
           ) : null}
 
           {imageSlots.length > 0 ? (
-            <Collapsible defaultOpen>
-              <CollapsibleTrigger className="flex w-full items-center justify-between text-xs font-medium">
-                Khung ảnh{imageSlots.length > 1 ? ` (${imageSlots.length} khối)` : ""}
-                <ChevronDown className="size-4" />
-              </CollapsibleTrigger>
-              <CollapsibleContent className="mt-2">
-                <Accordion type="multiple" className="flex flex-col gap-2">
-                  {imageSlots.map((row, index) => (
-                    <AccordionItem
-                      key={row.slot.slotId}
-                      value={row.slot.slotId}
-                      className="rounded-lg border bg-muted/20 px-2"
-                    >
-                      <AccordionTrigger className="py-2 text-xs hover:no-underline">
-                        <span className="flex min-w-0 flex-1 items-center justify-between gap-2 pr-2">
-                          <span className="truncate font-medium">
-                            {index + 1}. {row.label}
-                          </span>
-                          <Badge variant="outline" className="shrink-0 text-xs">
-                            {row.statusLabel}
-                          </Badge>
-                        </span>
-                      </AccordionTrigger>
-                      <AccordionContent className="flex flex-col gap-2 pb-3">
+            <div className="flex flex-col gap-2">
+              {imageSlots.length > 1 ? (
+                <div className="text-xs font-medium text-muted-foreground">
+                  Khung ảnh ({imageSlots.length})
+                </div>
+              ) : null}
+              {imageSlots.map((row, index) => (
+                <BindSlotRow
+                  key={row.slot.slotId}
+                  title={`${index + 1}. ${row.label}`}
+                  statusLabel={row.statusLabel}
+                >
+                  <BindingFieldPicker
+                    value={row.selectValue}
+                    options={row.pickerOptions}
+                    quickValues={IMAGE_BINDING_QUICK_VALUES}
+                    searchPlaceholder="Tìm kiểu ảnh..."
+                    onSelect={(value) => onImageBindingChange(row.slot, value)}
+                  />
+                  {row.showRandomScope ? (
+                    <div className="grid gap-2 rounded-md border bg-background/70 p-2">
+                      <div>
+                        <Label className="text-xs">Nguồn ảnh</Label>
                         <Select
-                          value={row.selectValue}
-                          onValueChange={(v) => onImageBindingChange(row.slot, v)}
+                          value={row.randomScopeSheet}
+                          onValueChange={(sheetName) =>
+                            onRandomScopeSheetChange(row.slot, sheetName)
+                          }
                         >
                           <SelectTrigger className="h-9 max-lg:h-10">
-                            <SelectValue placeholder="Chọn trường ảnh" />
+                            <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {row.imageOptions.map((option) => (
-                              <SelectItem
-                                key={`${row.slot.slotId}-${option.value || "_static"}`}
-                                value={option.value || "_static"}
-                              >
-                                {row.imageOptionLabel(option.value || "_static")}
+                            <SelectItem value={allValue}>Tất cả nguồn</SelectItem>
+                            {sheetOptions.map((sheet) => (
+                              <SelectItem key={sheet} value={sheet}>
+                                {sheet}
                               </SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
-                        {row.showRandomScope ? (
-                          <div className="grid gap-2 rounded-md border bg-background/70 p-2">
-                            <div>
-                              <Label className="text-xs">Nguồn ảnh</Label>
-                              <Select
-                                value={row.randomScopeSheet}
-                                onValueChange={(sheetName) =>
-                                  onRandomScopeSheetChange(row.slot, sheetName)
-                                }
-                              >
-                                <SelectTrigger className="h-9 max-lg:h-10">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value={allValue}>Tất cả nguồn</SelectItem>
-                                  {sheetOptions.map((sheet) => (
-                                    <SelectItem key={sheet} value={sheet}>
-                                      {sheet}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            <div>
-                              <Label className="text-xs">Thư mục ảnh</Label>
-                              <Select
-                                value={row.randomScopeFolder}
-                                onValueChange={(folder) =>
-                                  onRandomScopeFolderChange(row.slot, folder)
-                                }
-                              >
-                                <SelectTrigger className="h-9 max-lg:h-10">
-                                  <SelectValue placeholder="Chọn thư mục / nhóm ảnh" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value={allValue}>Tất cả thư mục</SelectItem>
-                                  {row.randomImageFolderOptions.map((folder) => (
-                                    <SelectItem key={folder} value={folder}>
-                                      {folder}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-                          </div>
-                        ) : null}
-                      </AccordionContent>
-                    </AccordionItem>
-                  ))}
-                </Accordion>
-              </CollapsibleContent>
-            </Collapsible>
+                      </div>
+                      <div>
+                        <Label className="text-xs">Thư mục ảnh</Label>
+                        <Select
+                          value={row.randomScopeFolder}
+                          onValueChange={(folder) =>
+                            onRandomScopeFolderChange(row.slot, folder)
+                          }
+                        >
+                          <SelectTrigger className="h-9 max-lg:h-10">
+                            <SelectValue placeholder="Chọn thư mục / nhóm ảnh" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={allValue}>Tất cả thư mục</SelectItem>
+                            {row.randomImageFolderOptions.map((folder) => (
+                              <SelectItem key={folder} value={folder}>
+                                {folder}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  ) : null}
+                </BindSlotRow>
+              ))}
+            </div>
           ) : null}
 
           {showTextListPanel && textSlots[0] ? (

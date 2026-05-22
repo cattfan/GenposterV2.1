@@ -16,7 +16,7 @@ describe("PackTabContent data panel", () => {
       "utf8",
     );
 
-    expect(bindPanelSource).toContain("Khối đang chọn");
+    expect(bindPanelSource).toContain("BindingFieldPicker");
     expect(source).not.toContain('value="overview"');
     expect(source).not.toContain("Tổng quan");
   });

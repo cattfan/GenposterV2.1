@@ -9,6 +9,10 @@ import { BindCanvas } from "@/features/generate/BindCanvas";
 import { BindingIssuesPanel } from "@/features/generate/BindingIssuesPanel";
 import { AllocationWarningsPanel } from "@/features/generate/AllocationWarningsPanel";
 import { GenerateCanvasToolbar } from "@/features/generate/GenerateCanvasToolbar";
+import {
+  CanvasBindingPickerOverlay,
+  type CanvasBindingPickerState,
+} from "@/features/generate/CanvasBindingPickerOverlay";
 import type { GeneratePageTabItem } from "./generatePanelProps";
 
 interface Props {
@@ -39,6 +43,8 @@ interface Props {
   onShowFieldBadgesChange: (value: boolean) => void;
   onShowSafeFrameChange: (value: boolean) => void;
   onClearSelection: () => void;
+  canvasBindingPicker?: CanvasBindingPickerState | null;
+  onCanvasBindingSelect?: (value: string) => void;
 }
 
 function useContainerWidth(element: HTMLElement | null): number {
@@ -95,6 +101,8 @@ export function GenerateCanvasPanel({
   onShowFieldBadgesChange,
   onShowSafeFrameChange,
   onClearSelection,
+  canvasBindingPicker,
+  onCanvasBindingSelect,
 }: Props) {
   const stageRef = useRef<HTMLDivElement>(null);
   const [stageElement, setStageElement] = useState<HTMLDivElement | null>(null);
@@ -199,6 +207,22 @@ export function GenerateCanvasPanel({
                         showFieldBadges={showFieldBadges}
                         flatPreview
                       />
+                      {canvasBindingPicker && onCanvasBindingSelect ? (
+                        <CanvasBindingPickerOverlay
+                          slot={canvasBindingPicker.slot}
+                          scale={canvasScale}
+                          enabled
+                          value={canvasBindingPicker.value}
+                          options={canvasBindingPicker.options}
+                          quickValues={canvasBindingPicker.quickValues}
+                          searchPlaceholder={
+                            canvasBindingPicker.mode === "image"
+                              ? "Tìm kiểu ảnh..."
+                              : "Tìm trường..."
+                          }
+                          onSelect={onCanvasBindingSelect}
+                        />
+                      ) : null}
                     </div>
                   </div>
                 </div>
