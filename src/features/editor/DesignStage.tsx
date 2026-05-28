@@ -553,7 +553,7 @@ export function DesignStage({
                         />
                       ) : isEditingText && textEditorStyle ? (
                         <div
-                          className="absolute left-0 top-0 overflow-hidden bg-transparent outline-none"
+                          className="absolute left-0 top-0 overflow-visible bg-transparent outline-none"
                           onMouseDown={(event) => {
                             event.stopPropagation();
                             const editor = event.currentTarget.querySelector<HTMLElement>(
@@ -633,7 +633,7 @@ export function DesignStage({
                               }
                             }}
                             onMouseDown={(event) => event.stopPropagation()}
-                            className="w-full overflow-hidden bg-transparent outline-none"
+                            className="w-full overflow-visible bg-transparent outline-none"
                             style={{
                               ...textEditorStyle,
                               width: "100%",

@@ -227,7 +227,10 @@ const DesignElementNode = memo(
             display: "flex",
             alignItems: textVerticalFlexAlign(element.style),
             justifyContent: Math.abs(curve) > 0.5 ? "center" : undefined,
-            overflow: "hidden",
+            // Text vượt ra ngoài textbox vẫn hiện thị, không clip — designer
+            // muốn nhìn thấy phần thừa để chỉnh khung. Chỉ clip khi user bật
+            // maxLines (ellipsis) trong buildTextStyle.
+            overflow: "visible",
           }}
         >
           {Math.abs(curve) > 0.5 && !hasRichRuns ? (

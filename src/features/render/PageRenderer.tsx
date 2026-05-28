@@ -608,7 +608,10 @@ function SlotRenderer({
           display: "flex",
           alignItems: textVerticalFlexAlign(slot.style),
           justifyContent: Math.abs(curve) > 0.5 ? "center" : undefined,
-          overflow: "hidden",
+          // Cho phép text tràn ra ngoài textbox để khớp behaviour editor
+          // (designer dễ thấy phần thừa). Chỉ clip khi maxLines bật trong
+          // buildTextStyle.
+          overflow: "visible",
         }}
       >
         {Math.abs(curve) > 0.5 && !hasRichRuns ? (
