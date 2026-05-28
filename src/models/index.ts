@@ -367,6 +367,18 @@ export interface GenerateBindingPreset {
   version: 1;
 }
 
+export interface PortableFontAsset {
+  fontAssetId: ID;
+  family: string;
+  weight?: number | string;
+  style?: "normal" | "italic";
+  format?: string;
+  /** Base64 (data URL) của file font, để portable cross-machine. */
+  dataUrl: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface GenPosterPortableBundleV1 {
   app: "genposter";
   kind: "pack-template" | "generate-preset" | "workspace-bundle";
@@ -375,6 +387,8 @@ export interface GenPosterPortableBundleV1 {
   packTemplates?: PackTemplate[];
   pageTemplates?: PageTemplate[];
   generatePresets?: GenerateBindingPreset[];
+  /** Font upload custom đi kèm, embed dataUrl để portable. */
+  fontAssets?: PortableFontAsset[];
   assets?: Asset[];
   blobs?: BlobRecord[];
 }

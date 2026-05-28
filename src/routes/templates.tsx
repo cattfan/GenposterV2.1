@@ -482,10 +482,10 @@ function TemplatesPage() {
     await duplicatePackTemplate(editing);
   };
 
-  const exportPackTemplate = (pack: PackTemplate) => {
+  const exportPackTemplate = async (pack: PackTemplate) => {
     const pageSet = new Set(pack.orderedPages);
     const pages = (tpls ?? []).filter((template) => pageSet.has(template.pageTemplateId));
-    const bundle = buildPackTemplateBundle(pack, pages);
+    const bundle = await buildPackTemplateBundle(pack, pages);
     downloadJson(
       `${safePortableFileName(formatTemplateDisplayName(pack.name, "bo-khuon"))}-bo-khuon.json`,
       bundle,
@@ -506,6 +506,14 @@ function TemplatesPage() {
       toast.success(
         `Đã nhập ${result.packs.length} bộ, ${result.pages.length} trang, ${result.presets.length} khuôn`,
       );
+      if (result.addedFontCount > 0) {
+        toast.success(`Đã cài thêm ${result.addedFontCount} font tuỳ chỉnh đi kèm`);
+      }
+      if (result.missingFonts.length > 0) {
+        toast.warning(
+          `Thiếu ${result.missingFonts.length} font: ${result.missingFonts.join(", ")} — chữ sẽ dùng font thay thế.`,
+        );
+      }
     } catch (error) {
       toast.error("Không thể nhập khuôn: " + errorMessage(error));
     }

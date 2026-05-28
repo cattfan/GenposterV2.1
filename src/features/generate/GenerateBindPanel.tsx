@@ -13,11 +13,6 @@ import type { Entity, Slot } from "@/models";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -78,6 +73,7 @@ interface Props {
   selectedSlotCount: number;
   selectedSlotsEmpty: boolean;
   selectedBindableEmpty: boolean;
+  selectedSlots: Slot[];
   panelPreviewEntity?: Entity;
   formatClipboard: SlotFormatClipboard | null;
   hasMultipleSelectedClusters: boolean;
@@ -316,8 +312,30 @@ function BindSlotRow({ title, children }: { title: string; children: ReactNode }
   );
 }
 
+function BindSlotSourcePanel({
+  slots,
+  title,
+  description,
+  renderSourceControls,
+  sourceConfig,
+}: {
+  slots: Slot[];
+  title: string;
+  description?: string;
+  renderSourceControls: SourceControlsRenderer;
+  sourceConfig: Parameters<SourceControlsRenderer>[1];
+}) {
+  return (
+    <div className="grid gap-2 rounded-md border bg-background/70 p-2">
+      <div className="text-xs font-medium">{title}</div>
+      {renderSourceControls(slots, sourceConfig, description ? { description } : undefined)}
+    </div>
+  );
+}
+
 function BindPanelBody(props: Props) {
   const {
+    selectedSlots,
     selectedSlotsEmpty,
     selectedBindableEmpty,
     hasMultipleSelectedClusters,
@@ -354,22 +372,13 @@ function BindPanelBody(props: Props) {
 
   return (
     <div className="flex flex-col gap-3">
-      {shouldShowClusterSourceControls && clusterSourceConfig ? (
-        <Collapsible defaultOpen>
-          <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs font-medium">
-            Nguồn dữ liệu của cụm
-            <ChevronDown className="size-4" />
-          </CollapsibleTrigger>
-          <CollapsibleContent className="mt-2">
-            {renderSourceControls(clusterSourceSlots, clusterSourceConfig, {
-              description:
-                "Cấu hình này áp dụng cho toàn bộ thuộc tính đã liên kết trong cụm trên trang.",
-            })}
-          </CollapsibleContent>
-        </Collapsible>
-      ) : null}
 
-      {selectedSlotsEmpty ? <div className="min-h-10 rounded-md border border-dashed bg-muted/20" /> : null}
+
+      {selectedSlotsEmpty && !selectedBindableEmpty ? (
+        <div className="rounded-md border border-dashed bg-muted/30 p-3 text-xs text-muted-foreground">
+          Chọn một khối trên canvas để chỉnh liên kết dữ liệu trong sidebar.
+        </div>
+      ) : null}
 
       {!selectedSlotsEmpty && selectedBindableEmpty ? (
         <div className="flex items-center gap-2 rounded-md border border-dashed bg-muted/30 p-3 text-xs font-medium">
@@ -378,145 +387,141 @@ function BindPanelBody(props: Props) {
         </div>
       ) : null}
 
-      {!selectedSlotsEmpty && !selectedBindableEmpty ? (
-        <>
-          {hasMultipleSelectedClusters ? (
-            <p className="rounded-md border border-dashed bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">
-              Nhiều cụm — chọn khối trong một cụm để đổi nguồn chung.
-            </p>
-          ) : null}
+      {hasMultipleSelectedClusters ? (
+        <p className="rounded-md border border-dashed bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">
+          Nhiều cụm — chọn khối trong một cụm để đổi nguồn chung.
+        </p>
+      ) : null}
 
-          {textSlots.length > 0 ? (
-            <div className="flex flex-col gap-2">
-              {textSlots.length > 1 ? (
-                <div className="text-xs font-medium text-muted-foreground">
-                  Khung chữ ({textSlots.length})
-                </div>
-              ) : null}
-              {textSlots.map((row, index) => (
-                <BindSlotRow key={row.slot.slotId} title={`${index + 1}. ${row.label}`}>
-                  <BindingFieldPicker
-                    value={row.bindingValue}
-                    options={row.pickerOptions}
-                    onSelect={(value) => onTextBindingChange(row.slot, value)}
-                  />
-                  {row.showPerSlotSource
-                    ? renderSourceControls([row.slot], slotSourceConfig(row.slot))
-                    : null}
-                </BindSlotRow>
-              ))}
+      {textSlots.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          {textSlots.length > 1 ? (
+            <div className="text-xs font-medium text-muted-foreground">
+              Khung chữ ({textSlots.length})
             </div>
           ) : null}
-
-          {imageSlots.length > 0 ? (
-            <div className="flex flex-col gap-2">
-              {imageSlots.length > 1 ? (
-                <div className="text-xs font-medium text-muted-foreground">
-                  Khung ảnh ({imageSlots.length})
-                </div>
-              ) : null}
-              {imageSlots.map((row, index) => (
-                <BindSlotRow key={row.slot.slotId} title={`${index + 1}. ${row.label}`}>
-                  <BindingFieldPicker
-                    value={row.selectValue}
-                    options={row.pickerOptions}
-                    placeholder="Chọn trường ảnh"
-                    onSelect={(value) => onImageBindingChange(row.slot, value)}
-                  />
-                  {row.showRandomScope ? (
-                    <div className="grid gap-2 rounded-md border bg-background/70 p-2">
-                      <div>
-                        <Label className="text-xs">Nguồn ảnh</Label>
-                        <Select
-                          value={row.randomScopeSheet}
-                          onValueChange={(sheetName) =>
-                            onRandomScopeSheetChange(row.slot, sheetName)
-                          }
-                        >
-                          <SelectTrigger className="h-9 max-lg:h-10">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value={allValue}>Tất cả nguồn</SelectItem>
-                            {sheetOptions.map((sheet) => (
-                              <SelectItem key={sheet} value={sheet}>
-                                {sheet}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <Label className="text-xs">Thư mục ảnh</Label>
-                        <Select
-                          value={row.randomScopeFolder}
-                          onValueChange={(folder) =>
-                            onRandomScopeFolderChange(row.slot, folder)
-                          }
-                        >
-                          <SelectTrigger className="h-9 max-lg:h-10">
-                            <SelectValue placeholder="Chọn thư mục / nhóm ảnh" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value={allValue}>Tất cả thư mục</SelectItem>
-                            {row.randomImageFolderOptions.map((folder) => (
-                              <SelectItem key={folder} value={folder}>
-                                {folder}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                  ) : null}
-                </BindSlotRow>
-              ))}
-            </div>
-          ) : null}
-
-          {showTextListPanel && textSlots[0] ? (
-            <TextListBindingPanel
-              selectedSlot={textSlots[0].slot}
-              fieldOptions={textListFieldOptions}
-              entityPool={previewEntityPool}
-              prioritizePartnerDefault={prioritizePartner}
-              onApply={onTextListApply}
-            />
-          ) : null}
-
-          {showTextRewrite ? (
-            <div className="flex flex-col gap-2">
-              <TextRewritePanel
-                selectedSlotId={rewriteSlotId}
-                currentText={rewriteCurrentText}
-                busy={rewriteBusy}
-                onRewrite={onRewrite}
+          {textSlots.map((row, index) => (
+            <BindSlotRow key={row.slot.slotId} title={`${index + 1}. ${row.label}`}>
+              <BindingFieldPicker
+                value={row.bindingValue}
+                options={row.pickerOptions}
+                onSelect={(value) => onTextBindingChange(row.slot, value)}
               />
-              {showAiCaption ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="w-full"
-                  onClick={onAiCaption}
-                  disabled={captionBusy || captionDisabled}
-                >
-                  {captionBusy ? (
-                    <Loader2 className="mr-1 size-3 animate-spin" />
-                  ) : (
-                    <Wand2 className="mr-1 size-3" />
-                  )}
-                  AI viết chú thích
-                </Button>
-              ) : null}
+              <BindSlotSourcePanel
+                slots={[row.slot]}
+                title="Nguồn dữ liệu"
+                description="Cấu hình này áp dụng cho trường đang chọn trong cụm."
+                renderSourceControls={renderSourceControls}
+                sourceConfig={slotSourceConfig(row.slot)}
+              />
+            </BindSlotRow>
+          ))}
+        </div>
+      ) : null}
+
+      {imageSlots.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          {imageSlots.length > 1 ? (
+            <div className="text-xs font-medium text-muted-foreground">
+              Khung ảnh ({imageSlots.length})
             </div>
           ) : null}
+          {imageSlots.map((row, index) => (
+            <BindSlotRow key={row.slot.slotId} title={`${index + 1}. ${row.label}`}>
+              <BindingFieldPicker
+                value={row.selectValue}
+                options={row.pickerOptions}
+                placeholder="Chọn trường ảnh"
+                onSelect={(value) => onImageBindingChange(row.slot, value)}
+              />
+              {row.showRandomScope ? (
+                <div className="grid gap-2 rounded-md border bg-background/70 p-2">
+                  <div>
+                    <Label className="text-xs">Nguồn ảnh</Label>
+                    <Select
+                      value={row.randomScopeSheet}
+                      onValueChange={(sheetName) => onRandomScopeSheetChange(row.slot, sheetName)}
+                    >
+                      <SelectTrigger className="h-9 max-lg:h-10">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={allValue}>Tất cả nguồn</SelectItem>
+                        {sheetOptions.map((sheet) => (
+                          <SelectItem key={sheet} value={sheet}>
+                            {sheet}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-xs">Thư mục ảnh</Label>
+                    <Select
+                      value={row.randomScopeFolder}
+                      onValueChange={(folder) => onRandomScopeFolderChange(row.slot, folder)}
+                    >
+                      <SelectTrigger className="h-9 max-lg:h-10">
+                        <SelectValue placeholder="Chọn thư mục / nhóm ảnh" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={allValue}>Tất cả thư mục</SelectItem>
+                        {row.randomImageFolderOptions.map((folder) => (
+                          <SelectItem key={folder} value={folder}>
+                            {folder}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              ) : null}
+            </BindSlotRow>
+          ))}
+        </div>
+      ) : null}
 
-          {hasBindingsToClear ? (
-            <Button size="sm" variant="outline" className="w-full" onClick={onClearBindings}>
-              <Link2Off className="mr-1 size-3" /> Xoá liên kết đã chọn
+      {showTextListPanel && textSlots[0] ? (
+        <TextListBindingPanel
+          selectedSlot={textSlots[0].slot}
+          fieldOptions={textListFieldOptions}
+          entityPool={previewEntityPool}
+          prioritizePartnerDefault={prioritizePartner}
+          onApply={onTextListApply}
+        />
+      ) : null}
+
+      {showTextRewrite ? (
+        <div className="flex flex-col gap-2">
+          <TextRewritePanel
+            selectedSlotId={rewriteSlotId}
+            currentText={rewriteCurrentText}
+            busy={rewriteBusy}
+            onRewrite={onRewrite}
+          />
+          {showAiCaption ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-full"
+              onClick={onAiCaption}
+              disabled={captionBusy || captionDisabled}
+            >
+              {captionBusy ? (
+                <Loader2 className="mr-1 size-3 animate-spin" />
+              ) : (
+                <Wand2 className="mr-1 size-3" />
+              )}
+              AI viết chú thích
             </Button>
           ) : null}
-        </>
+        </div>
+      ) : null}
+
+      {hasBindingsToClear ? (
+        <Button size="sm" variant="outline" className="w-full" onClick={onClearBindings}>
+          <Link2Off className="mr-1 size-3" /> Xoá liên kết đã chọn
+        </Button>
       ) : null}
     </div>
   );
@@ -524,6 +529,7 @@ function BindPanelBody(props: Props) {
 
 export function GenerateBindPanel(props: Props) {
   const showActions = !props.selectedSlotsEmpty && !props.selectedBindableEmpty;
+  const visibleTextRows = props.textSlots.filter((row) => row.slot.bindingPath !== "" || true);
 
   if (props.bare) {
     return (

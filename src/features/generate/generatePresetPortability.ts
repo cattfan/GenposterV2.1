@@ -1,12 +1,17 @@
 import { nanoid } from "nanoid";
 import type {
+  FontAsset,
   GenPosterPortableBundleV1,
   GenerateBindingPreset,
   PackTemplate,
   PageTemplate,
+  PortableFontAsset,
+  Slot,
 } from "@/models";
 import { formatImportedTemplateName } from "@/lib/templateNames";
-import { db } from "@/storage/db";
+import { db, saveBlob } from "@/storage/db";
+import { FONTS } from "@/features/editor/fonts";
+import { resolveImageSrc, makeIdbSrc } from "@/storage/imageSrc";
 
 export function safePortableFileName(name: string) {
   const cleaned = name
@@ -40,10 +45,157 @@ export async function readPortableBundleFile(file: File): Promise<GenPosterPorta
   return raw as GenPosterPortableBundleV1;
 }
 
-export function buildPackTemplateBundle(
+const GOOGLE_FONT_FAMILIES = new Set(FONTS.map((font) => font.family));
+
+/** Quét tất cả fontFamily xuất hiện trong slots + textRuns của 1 page. */
+function collectFontFamiliesFromSlots(slots: Slot[]): Set<string> {
+  const families = new Set<string>();
+  const push = (value: unknown) => {
+    if (typeof value === "string" && value.trim()) families.add(value.trim());
+  };
+  for (const slot of slots) {
+    push(slot.style?.fontFamily);
+    if (Array.isArray(slot.textRuns)) {
+      for (const run of slot.textRuns) {
+        push(run.style?.fontFamily);
+      }
+    }
+  }
+  return families;
+}
+
+function collectFontFamiliesFromPages(pages: PageTemplate[]): Set<string> {
+  const families = new Set<string>();
+  for (const page of pages) {
+    for (const family of collectFontFamiliesFromSlots(page.slots)) {
+      families.add(family);
+    }
+  }
+  return families;
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  const buffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(
+      null,
+      Array.from(bytes.subarray(i, i + chunkSize)),
+    );
+  }
+  const base64 = typeof btoa !== "undefined"
+    ? btoa(binary)
+    : Buffer.from(binary, "binary").toString("base64");
+  const mime = blob.type || "font/woff2";
+  return `data:${mime};base64,${base64}`;
+}
+
+function dataUrlToBlob(dataUrl: string): Blob {
+  const match = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(dataUrl);
+  if (!match) throw new Error("Font dataUrl không hợp lệ");
+  const mime = match[1] || "application/octet-stream";
+  const isBase64 = !!match[2];
+  const payload = match[3] ?? "";
+  if (isBase64) {
+    const binary = typeof atob !== "undefined"
+      ? atob(payload)
+      : Buffer.from(payload, "base64").toString("binary");
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  }
+  return new Blob([decodeURIComponent(payload)], { type: mime });
+}
+
+/**
+ * Tải các font upload custom được dùng trong `pages` (loại các font có sẵn ở
+ * Google catalogue) và embed dạng base64 vào bundle. Cross-machine sẽ tự
+ * restore về `db.fontAssets` khi import.
+ */
+async function collectPortableFontAssets(pages: PageTemplate[]): Promise<PortableFontAsset[]> {
+  if (pages.length === 0) return [];
+  const families = collectFontFamiliesFromPages(pages);
+  const customFamilies = Array.from(families).filter(
+    (family) => !GOOGLE_FONT_FAMILIES.has(family),
+  );
+  if (customFamilies.length === 0) return [];
+
+  const allFontAssets = (await db.fontAssets.toArray()) as FontAsset[];
+  const byFamily = new Map<string, FontAsset>();
+  for (const fontAsset of allFontAssets) {
+    if (!byFamily.has(fontAsset.family)) byFamily.set(fontAsset.family, fontAsset);
+  }
+
+  const portable: PortableFontAsset[] = [];
+  for (const family of customFamilies) {
+    const fontAsset = byFamily.get(family);
+    if (!fontAsset) continue;
+    const url = resolveImageSrc(fontAsset.sourceValue ?? null);
+    if (!url) continue;
+    try {
+      const response = await fetch(url);
+      if (!response.ok) continue;
+      const blob = await response.blob();
+      const dataUrl = await blobToDataUrl(blob);
+      portable.push({
+        fontAssetId: fontAsset.fontAssetId,
+        family: fontAsset.family,
+        weight: fontAsset.weight,
+        style: fontAsset.style,
+        format: fontAsset.format,
+        dataUrl,
+        createdAt: fontAsset.createdAt,
+        updatedAt: fontAsset.updatedAt,
+      });
+    } catch {
+      // skip font không fetch được — sẽ thành missingFont khi import
+    }
+  }
+  return portable;
+}
+
+/** Restore font upload custom: nếu chưa có family trong db → upload blob + put record. */
+async function restorePortableFontAssets(
+  fontAssets: PortableFontAsset[] | undefined,
+): Promise<number> {
+  if (!fontAssets || fontAssets.length === 0) return 0;
+  const existing = (await db.fontAssets.toArray()) as FontAsset[];
+  const existingFamilies = new Set(existing.map((fontAsset) => fontAsset.family));
+
+  let added = 0;
+  for (const portable of fontAssets) {
+    if (existingFamilies.has(portable.family)) continue;
+    try {
+      const blob = dataUrlToBlob(portable.dataUrl);
+      const blobKey = await saveBlob(blob);
+      const record: FontAsset = {
+        fontAssetId: nanoid(),
+        family: portable.family,
+        weight: portable.weight,
+        style: portable.style,
+        format: portable.format,
+        blobKey,
+        sourceValue: makeIdbSrc(blobKey),
+        createdAt: portable.createdAt ?? Date.now(),
+        updatedAt: Date.now(),
+      };
+      await db.fontAssets.put(record);
+      existingFamilies.add(record.family);
+      added += 1;
+    } catch {
+      // skip font hỏng dataUrl
+    }
+  }
+  return added;
+}
+
+export async function buildPackTemplateBundle(
   pack: PackTemplate,
   pages: PageTemplate[],
-): GenPosterPortableBundleV1 {
+): Promise<GenPosterPortableBundleV1> {
+  const fontAssets = await collectPortableFontAssets(pages);
   return {
     app: "genposter",
     kind: "pack-template",
@@ -51,14 +203,16 @@ export function buildPackTemplateBundle(
     exportedAt: Date.now(),
     packTemplates: [pack],
     pageTemplates: pages,
+    fontAssets: fontAssets.length > 0 ? fontAssets : undefined,
   };
 }
 
-export function buildGeneratePresetBundle(
+export async function buildGeneratePresetBundle(
   preset: GenerateBindingPreset,
   pack?: PackTemplate,
   pages: PageTemplate[] = [],
-): GenPosterPortableBundleV1 {
+): Promise<GenPosterPortableBundleV1> {
+  const fontAssets = await collectPortableFontAssets(pages);
   return {
     app: "genposter",
     kind: "generate-preset",
@@ -67,6 +221,7 @@ export function buildGeneratePresetBundle(
     packTemplates: pack ? [pack] : [],
     pageTemplates: pages,
     generatePresets: [preset],
+    fontAssets: fontAssets.length > 0 ? fontAssets : undefined,
   };
 }
 
@@ -185,6 +340,11 @@ export async function importPortableBundle(bundle: GenPosterPortableBundleV1) {
   const pageIdMap = new Map<string, string>();
   const packIdMap = new Map<string, string>();
 
+  // Restore font upload custom TRƯỚC khi import pages — để các font reference
+  // trong slot có sẵn FontAsset record tương ứng. Nếu font portable hỏng
+  // dataUrl, restore sẽ skip → fontFamily đó vào danh sách missingFonts ở dưới.
+  const addedFontCount = await restorePortableFontAssets(bundle.fontAssets);
+
   const pages = (bundle.pageTemplates ?? []).map((page) =>
     clonePageForImport(page, pageIdMap, existingPageIds, usedPageIds),
   );
@@ -205,5 +365,17 @@ export async function importPortableBundle(bundle: GenPosterPortableBundleV1) {
     },
   );
 
-  return { pages, packs, presets };
+  // Quét fontFamily còn thiếu sau khi đã restore — để caller hiển thị toast
+  // cảnh báo. Family trong Google catalogue mặc định coi là có (route đã load
+  // extended fonts toàn cục). Chỉ cảnh báo những family không có ở đâu cả.
+  const referencedFamilies = collectFontFamiliesFromPages(pages);
+  const installedFontAssets = (await db.fontAssets.toArray()) as FontAsset[];
+  const installedFamilies = new Set(installedFontAssets.map((fontAsset) => fontAsset.family));
+  const missingFonts = Array.from(referencedFamilies).filter((family) => {
+    if (GOOGLE_FONT_FAMILIES.has(family)) return false;
+    if (installedFamilies.has(family)) return false;
+    return true;
+  });
+
+  return { pages, packs, presets, missingFonts, addedFontCount };
 }

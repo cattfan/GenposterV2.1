@@ -20,6 +20,7 @@ import { initThemeOnce, useTheme, type ThemeMode } from "@/hooks/useTheme";
 import { GlobalCommandPaletteHost } from "@/components/CommandPalette";
 import { ShortcutsDialog, useShortcutsDialogHotkey } from "@/components/ux";
 import { getSettings } from "@/storage/settings";
+import { ensureExtendedFontsLoaded } from "@/features/editor/fonts";
 
 const THEME_STORAGE_KEY = "cpg_theme_mode";
 
@@ -185,6 +186,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     initThemeOnce();
     // If localStorage is empty for theme, fall back to AppSettings.theme stored in DB.
     void hydrateThemeFromSettings();
+    // Inject Google Fonts extended catalogue ngay khi shell mount, không chỉ
+    // ở route Editor. Cần thiết để Pack/Generate/Templates preview render
+    // đúng font khi import JSON từ máy khác.
+    ensureExtendedFontsLoaded();
   }, []);
 
   // Load persisted collapsed state after mount (client-only).

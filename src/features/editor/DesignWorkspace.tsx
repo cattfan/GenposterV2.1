@@ -195,6 +195,10 @@ const ICON_PICKER_RESULT_LIMIT = 360;
 const LETTER_SPACING_MIN = -5;
 const LETTER_SPACING_MAX = 32;
 const LETTER_SPACING_STEP = 0.5;
+const LINE_HEIGHT_MIN = 0.8;
+const LINE_HEIGHT_MAX = 3;
+const LINE_HEIGHT_STEP = 0.05;
+const LINE_HEIGHT_DEFAULT = 1.2;
 const INSPECTOR_OPEN_KEY = "ux:inspector:open";
 
 function readInspectorOpenPreference(): boolean {
@@ -3616,6 +3620,12 @@ export function DesignWorkspace({
                                 updateElementStyle(primary.elementId, { letterSpacing: value })
                               }
                             />
+                            <LineHeightControl
+                              value={Number(primary.style?.lineHeight ?? LINE_HEIGHT_DEFAULT)}
+                              onChange={(value) =>
+                                updateElementStyle(primary.elementId, { lineHeight: value })
+                              }
+                            />
                             <div className="flex flex-col gap-3 rounded-lg border bg-muted/20 p-3">
                               <div className="flex items-center justify-between gap-2">
                                 <Label className="text-xs">Viền chữ</Label>
@@ -4432,6 +4442,53 @@ function LetterSpacingControl({
         suffix="px"
         precision={1}
       />
+    </div>
+  );
+}
+
+function LineHeightControl({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const displayValue = clampInspectorNumber(value, LINE_HEIGHT_MIN, LINE_HEIGHT_MAX);
+  const updateValue = (next: number) =>
+    onChange(clampInspectorNumber(next, LINE_HEIGHT_MIN, LINE_HEIGHT_MAX));
+
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border bg-muted/20 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <Label className="text-xs">Giãn dòng</Label>
+        <span className="text-[11px] tabular-nums text-muted-foreground">
+          {displayValue.toFixed(2)}
+        </span>
+      </div>
+      <Slider
+        value={[displayValue]}
+        min={LINE_HEIGHT_MIN}
+        max={LINE_HEIGHT_MAX}
+        step={LINE_HEIGHT_STEP}
+        onValueChange={([next]) => updateValue(next)}
+      />
+      <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+        <NumberField
+          label="Hệ số"
+          value={displayValue}
+          onChange={updateValue}
+          suffix=""
+          precision={2}
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8"
+          onClick={() => updateValue(LINE_HEIGHT_DEFAULT)}
+        >
+          Về 1.2
+        </Button>
+      </div>
     </div>
   );
 }

@@ -245,6 +245,7 @@ export function GeneratePackWorkspace(props: GeneratePackWorkspaceProps) {
   const bindPanel = (
     <GenerateBindPanel
       selectedSlotCount={selectedSlotCount}
+      selectedSlots={selectedSlots}
       selectedSlotsEmpty={selectedSlots.length === 0}
       selectedBindableEmpty={selectedBindableSlots.length === 0}
       panelPreviewEntity={panelPreviewEntity}

@@ -1681,7 +1681,7 @@ export function PackTabContent({
 
   const exportPreset = async (preset: GenerateBindingPreset) => {
     const { pack, pages } = getPresetPackPages(preset);
-    const bundle = buildGeneratePresetBundle(preset, pack, pages);
+    const bundle = await buildGeneratePresetBundle(preset, pack, pages);
     const saved = await exportPresetJsonToDataServer({
       data: {
         fileName: `${safePortableFileName(formatTemplateDisplayName(preset.name, "khuon"))}-generate-preset.json`,
@@ -1974,6 +1974,14 @@ export function PackTabContent({
       toast.success(
         `Đã nhập ${result.packs.length} bộ mẫu, ${result.pages.length} trang, ${result.presets.length} khuôn`,
       );
+      if (result.addedFontCount > 0) {
+        toast.success(`Đã cài thêm ${result.addedFontCount} font tuỳ chỉnh đi kèm`);
+      }
+      if (result.missingFonts.length > 0) {
+        toast.warning(
+          `Thiếu ${result.missingFonts.length} font: ${result.missingFonts.join(", ")} — chữ sẽ dùng font thay thế.`,
+        );
+      }
     } catch (error) {
       toast.error("Không thể nhập: " + (error instanceof Error ? error.message : String(error)));
     }
@@ -2422,7 +2430,9 @@ export function PackTabContent({
 
   const bindPanelTextRows = useMemo<BindPanelTextSlotRow[]>(
     () =>
-      sortedSelectedTextSlots.map((slot, index) => {
+      (effectiveActive?.slots ?? [])
+        .filter((slot) => getSlotBindMode(slot) === "text")
+        .map((slot, index) => {
         const sourceEntities = buildSourceFilteredEntities(entities, slotSourceConfig(slot));
         const previewEntityForSlot = effectiveActive
           ? resolvePreviewEntityForSlot({
@@ -2452,7 +2462,7 @@ export function PackTabContent({
         };
       }),
     [
-      sortedSelectedTextSlots,
+      effectiveActive,
       clusterSourceSlotIds,
       textSlotLabel,
       selectedSlotStatusLabel,
@@ -2460,7 +2470,6 @@ export function PackTabContent({
       textBindingOptionsForSlot,
       textSlotFieldBindingValue,
       entities,
-      effectiveActive,
       previewSlotItems,
       previewEntity,
     ],
@@ -2468,7 +2477,9 @@ export function PackTabContent({
 
   const bindPanelImageRows = useMemo<BindPanelImageSlotRow[]>(
     () =>
-      sortedSelectedImageSlots.map((slot, index) => {
+      (effectiveActive?.slots ?? [])
+        .filter((slot) => getSlotBindMode(slot) === "image")
+        .map((slot, index) => {
         const rawValue = imageSlotBindingValue(slot);
         const hasLinkedText = imageSlotHasLinkedText(slot);
         const value =
@@ -2506,7 +2517,7 @@ export function PackTabContent({
         };
       }),
     [
-      sortedSelectedImageSlots,
+      effectiveActive,
       imageSlotBindingValue,
       imageSlotHasLinkedText,
       imageSlotLabel,
@@ -2516,7 +2527,6 @@ export function PackTabContent({
       slotSourceConfig,
       entities,
       assets,
-      effectiveActive,
       previewSlotItems,
       previewEntity,
     ],
