@@ -55,12 +55,34 @@ export interface CaptionDraft {
 
 const SEO_CORE_HASHTAGS = ["#riviudalat", "#dalat", "#dalatreview"];
 
-function topNames(ctx: BundleContext, max: number): string {
-  return ctx.entities
-    .map((e) => e.name)
-    .filter((n): n is string => !!n && n.trim().length > 0)
-    .slice(0, max)
-    .join(", ");
+/** Chọn 1 phần tử trong pool theo seed deterministic. */
+function pickFromPool<T>(pool: T[], seed: string): T {
+  const idx = djb2Hash(seed) % pool.length;
+  return pool[idx];
+}
+
+/**
+ * Diễn tả mood của bundle dựa trên category/style — dùng trong fallback body
+ * thay cho việc liệt kê tên đối tác. Đảm bảo caption tự nhiên, không bám tên.
+ */
+function describeMood(ctx: BundleContext): string {
+  const blob = [...ctx.mainCategories, ...ctx.styles].join(" ").toLowerCase();
+  const phrases: string[] = [];
+  if (blob.includes("cafe") || blob.includes("coffee")) phrases.push("cafe view chill");
+  if (blob.includes("an") || blob.includes("quan_an") || blob.includes("food")) {
+    phrases.push("món ngon local");
+  }
+  if (blob.includes("homestay") || blob.includes("resort") || blob.includes("villa")) {
+    phrases.push("homestay xinh");
+  }
+  if (blob.includes("checkin") || blob.includes("check-in") || blob.includes("spot")) {
+    phrases.push("spot sống ảo");
+  }
+  if (blob.includes("spa") || blob.includes("massage")) phrases.push("góc thư giãn");
+  if (phrases.length === 0) return "đủ vibe Đà Lạt";
+  if (phrases.length === 1) return phrases[0];
+  if (phrases.length === 2) return phrases.join(" với ");
+  return phrases.slice(0, -1).join(", ") + " và " + phrases[phrases.length - 1];
 }
 
 // Quy ước format chặt (xem [exportArtifacts.ts]):
@@ -84,13 +106,32 @@ export const CAPTION_TONES: CaptionTone[] = [
       "CHỐT LIỀN TAY NÀO CẢ NHÀ ƠI 🫣",
       "MÊ QUÁ ĐI MÀ, SAVE LẸ KẺO TIẾC 🥺",
       "AI ĐI ĐÀ LẠT MÀ CHƯA BIẾT LIST NÀY THÌ UỔNG LẮM 🤧",
+      "UI TRỜI ƠI XỊN ĐẾN MỨC NÀY LUÔN HẢ 🫣",
+      "THỀ LUÔN, ĐI XONG VỀ NHỚ ĐÀ LẠT QUÁ 🥺",
+      "CẢ NHÀ ƠI NGHE EM KỂ NÈ, MÊ LẮM 🤧",
+      "NGỒI VIẾT CAPTION MÀ TIM CÒN RUNG 🫣",
+      "ĐI VỀ KHÔNG NÓI THÊM CÂU NÀO, CHỈ MUỐN QUAY LẠI 🥺",
+      "SAVE NGAY KẺO LẦN SAU LẠI QUÊN HU HU 🤧",
+      "NHƯ THẾ NÀY CÒN GÌ ĐỂ CHÊ NỮA TRỜI 🫣",
+      "EM XIN PHÉP MÊ TỪ ĐẦU TỚI CUỐI 🥺",
+      "MUỐN GÓI HẾT ĐÀ LẠT MANG VỀ NHÀ 🤧",
     ],
     fallbackBody: (ctx) => {
-      const names = topNames(ctx, 3);
-      const intro = names
-        ? `Vừa đi về thấy tim run run với ${names}.`
-        : `Vừa đi về thấy tim run run với danh sách ăn uống Đà Lạt này.`;
-      return `${intro} ${ctx.entityCount > 0 ? `${ctx.entityCount} điểm chất ` : "Cả list chất "}hết gu, lưu liền kẻo tiếc. Save về rồi rủ hội đi liền nha cả nhà ơi.`;
+      const mood = describeMood(ctx);
+      const seed = `chaotic|${ctx.packName}|${ctx.bundleLabel}`;
+      const intros = [
+        `Vừa đi về thấy tim còn run vì ${mood} ơi là chill.`,
+        `Đà Lạt lần này em mê thật, ${mood} đúng kiểu em thích.`,
+        `Vừa tỉnh dậy đã nhớ ${mood} rồi cả nhà ạ.`,
+        `Mới đi vài hôm mà còn đứng hình vì ${mood} đẹp xỉu.`,
+      ];
+      const outros = [
+        "Save nhanh kẻo lần sau lại không kịp lưu nha cả nhà ơi.",
+        "Lưu liền rồi rủ team xách balo đi cuối tuần thôi.",
+        "Em chốt là ai cũng nên thử ít nhất một lần đi cả nhà.",
+        "Save lại để lần sau khỏi đắn đo chọn đi đâu nữa.",
+      ];
+      return `${pickFromPool(intros, seed + "|i")} ${pickFromPool(outros, seed + "|o")}`;
     },
     fallbackTrailingTags: ["#chayphodalat", "#dalatcheckin"],
   },
@@ -100,19 +141,38 @@ export const CAPTION_TONES: CaptionTone[] = [
     styleHint:
       "Giọng chậm rãi, thơ. Hook UPPERCASE nhưng giàu cảm xúc + 1 emoji thiên nhiên (🍂 🌿 ☁️). " +
       "Body 2-3 câu nhịp đều, dùng nhiều từ gợi cảm giác (gió, sương, ấm, lặng). " +
-      "Có 1 SEO keyword Đà Lạt (du lịch Đà Lạt / cafe Đà Lạt)." +
+      "Có 1 SEO keyword Đà Lạt (du lịch Đà Lạt / cafe Đà Lạt). KHÔNG nhắc tên quán/đối tác." +
       STYLE_RULES,
     fallbackHooks: [
       "VÀI NGÀY CHẬM RÃI VÀ NHỮNG BẢN TÌNH CA GIÓ 🍂",
       "ĐÀ LẠT — NƠI TA THẢ MÌNH VÀO SƯƠNG ☁️",
       "MỘT CHUYẾN ĐI ĐỂ NGHE LÒNG MÌNH THỞ NHẸ 🌿",
+      "SÁNG SƯƠNG, CHIỀU GIÓ, ĐÊM LÒNG NHẸ TÊNH ☁️",
+      "ĐI ĐỂ THẤY THỜI GIAN TRÔI CHẬM HƠN MỘT NHỊP 🍂",
+      "ĐÀ LẠT VẪN LẶNG LẼ NHƯ TA NHỚ NGÀY ĐẦU 🌿",
+      "CÓ NHỮNG NGÀY CHỈ MUỐN NGỒI YÊN NGHE GIÓ KỂ ☁️",
+      "GIỮA NHỊP THÀNH PHỐ, MỘT KHOẢNG LẶNG ĐÀ LẠT 🍂",
+      "MƯA NHẸ, NẮNG NHẸ, LÒNG CŨNG NHẸ TÊNH 🌿",
+      "ĐI MỘT VÒNG, TRỞ VỀ BÌNH YÊN HƠN MỘT CHÚT ☁️",
+      "GÓI MÙA THU ĐÀ LẠT VÀO HÀNH LÝ MANG VỀ 🍂",
+      "MỘT TÁCH CAFE, MỘT KHUNG CỬA, MỘT BUỔI CHIỀU 🌿",
     ],
     fallbackBody: (ctx) => {
-      const names = topNames(ctx, 3);
-      const intro = names
-        ? `Cảm giác vừa về vẫn còn nguyên nồng ấm từ ${names}.`
-        : `Cảm giác vừa về vẫn còn nguyên nồng ấm Đà Lạt.`;
-      return `${intro} Danh sách dành cho ai muốn sống thật chậm, thả mình vào quán cóc, lạc giữa nhịp nhẹ Đà Lạt. Lưu mang theo cho lần kế.`;
+      const mood = describeMood(ctx);
+      const seed = `slow|${ctx.packName}|${ctx.bundleLabel}`;
+      const intros = [
+        `Đà Lạt lần này có ${mood}, đủ để mình ngồi lặng nhìn sương trôi qua khung cửa.`,
+        `Sáng se lạnh, chiều nắng vàng — Đà Lạt vẫn dịu dàng với ${mood} quen thuộc.`,
+        `Cafe Đà Lạt giữa làn sương, ${mood} chậm rãi như một bài hát cũ.`,
+        `Có những ngày Đà Lạt chỉ cần thế: ${mood} và một tách trà ấm trên tay.`,
+      ];
+      const outros = [
+        "Lưu lại cho lần kế, khi cần một khoảng lặng giữa nhịp sống.",
+        "Save về để nhớ rằng nơi này luôn chờ mình quay lại.",
+        "Mỗi lần xem lại là một lần lòng nhẹ thêm chút nữa.",
+        "Du lịch Đà Lạt không cần vội, chỉ cần lưu sẵn là đủ.",
+      ];
+      return `${pickFromPool(intros, seed + "|i")} ${pickFromPool(outros, seed + "|o")}`;
     },
     fallbackTrailingTags: ["#langman", "#chuyendiduyen"],
   },
@@ -122,20 +182,44 @@ export const CAPTION_TONES: CaptionTone[] = [
     styleHint:
       "Giọng hướng dẫn thực dụng, thân thiện. Hook UPPERCASE + emoji 😎 hoặc 📌. " +
       "Body nêu rõ đối tượng phù hợp (cặp đôi/nhóm bạn/lần đầu), nhắc 1 lưu ý thực tế. " +
-      "Có 1-2 SEO keyword Đà Lạt (cẩm nang du lịch Đà Lạt / ăn uống Đà Lạt). Liệt kê 2-4 tên." +
+      "Có 1-2 SEO keyword Đà Lạt (cẩm nang du lịch Đà Lạt / ăn uống Đà Lạt). KHÔNG nhắc tên quán/đối tác." +
       STYLE_RULES,
     fallbackHooks: [
       "LƯU LẠI ĐỂ KHÔNG LỠ MÓN NGON ĐÀ LẠT NHA 😎",
       "CẨM NANG ĐÀ LẠT ĐẦY ĐỦ — SAVE VỀ DÙNG DẦN 📌",
       "ĐI ĐÀ LẠT LẦN ĐẦU? LIST NÀY DÀNH CHO BẠN 📌",
+      "CHECKLIST ĐÀ LẠT 2 NGÀY 1 ĐÊM ĐÂY NÈ 😎",
+      "LƯU NGAY KẺO LẦN SAU LẠI HỎI ĐI ĐÂU 📌",
+      "CẨM NANG NGẮN GỌN CHO CHUYẾN ĐI SẮP TỚI 😎",
+      "SAVE LẠI ĐỂ LÊN LỊCH CUỐI TUẦN NHANH 📌",
+      "LIST CHILL CUỐI TUẦN ĐÀ LẠT — DÙ ĐI MỘT MÌNH HAY ĐI ĐÔI 😎",
+      "ĐÀ LẠT 2N1Đ TIẾT KIỆM MÀ ĐỦ VIBE 📌",
+      "LƯU LIỀN CHO CHUYẾN DU LỊCH ĐÀ LẠT KẾ TIẾP 😎",
+      "CẨM NANG ĐÀ LẠT — KHÔNG LO LẠC ĐƯỜNG 📌",
+      "CHECKLIST CHO TEAM CUỒNG XÊ DỊCH 😎",
     ],
     fallbackBody: (ctx) => {
-      const names = topNames(ctx, 4);
-      const targets = ctx.entityCount >= 4 ? "nhóm bạn hay cặp đôi đi lần đầu" : "ai sắp đi Đà Lạt";
-      const detailLine = names
-        ? `Cẩm nang du lịch Đà Lạt mình gom cho ${targets}: ${names}.`
-        : `Cẩm nang du lịch Đà Lạt mình gom cho ${targets}.`;
-      return `${detailLine} Các điểm đều có giờ cụ thể, vừa có cảnh đẹp vừa có quán ăn ngon. Lưu về dùng dần đi ạ.`;
+      const mood = describeMood(ctx);
+      const seed = `practical|${ctx.packName}|${ctx.bundleLabel}`;
+      const targets = [
+        "nhóm bạn lần đầu đi Đà Lạt",
+        "cặp đôi muốn chuyến đi nhẹ nhàng",
+        "team đi cuối tuần ngắn ngày",
+        "ai muốn checklist đầy đủ trước khi xếp lịch",
+      ];
+      const intros = [
+        `Cẩm nang du lịch Đà Lạt mình gom cho ${pickFromPool(targets, seed + "|t")}, có ${mood}.`,
+        `Lưu list này đi: ${mood}, mix đủ để cẩm nang du lịch Đà Lạt khỏi lo trùng lặp.`,
+        `Mình tổng hợp ăn uống Đà Lạt + chỗ chill cho ${pickFromPool(targets, seed + "|t2")}.`,
+        `Cẩm nang du lịch Đà Lạt rút gọn: ${mood}, dễ áp lịch cho 2 ngày 1 đêm.`,
+      ];
+      const outros = [
+        "Save về để khi cần là có liền, không phải search lại.",
+        "Lưu lại rồi rủ team xếp lịch đi luôn cuối tuần này.",
+        "Đi sớm chút để đỡ đông, kèm áo ấm vì Đà Lạt hay se lạnh tối.",
+        "Save xong gửi cho người sắp đi để khỏi tốn công gom lại.",
+      ];
+      return `${pickFromPool(intros, seed + "|i")} ${pickFromPool(outros, seed + "|o")}`;
     },
     fallbackTrailingTags: ["#camnangdalat", "#checkindalat"],
   },
@@ -145,18 +229,38 @@ export const CAPTION_TONES: CaptionTone[] = [
     styleHint:
       "Giọng hype editorial — hook UPPERCASE mạnh mẽ, gây tò mò, không emoji. " +
       "Body có chất 'reveal', dùng 'hóa ra', 'không ngờ', 'chất hết gu'. " +
-      "Có 1 SEO keyword Đà Lạt. Nêu 3-5 tên nếu có." +
+      "Có 1 SEO keyword Đà Lạt. KHÔNG nhắc tên quán/đối tác." +
       STYLE_RULES,
     fallbackHooks: [
       "ĐÀ LẠT HÓA RA CÓ CẢ LIST SPOT XỊN MLEM VẬY",
       "KHÔNG NGỜ ĐÀ LẠT CÒN GIẤU NHỮNG CHỖ NÀY",
       "LƯU NGAY LIST ĐÀ LẠT KẺO ĐI VỀ LẠI TIẾC",
+      "HÓA RA CHECK-IN ĐÀ LẠT XỊN HƠN MÌNH NGHĨ",
+      "ĐÀ LẠT 2026 CHẤT HẾT GU CHƯA TỪNG CÓ",
+      "NHỮNG GÓC ĐÀ LẠT KHÔNG XUẤT HIỆN TRONG TOUR",
+      "ĐI ĐÀ LẠT MỘT VÒNG XONG CHỈ MUỐN VIẾT BÀI",
+      "CHƯA KỂ HẾT VỀ ĐÀ LẠT TRONG MỘT CHUYẾN",
+      "ĐÀ LẠT SAU MƯA CÒN ĐẸP HƠN CẢ POSTCARD",
+      "DU LỊCH ĐÀ LẠT XỨNG ĐÁNG MỖI GIÂY ĐƯỢC GHI",
+      "MỘT CHUYẾN ĐI MỞ KHOÁ BAO NHIÊU GÓC LẠ",
+      "ĐÀ LẠT THẬT SỰ CHO MÌNH NHIỀU HƠN MONG ĐỢI",
     ],
     fallbackBody: (ctx) => {
-      const names = topNames(ctx, 4);
-      return names
-        ? `Em thề những địa điểm check-in Đà Lạt này rất đáng để lưu. Gồm ${names}. Dùng cẩm nang này, lịch trình du lịch Đà Lạt sẽ chất hơn nhiều.`
-        : `Em thề lịch trình du lịch Đà Lạt này rất đáng để lưu. Mix điểm check-in, ăn uống, nghỉ ngơi cho chuyến đi không trôi giữa muôn vàn lựa chọn.`;
+      const mood = describeMood(ctx);
+      const seed = `excited|${ctx.packName}|${ctx.bundleLabel}`;
+      const intros = [
+        `Hóa ra check-in Đà Lạt còn nhiều ${mood} mình chưa từng kể.`,
+        `Không ngờ du lịch Đà Lạt lần này có ${mood} chất đến vậy.`,
+        `Chuyến đi xong mới biết Đà Lạt còn cả ${mood} đợi mình quay lại.`,
+        `Đà Lạt thật sự đầy bất ngờ với ${mood} không có trong tour quen.`,
+      ];
+      const outros = [
+        "Save lại để chuyến sau đỡ phải nghĩ đi đâu, ăn gì.",
+        "Lưu nhanh kẻo lần sau lại hỏi ai có list không.",
+        "Mỗi điểm một vibe khác nhau, lưu để dùng dần.",
+        "Lịch trình du lịch Đà Lạt từ đây gọn gàng hẳn ra.",
+      ];
+      return `${pickFromPool(intros, seed + "|i")} ${pickFromPool(outros, seed + "|o")}`;
     },
     fallbackTrailingTags: ["#checkindalat", "#andalat"],
   },
@@ -166,19 +270,38 @@ export const CAPTION_TONES: CaptionTone[] = [
     styleHint:
       "Giọng bạn bè kể chuyện, gần gũi. Hook UPPERCASE dạng câu hỏi gợi mở. " +
       "Body 2-3 câu nhẹ, có 'mình', 'mọi người', tối đa 1 emoji nhẹ. " +
-      "Có 1 SEO keyword Đà Lạt. Tránh hype, tránh thơ." +
+      "Có 1 SEO keyword Đà Lạt. KHÔNG nhắc tên quán/đối tác. Tránh hype, tránh thơ." +
       STYLE_RULES,
     fallbackHooks: [
       "ĐI ĐÀ LẠT MÀ CHƯA BIẾT ĐI ĐÂU? SAVE LIỀN NÈ",
       "MÌNH MỚI ĐI VỀ, GOM XONG LIST NÀY CHO MỌI NGƯỜI",
       "BẠN NÀO SẮP ĐI ĐÀ LẠT THÌ XEM CÁI NÀY TRƯỚC NHA",
+      "AI ĐANG TÍNH ĐI ĐÀ LẠT GIƠ TAY LÊN NÀO",
+      "MÌNH KỂ NHANH CHO MỌI NGƯỜI VỀ ĐÀ LẠT",
+      "ĐÀ LẠT CUỐI TUẦN — ĐI HAY KHÔNG ĐI?",
+      "LIST NÀY MÌNH GOM CHO BẠN NÀO LƯỜI SEARCH",
+      "AI HỎI ĐÀ LẠT ĂN GÌ THÌ MÌNH ĐỂ ĐÂY NHA",
+      "NGƯỜI HỎI ĐÀ LẠT CÓ GÌ MỚI THÌ XEM CÁI NÀY",
+      "BẠN NÀO LẦN ĐẦU ĐI ĐÀ LẠT THÌ ĐỌC TRƯỚC NHA",
+      "MÌNH KỂ KIỂU GIẢN DỊ THÔI, MỌI NGƯỜI XEM NHẸ",
+      "ĐÀ LẠT VẪN VẬY, MÀ MỖI LẦN ĐI LẠI THÍCH",
     ],
     fallbackBody: (ctx) => {
-      const names = topNames(ctx, 3);
-      const intro = names
-        ? `Mình tổng hợp lịch trình du lịch Đà Lạt với ${names} cùng vài chỗ khác.`
-        : `Mình tổng hợp lịch trình du lịch Đà Lạt cho ai chưa biết đi đâu, ăn gì.`;
-      return `${intro} Ai đi rồi review giúp mình nhé, còn ai chưa đi thì save lại đi đã. Lúc cần là có liền.`;
+      const mood = describeMood(ctx);
+      const seed = `casual|${ctx.packName}|${ctx.bundleLabel}`;
+      const intros = [
+        `Mình mới đi Đà Lạt về, gom xong list ${mood} nên chia sẻ nhanh.`,
+        `Lịch trình du lịch Đà Lạt mình tổng hợp gồm ${mood}, đỡ mất công tìm.`,
+        `Đà Lạt lần này mình thấy có ${mood}, tiện kể lại cho ai sắp đi.`,
+        `Mình ngồi gom ${mood} cho ai đang tính lên Đà Lạt cuối tuần.`,
+      ];
+      const outros = [
+        "Ai đi rồi review lại giúp mình nhé, chưa đi thì save lại đã.",
+        "Save về dùng dần, lúc cần là có liền không phải search lại.",
+        "Mọi người thấy thiếu gì comment thêm cho mình bổ sung nha.",
+        "Lưu lại rồi rủ team đi cuối tuần luôn, chần chừ chi nữa.",
+      ];
+      return `${pickFromPool(intros, seed + "|i")} ${pickFromPool(outros, seed + "|o")}`;
     },
     fallbackTrailingTags: ["#dulichdalat", "#dalatcheckin"],
   },
@@ -188,22 +311,41 @@ export const CAPTION_TONES: CaptionTone[] = [
     styleHint:
       "Giọng blog review nghiêm túc. Hook UPPERCASE dạng 'REVIEW' hoặc 'CẨM NANG'. " +
       "Body có nhận xét chất lượng, phân loại (cafe / quán ăn / homestay / checkin). " +
-      "Tối đa 1 emoji nhẹ. Có 1-2 SEO keyword Đà Lạt." +
+      "Tối đa 1 emoji nhẹ. Có 1-2 SEO keyword Đà Lạt. KHÔNG nhắc tên quán/đối tác." +
       STYLE_RULES,
     fallbackHooks: [
       "REVIEW ĐÀ LẠT: CẨM NANG KHÔNG BỎ LỠ",
       "CẨM NANG DU LỊCH ĐÀ LẠT — CHECKLIST TRỌN VẸN",
       "TỔNG HỢP ĐÀ LẠT: TỪ CAFE ĐẾN HOMESTAY ĐỦ VIBE",
+      "REVIEW NHANH ĐÀ LẠT — ĐÁNG ĐI HAY KHÔNG",
+      "CẨM NANG ĐÀ LẠT CUỐI TUẦN — GỌN MÀ ĐỦ",
+      "TỔNG HỢP ĐIỂM ĐẾN ĐÀ LẠT THEO TỪNG VIBE",
+      "REVIEW ĐÀ LẠT: CAFE VIEW, ĂN LOCAL, NGHỈ CHILL",
+      "CẨM NANG ĐÀ LẠT CHO NGƯỜI THÍCH ĐI CHẬM",
+      "TỔNG HỢP ĐÀ LẠT — MỖI GÓC MỘT CÂU CHUYỆN",
+      "REVIEW ĐÀ LẠT: CHỌN LỌC TỪ NHIỀU CHUYẾN ĐI",
+      "CẨM NANG ĐÀ LẠT — TỪ SÁNG ĐẾN TỐI ĐỦ LỊCH",
+      "TỔNG HỢP ĐÀ LẠT: KHÔNG QUẢNG CÁO, CHỈ TRẢI NGHIỆM",
     ],
     fallbackBody: (ctx) => {
-      const names = topNames(ctx, 4);
+      const mood = describeMood(ctx);
+      const seed = `editorial|${ctx.packName}|${ctx.bundleLabel}`;
       const catLine = ctx.mainCategories.length
         ? ` Mix các loại: ${ctx.mainCategories.join(", ")}.`
         : "";
-      const intro = names
-        ? `Cẩm nang du lịch Đà Lạt gồm ${ctx.entityCount} điểm chọn lọc: ${names}.`
-        : `Cẩm nang du lịch Đà Lạt được biên tập kỹ lưỡng cho chuyến đi sắp tới.`;
-      return `${intro}${catLine} Mỗi điểm đều có đặc trưng riêng. Lưu để lên lịch trình.`;
+      const intros = [
+        `Cẩm nang du lịch Đà Lạt được biên tập kỹ: ${mood}.${catLine}`,
+        `Review Đà Lạt lần này tập trung vào ${mood}.${catLine}`,
+        `Tổng hợp du lịch Đà Lạt theo vibe: ${mood}.${catLine}`,
+        `Cẩm nang Đà Lạt gọn gàng cho ai thích ${mood}.${catLine}`,
+      ];
+      const outros = [
+        "Mỗi điểm đều có đặc trưng riêng. Lưu để lên lịch trình.",
+        "Đánh giá khách quan, không quảng cáo. Save về dùng dần.",
+        "Phân loại rõ ràng để bạn chọn theo mood từng ngày.",
+        "Lưu lại cho chuyến đi sắp tới, khỏi mất công tìm lại.",
+      ];
+      return `${pickFromPool(intros, seed + "|i")} ${pickFromPool(outros, seed + "|o")}`;
     },
     fallbackTrailingTags: ["#reviewdalat", "#dulichdalat"],
   },

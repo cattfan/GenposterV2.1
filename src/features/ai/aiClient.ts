@@ -18,7 +18,7 @@ export const AI_PRESETS: Record<AiProviderPreset, AiPresetSpec> = {
   deepseek: {
     label: "DeepSeek",
     baseUrl: "https://api.deepseek.com/v1",
-    model: "deepseek-chat",
+    model: "deepseek-v4-pro",
     needsApiKey: true,
     hint: "Lay API key tai https://platform.deepseek.com",
   },

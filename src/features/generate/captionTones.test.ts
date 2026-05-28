@@ -211,10 +211,13 @@ describe("renderFallbackCaption", () => {
     expect(draft.hashtags[2]).toBe("#dalatreview");
   });
 
-  it("body mentions top entity names when available", () => {
+  it("body uses mood/category instead of entity names", () => {
     const tone = CAPTION_TONES[0];
     const draft = renderFallbackCaption(tone, ctx);
-    expect(draft.body).toMatch(/Mê Lá|Tiệm Chaiko|Hanna Land|Bình Minh Ơi/);
+    // Fallback mới không bám tên đối tác — dùng mood từ category/style
+    expect(draft.body).toMatch(/cafe|chill|Đà Lạt|vibe|mê|đi/i);
+    // Không chứa tên entity cụ thể
+    expect(draft.body).not.toMatch(/Mê Lá|Tiệm Chaiko|Hanna Land|Bình Minh Ơi/);
   });
 
   it("works with empty entities (no crash, generic body)", () => {

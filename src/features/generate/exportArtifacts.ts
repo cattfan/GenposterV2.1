@@ -143,31 +143,32 @@ async function requestAiCaption(
   tone: CaptionTone,
   ctx: BundleContext,
 ): Promise<CaptionDraft | null> {
+  // Payload có chủ đích KHÔNG truyền `entities` để AI không bám tên đối tác
+  // ra caption — feedback của user 2026-05-28: caption cũ "toàn bám tên đối
+  // tác", thiếu cảm hứng tự nhiên.
   const payload = {
     bundleLabel: ctx.bundleLabel,
     packName: ctx.packName,
-    pageNames: ctx.pageNames,
+    pageCount: ctx.pageNames.length,
     entityCount: ctx.entityCount,
     partnerCount: ctx.partnerCount,
     mainCategories: ctx.mainCategories,
     styles: ctx.styles,
-    entities: ctx.entities.slice(0, 30),
   };
 
-  const hasEntities = ctx.entityCount > 0;
   const systemPrompt = [
     "Bạn viết caption TikTok tiếng Việt cho 1 bộ ảnh du lịch/ẩm thực Đà Lạt.",
     "Mỗi bộ là 1 caption duy nhất, dùng cho 1 post TikTok. Không tạo nhiều biến thể.",
     `Phong cách yêu cầu (BẮT BUỘC theo): ${tone.styleHint}`,
-    "Quy tắc dữ liệu:",
-    "- Chỉ dùng tên/địa chỉ/giá/giờ có trong data. Không bịa thông tin.",
-    hasEntities
-      ? "- Tham chiếu cụ thể 2-4 tên địa điểm thực sự xuất hiện trong bundle."
-      : "- entities[] rỗng → TUYỆT ĐỐI KHÔNG nhắc tên quán/địa điểm cụ thể. Viết kiểu gợi cảm hứng chung chung.",
-    "- Cảm nhận và sắp xếp nhịp văn dựa trên mix category/style của bundle (nếu có).",
+    "Quy tắc nội dung (BẮT BUỘC):",
+    "- TUYỆT ĐỐI KHÔNG nhắc tên quán, tên đối tác, tên thương hiệu, địa chỉ cụ thể.",
+    "- Viết theo cảm hứng, không khí Đà Lạt — sương, gió, hoa, nhịp sống chậm, view, vibe.",
+    "- Dựa vào mainCategories và styles trong data để chọn mood (vd: cafe view → chill; quán ăn local → ấm cúng; homestay → thư giãn).",
+    "- Không bịa thông tin giá, giờ, khuyến mãi.",
+    "- Dùng ngôi 'mình/cậu/bạn' tự nhiên, có thể chèn 1-2 emoji nhẹ nhàng (☕🌸✨🍃) — không spam.",
     "Quy tắc output (BẮT BUỘC, sẽ bị validate cứng):",
     '- Trả JSON object duy nhất: {"hook":"...","body":"...","hashtags":["#a","#b","#c","#d","#e"]}',
-    "- hook: 1 dòng UPPERCASE, tối đa 90 ký tự (vượt sẽ bị cắt).",
+    "- hook: 1 dòng UPPERCASE, tối đa 90 ký tự (vượt sẽ bị cắt). KHÔNG chứa tên riêng.",
     "- body: 1 đoạn 2-4 câu, tối đa 300 ký tự (vượt sẽ bị cắt). PHẢI có 1-2 keyword SEO Đà Lạt phù hợp tone (vd: du lịch Đà Lạt / ăn uống Đà Lạt / check-in Đà Lạt / cafe Đà Lạt / homestay Đà Lạt / cẩm nang Đà Lạt).",
     "- hashtags: ĐÚNG 5 phần tử. 3 đầu CHÍNH XÁC là #riviudalat #dalat #dalatreview. 2 cuối: AI sinh, viết liền không dấu, single word, liên quan du lịch Đà Lạt (vd: #checkindalat, #andalat, #cafedalat, #homestaydalat).",
   ].join("\n");
@@ -179,12 +180,14 @@ async function requestAiCaption(
         {
           role: "user",
           content:
-            "Bundle data (chỉ dùng những gì có ở đây):\n```json\n" +
+            "Bundle context (chỉ dùng category/style để chọn mood, KHÔNG nhắc tên):\n```json\n" +
             JSON.stringify(payload, null, 2) +
             "\n```",
         },
       ],
-      temperature: 0.85,
+      // Tăng từ 0.85 → 0.95: 6 Bộ trong cùng pack ra 6 caption mood/wording
+      // khác nhau rõ rệt thay vì similar phrasing.
+      temperature: 0.95,
     });
     if (!result.ok) return null;
     return parseCaptionJson(result.content ?? "", tone, ctx);
