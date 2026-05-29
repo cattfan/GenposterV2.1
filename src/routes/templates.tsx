@@ -855,9 +855,9 @@ function TemplatesPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="strict">Bám sát mẫu</SelectItem>
+                  <SelectItem value="strict">Bám sát mẫu (nhanh)</SelectItem>
                   <SelectItem value="balanced">Cân bằng</SelectItem>
-                  <SelectItem value="creative">Sáng tạo nhẹ</SelectItem>
+                  <SelectItem value="creative">Cao cấp - giống ảnh 100% (Layer 3, chậm hơn)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

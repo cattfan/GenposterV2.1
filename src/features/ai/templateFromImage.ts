@@ -786,6 +786,7 @@ function hasLineBlocksInCluster(visualBlueprint: VisualBlueprint, clusterId: str
 function buildSections(
   visualBlueprint: VisualBlueprint,
   dataBlueprint: DataBlueprint | undefined,
+  _layer3Frame?: import("@/models").TemplateFrameSpec,
 ): Map<string, Section> {
   const sections = new Map<string, Section>();
 
@@ -905,6 +906,7 @@ function createSlotFromBlock(
   visualBlueprint: VisualBlueprint,
   canvasWidth: number,
   canvasHeight: number,
+  layer3Frame?: import("@/models").TemplateFrameSpec,
 ): Slot | null {
   const bindingHint = bindingHintForBlock(dataBlueprint, block);
   const sourceRole = bindingHint?.sourceRole ?? block.sourceRole;
@@ -923,10 +925,32 @@ function createSlotFromBlock(
   if (!explicitBinding) {
     explicitBinding = guessBindingPath(block.placeholder ?? block.name);
   }
-  const x = Math.max(0, Math.min(1, block.x)) * canvasWidth;
-  const y = Math.max(0, Math.min(1, block.y)) * canvasHeight;
-  const width = Math.max(0.01, Math.min(1, block.w)) * canvasWidth;
-  const height = Math.max(0.01, Math.min(1, block.h)) * canvasHeight;
+
+  // === Layer 3 preference (high visual fidelity) ===
+  let finalX = Math.max(0, Math.min(1, block.x)) * canvasWidth;
+  let finalY = Math.max(0, Math.min(1, block.y)) * canvasHeight;
+  let finalW = Math.max(0.01, Math.min(1, block.w)) * canvasWidth;
+  let finalH = Math.max(0.01, Math.min(1, block.h)) * canvasHeight;
+
+  if (layer3Frame?.synthesis?.blockFidelity) {
+    const decision = layer3Frame.synthesis.blockFidelity.find((d) => d.blockName === block.name);
+    if (decision?.exactRect) {
+      const r = decision.exactRect;
+      finalX = r.x * canvasWidth;
+      finalY = r.y * canvasHeight;
+      finalW = r.w * canvasWidth;
+      finalH = r.h * canvasHeight;
+    }
+    if (decision?.preferredBinding) {
+      explicitBinding = decision.preferredBinding;
+    }
+    // textRunParts will be used later when building fieldParts / staticText
+  }
+
+  const x = finalX;
+  const y = finalY;
+  const width = finalW;
+  const height = finalH;
 
   if (
     block.role === "list_group" &&
@@ -1275,6 +1299,8 @@ export interface AiLayoutToTemplateResult {
 
 interface AiLayoutToTemplateOptions {
   sourceImageDataUrl?: string;
+  /** Output from Layer 3 (Template Frame Synthesis) — preferred for high visual fidelity. */
+  layer3Frame?: import("@/models").TemplateFrameSpec;
 }
 
 function isVeryDarkColor(value: string | undefined): boolean {
@@ -1406,7 +1432,10 @@ export function aiLayoutToTemplateWithQuality(
     ...blueprint.visualBlueprint,
     blocks: normalizeVisualBlocks(blueprint.visualBlueprint, canvasWidth, canvasHeight),
   };
-  const sections = buildSections(visualBlueprint, blueprint.dataBlueprint);
+  // Prefer Layer 3 frame when provided (from options or temporary attachment on layout)
+  const layer3Frame = options.layer3Frame ?? (layout as any)?.layer3Frame;
+
+  const sections = buildSections(visualBlueprint, blueprint.dataBlueprint, layer3Frame);
 
   const rawSlots = visualBlueprint.blocks
     .map((block) =>
@@ -1417,6 +1446,7 @@ export function aiLayoutToTemplateWithQuality(
         visualBlueprint,
         canvasWidth,
         canvasHeight,
+        layer3Frame,
       ),
     )
     .filter((slot): slot is Slot => !!slot);

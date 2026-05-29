@@ -733,6 +733,44 @@ export interface CombinedLayoutBlueprint {
   dataBlueprint?: DataBlueprint;
 }
 
+/**
+ * Output of Layer 3 (Template Frame Synthesis).
+ * Provides high-precision, image-grounded decisions so the materializer can produce
+ * a PageTemplate that visually matches the source design as closely as possible
+ * while remaining fully editable and data-bindable in the existing system.
+ */
+export interface TemplateFrameSpec {
+  version: 3;
+  source: {
+    visualBlueprint: VisualBlueprint;
+    dataBlueprint?: DataBlueprint;
+  };
+  synthesis: {
+    /** Precise per-block adjustments and text-run splits for visual fidelity. */
+    blockFidelity: Array<{
+      blockName: string;
+      exactRect?: { x: number; y: number; w: number; h: number; rotation?: number };
+      /** Ordered parts for a single visual line (replaces old brittle fieldParts parsing). */
+      textRunParts?: Array<{
+        kind: 'literal' | 'field';
+        text?: string;
+        bindingPath?: Slot['bindingPath'];
+        placeholder?: string;
+      }>;
+      preferredBinding?: Slot['bindingPath'];
+      styleAnchor?: Partial<SlotStyle>;
+      notes?: string;
+    }>;
+    sectionFidelity?: Array<{
+      clusterId: string;
+      suggestedMaxItems?: number;
+      notes?: string;
+    }>;
+    overallNotes?: string[];
+    confidence?: number;
+  };
+}
+
 export interface AnalyzedUiRegion {
   regionId: ID;
   kind:

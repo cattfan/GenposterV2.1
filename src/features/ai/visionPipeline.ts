@@ -1,8 +1,14 @@
-import type { CombinedLayoutBlueprint, DataBlueprint, VisualBlueprint } from "@/models";
+import type {
+  CombinedLayoutBlueprint,
+  DataBlueprint,
+  VisualBlueprint,
+  TemplateFrameSpec,
+} from "@/models";
 import { AI_POSTER_FONT_FAMILIES } from "@/features/editor/fonts";
 import { callAi } from "./aiClient";
 import { serializeCombinedLayoutBlueprint } from "./blueprint";
 import type { LayoutFidelity } from "./aiFeatures";
+import type { Layer3Input, Layer3Output } from "./templateLayers";
 
 const SOURCE_ROLE_SCHEMA = {
   type: "string",
@@ -351,6 +357,98 @@ const DATA_BLUEPRINT_TOOL = {
   },
 };
 
+/**
+ * Layer 3 tool: Template Frame Synthesis.
+ * The AI sees the original image + L1/L2 blueprints and produces precise
+ * fidelity decisions so the final PageTemplate looks as close as possible
+ * to the source design while remaining fully editable + bindable.
+ */
+const BUILD_TEMPLATE_FRAME_TOOL = {
+  type: "function" as const,
+  function: {
+    name: "build_template_frame",
+    description:
+      "Dựa trên ảnh gốc + visual blueprint (pass 1) + data blueprint (pass 2), hãy trả về TemplateFrameSpec giúp materializer dựng PageTemplate GIỐNG ẢNH MẪU NHẤT CÓ THỂ về mặt thị giác (vị trí chính xác, text run, spacing, nhóm section) nhưng vẫn là bộ khung reusable, dễ bind dữ liệu, dễ chỉnh trong editor. Ưu tiên exactRect và textRunParts chi tiết.",
+    parameters: {
+      type: "object",
+      properties: {
+        templateFrame: {
+          type: "object",
+          properties: {
+            version: { const: 3 },
+            source: {
+              type: "object",
+              properties: {
+                visualBlueprint: { type: "object" },
+                dataBlueprint: { type: "object" },
+              },
+              required: ["visualBlueprint"],
+            },
+            synthesis: {
+              type: "object",
+              properties: {
+                blockFidelity: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      blockName: { type: "string" },
+                      exactRect: {
+                        type: "object",
+                        properties: {
+                          x: { type: "number" },
+                          y: { type: "number" },
+                          w: { type: "number" },
+                          h: { type: "number" },
+                          rotation: { type: "number" },
+                        },
+                      },
+                      textRunParts: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            kind: { enum: ["literal", "field"] },
+                            text: { type: "string" },
+                            bindingPath: { type: "string" },
+                            placeholder: { type: "string" },
+                          },
+                          required: ["kind"],
+                        },
+                      },
+                      preferredBinding: { type: "string" },
+                      styleAnchor: { type: "object" },
+                      notes: { type: "string" },
+                    },
+                    required: ["blockName"],
+                  },
+                },
+                sectionFidelity: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      clusterId: { type: "string" },
+                      suggestedMaxItems: { type: "number" },
+                      notes: { type: "string" },
+                    },
+                    required: ["clusterId"],
+                  },
+                },
+                overallNotes: { type: "array", items: { type: "string" } },
+                confidence: { type: "number" },
+              },
+              required: ["blockFidelity"],
+            },
+          },
+          required: ["version", "source", "synthesis"],
+        },
+      },
+      required: ["templateFrame"],
+    },
+  },
+};
+
 function fidelityInstruction(fidelity: LayoutFidelity): string {
   switch (fidelity) {
     case "strict":
@@ -526,6 +624,70 @@ async function runDataBlueprintPass(input: {
   return { ok: true, dataBlueprint: toolArgs.dataBlueprint };
 }
 
+// ============================================================
+// Layer 3: Template Frame Synthesis Pass (NEW)
+// ============================================================
+
+async function runTemplateFrameSynthesisPass(
+  input: Layer3Input,
+): Promise<{ ok: true; frame: TemplateFrameSpec } | { ok: false; error: string }> {
+  const messages: any[] = [
+    {
+      role: "system",
+      content:
+        "Bạn là chuyên gia thiết kế poster và template engineer. Nhiệm vụ DUY NHẤT của bạn là tạo TemplateFrameSpec sao cho khi materializer dựng PageTemplate thì layout, vị trí, khoảng cách, cách chia text, nhóm section GIỐNG ẢNH MẪU 100% nhất có thể, đồng thời các slot/section vẫn dễ bind dữ liệu và chỉnh sửa trong editor Genposter.\n\n" +
+        "Quy tắc bắt buộc:\n" +
+        "1. Dùng exactRect (tỷ lệ 0-1 trên canvas 1080x1350) cho các block quan trọng để bám sát ảnh gốc.\n" +
+        "2. Dùng textRunParts chi tiết để tách literal và field (ví dụ: 'SDT:' + phone, ' - ' + name). Không để materializer đoán mò.\n" +
+        "3. preferredBinding chỉ dùng giá trị hợp lệ (entity.name, entity.address, asset.random, entity.metadata.xxx...).\n" +
+        "4. Giữ nguyên visual hierarchy và nhịp thị giác của ảnh mẫu.\n" +
+        "5. Nếu fidelity=strict → bám sát từng pixel; balanced → cân bằng giữa giống ảnh và dễ dùng; creative → được phép tinh chỉnh nhẹ cho đẹp hơn nếu vẫn nhận ra ảnh gốc.\n" +
+        "6. Trả về JSON đúng schema tool, không thêm giải thích ngoài tool call.",
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text:
+            `Fidelity: ${input.fidelity ?? "balanced"}\n` +
+            (input.customInstructions ? `Yêu cầu thêm: ${input.customInstructions}\n` : "") +
+            (input.roleHint ? `Role gợi ý: ${input.roleHint}\n` : "") +
+            "\n=== VISUAL BLUEPRINT (pass 1) ===\n" +
+            JSON.stringify(input.visualBlueprint, null, 2) +
+            "\n\n=== DATA BLUEPRINT (pass 2) ===\n" +
+            JSON.stringify(input.dataBlueprint ?? {}, null, 2) +
+            "\n\nHãy gọi build_template_frame với quyết định fidelity chính xác nhất.",
+        },
+        // Vision image for grounding
+        {
+          type: "image_url",
+          image_url: { url: input.sourceImageDataUrl ?? "" },
+        },
+      ],
+    },
+  ];
+
+  const result = await callAi({
+    useVisionModel: true,
+    messages,
+    tools: [BUILD_TEMPLATE_FRAME_TOOL],
+    tool_choice: { type: "function", function: { name: "build_template_frame" } },
+    temperature: 0.2,
+  });
+
+  if (!result.ok) return { ok: false, error: result.error };
+
+  const toolArgs = result.toolArgs as { templateFrame?: TemplateFrameSpec } | null;
+  const frame = toolArgs?.templateFrame;
+
+  if (!frame || frame.version !== 3) {
+    return { ok: false, error: "AI không trả TemplateFrameSpec hợp lệ (version 3)." };
+  }
+
+  return { ok: true, frame };
+}
+
 export async function runVisionTemplatePipeline(input: {
   imageDataUrl: string;
   fidelity?: LayoutFidelity;
@@ -561,14 +723,51 @@ export async function runVisionTemplatePipeline(input: {
     };
   }
 
-  return {
-    ok: true,
-    blueprint: {
-      version: 2,
+  // Layer 3 (optional for now - will be driven by fidelity flag in later steps)
+  let layer3Frame: TemplateFrameSpec | undefined;
+  const l3Start = Date.now();
+  try {
+    const l3 = await runTemplateFrameSynthesisPass({
       visualBlueprint: visualPass.visualBlueprint,
       dataBlueprint: dataPass.dataBlueprint,
-    },
+      sourceImageDataUrl: input.imageDataUrl,
+      fidelity: input.fidelity,
+      customInstructions: input.customInstructions,
+      dataColumns: input.dataColumns,
+    });
+    if (l3.ok) {
+      layer3Frame = l3.frame;
+    } else {
+      // attach warning but do not fail the whole pipeline
+      visualPass.visualBlueprint.warnings = [
+        ...(visualPass.visualBlueprint.warnings ?? []),
+        `Layer 3 (frame synthesis) fallback: ${l3.error}`,
+      ];
+    }
+  } catch (e: any) {
+    visualPass.visualBlueprint.warnings = [
+      ...(visualPass.visualBlueprint.warnings ?? []),
+      `Layer 3 error: ${e?.message ?? e}`,
+    ];
+  } finally {
+    if (process.env.NODE_ENV !== "production") {
+      const ms = Date.now() - l3Start;
+      // Dev-only: helps validate latency risk of Layer 3
+      // (typical 3-12s depending on provider & image complexity)
+      console.debug(`[Layer3] synthesis took ${ms}ms (fidelity=${input.fidelity ?? "balanced"})`);
+    }
+  }
+
+  const blueprint: CombinedLayoutBlueprint & { layer3Frame?: TemplateFrameSpec } = {
+    version: 2,
+    visualBlueprint: visualPass.visualBlueprint,
+    dataBlueprint: dataPass.dataBlueprint,
   };
+  if (layer3Frame) {
+    (blueprint as any).layer3Frame = layer3Frame; // temporary until public API updated
+  }
+
+  return { ok: true, blueprint };
 }
 
 export async function buildCombinedLayoutJson(input: {

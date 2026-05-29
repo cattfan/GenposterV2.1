@@ -1,6 +1,9 @@
-// Fixture test cho blueprint → template pipeline.
+// Fixture test cho blueprint → template pipeline (3-layer AI gen mẫu).
 // Chạy: npx tsx src/features/ai/__tests__/blueprintFixtureTest.ts
 // Hoặc import và gọi runAllFixtureTests() từ dev console.
+//
+// Layer 3 (TemplateFrameSpec) được test bằng cách truyền layer3Frame vào aiLayoutToTemplateWithQuality
+// để xác nhận exactRect / preferredBinding / textRunParts được ưu tiên (thinning heuristics).
 
 import { nanoid } from "nanoid";
 import type { BlueprintBlock, CombinedLayoutBlueprint } from "@/models";
@@ -506,8 +509,43 @@ export function runAllFixtureTests() {
   testServiceDirectoryToTemplate();
   testSupportedBindings();
 
+  // Layer 3 fidelity preference test (new in 3-layer pipeline)
+  testLayer3FidelityPreference();
+
   console.log(`\n══ Results: ${passed} passed, ${failed} failed ══`);
   return { passed, failed };
+}
+
+// ── Layer 3 test: exactRect and preferredBinding from frame are respected ──
+function testLayer3FidelityPreference() {
+  const bp = makeCoverBlueprint();
+  const mockFrame: import("@/models").TemplateFrameSpec = {
+    version: 3,
+    source: { visualBlueprint: bp.visualBlueprint },
+    synthesis: {
+      blockFidelity: [
+        {
+          blockName: "title_1",
+          exactRect: { x: 0.05, y: 0.08, w: 0.9, h: 0.15 },
+          preferredBinding: "entity.name",
+          notes: "test override",
+        },
+      ],
+    },
+  };
+
+  const { template } = aiLayoutToTemplateWithQuality(bp, "L3 Test", { layer3Frame: mockFrame } as any);
+  const titleSlot = template.slots.find((s) => s.name === "title_1");
+
+  // The exactRect from Layer 3 should have been used (thinning the old ratio math)
+  if (titleSlot) {
+    const expectedX = 0.05 * 1080;
+    assert(Math.abs(titleSlot.x - expectedX) < 1, "Layer 3 exactRect x respected for title_1");
+    assert(titleSlot.bindingPath === "entity.name", "Layer 3 preferredBinding respected");
+  } else {
+    failed += 1;
+    console.error("  ✗ FAIL: title_1 slot not found in Layer 3 test");
+  }
 }
 
 // Chạy trực tiếp

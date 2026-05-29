@@ -5,9 +5,11 @@ import { callAi } from "./aiClient";
 import { buildCombinedLayoutJson } from "./visionPipeline";
 
 // ============================================================
-// 1. Generate page layout từ 1 ảnh
+// 1. Generate page layout từ 1 ảnh (3-layer AI pipeline)
 // ============================================================
 
+// Fidelity levels. "creative" enables stronger Layer 3 (Template Frame Synthesis)
+// for maximum visual match to the source design image.
 export type LayoutFidelity = "strict" | "balanced" | "creative";
 
 export async function aiGenerateTemplateFromImage(input: {
@@ -17,7 +19,16 @@ export async function aiGenerateTemplateFromImage(input: {
   preferVisibleLines?: boolean;
   dataColumns?: string[];
 }) {
+  // Layer 3 is automatically engaged inside the pipeline for all fidelities
+  // (with increasing emphasis on exact visual match for "creative").
   return buildCombinedLayoutJson(input);
+}
+
+/** Convenience wrapper that forces the highest-fidelity 3-layer path. */
+export async function aiGenerateHighFidelityTemplateFromImage(
+  input: Omit<Parameters<typeof aiGenerateTemplateFromImage>[0], "fidelity">,
+) {
+  return aiGenerateTemplateFromImage({ ...input, fidelity: "creative" });
 }
 
 // ============================================================
