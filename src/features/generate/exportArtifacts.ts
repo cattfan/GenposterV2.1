@@ -146,9 +146,9 @@ async function requestAiCaption(
   // Payload có chủ đích KHÔNG truyền `entities` để AI không bám tên đối tác
   // ra caption — feedback của user 2026-05-28: caption cũ "toàn bám tên đối
   // tác", thiếu cảm hứng tự nhiên.
+  // Cũng không truyền packName/bundleLabel để AI không lặp lại format lịch
+  // trình (3N2D, 2N1Đ...) vào body.
   const payload = {
-    bundleLabel: ctx.bundleLabel,
-    packName: ctx.packName,
     pageCount: ctx.pageNames.length,
     entityCount: ctx.entityCount,
     partnerCount: ctx.partnerCount,
@@ -162,6 +162,7 @@ async function requestAiCaption(
     `Phong cách yêu cầu (BẮT BUỘC theo): ${tone.styleHint}`,
     "Quy tắc nội dung (BẮT BUỘC):",
     "- TUYỆT ĐỐI KHÔNG nhắc tên quán, tên đối tác, tên thương hiệu, địa chỉ cụ thể.",
+    "- KHÔNG lặp lại tên pack, số ngày lịch trình (3N2D, 2N1Đ...) hay bundleLabel vào caption.",
     "- Viết theo cảm hứng, không khí Đà Lạt — sương, gió, hoa, nhịp sống chậm, view, vibe.",
     "- Dựa vào mainCategories và styles trong data để chọn mood (vd: cafe view → chill; quán ăn local → ấm cúng; homestay → thư giãn).",
     "- Không bịa thông tin giá, giờ, khuyến mãi.",
