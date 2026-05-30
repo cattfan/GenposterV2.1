@@ -3,6 +3,7 @@
 
 import { callAi } from "./aiClient";
 import { buildCombinedLayoutJson } from "./visionPipeline";
+import type { LayoutFidelity } from "./templateLayers";
 
 // ============================================================
 // 1. Generate page layout từ 1 ảnh (3-layer AI pipeline)
@@ -10,7 +11,7 @@ import { buildCombinedLayoutJson } from "./visionPipeline";
 
 // Fidelity levels re-exported from the single source of truth in templateLayers.ts
 // (the canonical place for all 3-layer contracts).
-export type { LayoutFidelity } from "./templateLayers";
+export type { LayoutFidelity };
 
 export async function aiGenerateTemplateFromImage(input: {
   imageDataUrl: string;
