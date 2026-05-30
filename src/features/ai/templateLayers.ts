@@ -17,10 +17,9 @@ import type {
  * a dedicated, image-grounded voice to drive pixel-close visual results that
  * are still fully editable PageTemplate instances.
  *
- * CURRENT TECHNICAL DEBT (Phase 1 cleanup target):
- * - CombinedLayoutBlueprint temporarily carries layer3Frame via (as any) cast.
- *   See TODOs in visionPipeline.ts and templateFromImage.ts.
- * - Full gating of Layer 3 by fidelity flag planned for Phase 3.
+ * Phase 2 complete: layer3Frame is now a first-class optional field on
+ * CombinedLayoutBlueprint. All (as any) casts and inline imports removed.
+ * Next: Phase 3 (fidelity gating policy).
  */
 
 // Fidelity levels exposed to UI and callers (moved here for shared use)
@@ -49,7 +48,7 @@ export interface Layer3Output {
   };
 }
 
-/** The actual runner (implemented in visionPipeline in a later step). */
+/** The actual runner (implemented in visionPipeline; see runTemplateFrameSynthesisPass). */
 export type RunTemplateFrameSynthesis = (
   input: Layer3Input,
 ) => Promise<Layer3Output>;
