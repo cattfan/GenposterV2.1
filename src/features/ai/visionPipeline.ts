@@ -759,14 +759,12 @@ export async function runVisionTemplatePipeline(input: {
     }
   }
 
-  const blueprint: CombinedLayoutBlueprint & { layer3Frame?: TemplateFrameSpec } = {
+  const blueprint: CombinedLayoutBlueprint = {
     version: 2,
     visualBlueprint: visualPass.visualBlueprint,
     dataBlueprint: dataPass.dataBlueprint,
+    ...(layer3Frame ? { layer3Frame } : {}),
   };
-  if (layer3Frame) {
-    (blueprint as any).layer3Frame = layer3Frame; // TODO (Phase 2): replace with proper field on CombinedLayoutBlueprint
-  }
 
   return { ok: true, blueprint };
 }
