@@ -641,8 +641,7 @@ async function runTemplateFrameSynthesisPass(
         "2. Dùng textRunParts chi tiết để tách literal và field (ví dụ: 'SDT:' + phone, ' - ' + name). Không để materializer đoán mò.\n" +
         "3. preferredBinding chỉ dùng giá trị hợp lệ (entity.name, entity.address, asset.random, entity.metadata.xxx...).\n" +
         "4. Giữ nguyên visual hierarchy và nhịp thị giác của ảnh mẫu.\n" +
-        "5. Nếu fidelity=strict → bám sát từng pixel; balanced → cân bằng giữa giống ảnh và dễ dùng; creative → được phép tinh chỉnh nhẹ cho đẹp hơn nếu vẫn nhận ra ảnh gốc.\n" +
-        "6. Trả về JSON đúng schema tool, không thêm giải thích ngoài tool call.",
+        "5. Trả về JSON đúng schema tool, không thêm giải thích ngoài tool call.",
     },
     {
       role: "user",
@@ -653,6 +652,9 @@ async function runTemplateFrameSynthesisPass(
             `Fidelity: ${input.fidelity ?? "balanced"}\n` +
             (input.customInstructions ? `Yêu cầu thêm: ${input.customInstructions}\n` : "") +
             (input.roleHint ? `Role gợi ý: ${input.roleHint}\n` : "") +
+            (input.fidelity === "creative"
+              ? "\n[CREATIVE MAX VISUAL FIDELITY] Mục tiêu 100% giống ảnh mẫu về mọi khía cạnh visual (vị trí, size, line breaks, spacing, alignment). Ưu tiên exactRect + textRunParts chi tiết tuyệt đối, ngay cả khi làm cho binding phức tạp hơn. Chỉ tinh chỉnh nếu thực sự cải thiện recognizability của design gốc.\n"
+              : "") +
             "\n=== VISUAL BLUEPRINT (pass 1) ===\n" +
             JSON.stringify(input.visualBlueprint, null, 2) +
             "\n\n=== DATA BLUEPRINT (pass 2) ===\n" +
