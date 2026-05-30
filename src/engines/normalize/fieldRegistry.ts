@@ -118,6 +118,23 @@ export const ENTITY_FIELDS: EntityFieldDefinition[] = [
     kind: "string",
   },
   {
+    id: "pricePerPerson",
+    bindingPath: "entity.pricePerPerson",
+    labelVi: "Giá đầu người",
+    group: "core",
+    aliases: [
+      "gia_dau_nguoi",
+      "giá đầu người",
+      "gia dau nguoi",
+      "price_per_person",
+      "gia/nguoi",
+      "giá/người",
+      "pricePerPerson",
+    ],
+    placeholderTokens: ["gia_dau_nguoi", "giadaunguoi", "price_per_person", "gia_nguoi"],
+    kind: "string",
+  },
+  {
     id: "openingHours",
     bindingPath: "entity.openingHours",
     labelVi: "Giờ mở cửa",
@@ -228,6 +245,15 @@ export const ENTITY_FIELDS: EntityFieldDefinition[] = [
     aliases: ["partner", "doi_tac", "đối tác", "doi tac", "sponsor", "partnerFlag"],
     placeholderTokens: [],
     kind: "boolean",
+  },
+  {
+    id: "partnerName",
+    bindingPath: "entity.partnerName",
+    labelVi: "Tên đối tác",
+    group: "core",
+    aliases: ["doi_tac_raw", "partner_name", "partnerName", "tên đối tác"],
+    placeholderTokens: ["doi_tac", "doitac", "partner_name", "ten_doi_tac"],
+    kind: "string",
   },
   {
     id: "partnerPriority",
@@ -469,4 +495,20 @@ export function readEntityFieldValue(
     | boolean
     | string[]
     | undefined;
+}
+
+/**
+ * Phase 2 helper: collect ALL metadata keys that have at least one non-empty value
+ * across the provided entities. Used to surface "unknown"/dynamic columns (e.g. Mo_ta,
+ * Huong_di, Phan_loai, Nguoi Fix...) that were not pre-registered in ENTITY_FIELDS.
+ */
+export function collectDynamicMetadataKeys(entities: Entity[]): string[] {
+  const keys = new Set<string>();
+  for (const e of entities) {
+    if (!e.metadata) continue;
+    for (const [k, v] of Object.entries(e.metadata)) {
+      if (v != null && String(v).trim() !== "") keys.add(k);
+    }
+  }
+  return Array.from(keys).sort((a, b) => a.localeCompare(b, "vi"));
 }

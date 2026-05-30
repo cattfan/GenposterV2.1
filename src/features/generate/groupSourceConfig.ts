@@ -24,6 +24,12 @@ export function normalizeGroupSourceConfig(
   if (config.filterPhongCach && config.filterPhongCach !== ALL_SENTINEL) {
     next.filterPhongCach = config.filterPhongCach;
   }
+  if (config.filterPhanLoai && config.filterPhanLoai !== ALL_SENTINEL) {
+    next.filterPhanLoai = config.filterPhanLoai;
+  }
+  if (config.filterHuongDi && config.filterHuongDi !== ALL_SENTINEL) {
+    next.filterHuongDi = config.filterHuongDi;
+  }
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
@@ -38,6 +44,8 @@ export function mergeGroupSourceConfigs(
     selectedSheet: defined.find((item) => item.selectedSheet)?.selectedSheet,
     filterMoHinh: defined.find((item) => item.filterMoHinh)?.filterMoHinh,
     filterPhongCach: defined.find((item) => item.filterPhongCach)?.filterPhongCach,
+    filterPhanLoai: defined.find((item) => item.filterPhanLoai)?.filterPhanLoai,
+    filterHuongDi: defined.find((item) => item.filterHuongDi)?.filterHuongDi,
   });
 }
 
@@ -89,6 +97,8 @@ export function resolveSharedClusterSourceDisplay(
     selectedSheet: merged?.selectedSheet ?? allValue,
     filterMoHinh: merged?.filterMoHinh ?? allValue,
     filterPhongCach: merged?.filterPhongCach ?? allValue,
+    filterPhanLoai: merged?.filterPhanLoai ?? allValue,
+    filterHuongDi: merged?.filterHuongDi ?? allValue,
   };
 }
 

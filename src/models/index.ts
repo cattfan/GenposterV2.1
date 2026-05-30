@@ -15,7 +15,9 @@ export interface Entity {
   openingHours?: string;
   style?: string;
   priceRange?: string;
+  pricePerPerson?: string;
   partnerFlag: boolean;
+  partnerName?: string;
   partnerPriority: number; // 0..100
   partnerType: PartnerType;
   campaignTags: string[];
@@ -340,12 +342,18 @@ export interface SlotDataSourceConfig {
   selectedSheet?: string;
   filterMoHinh?: string;
   filterPhongCach?: string;
+  filterPhanLoai?: string;
+  filterHuongDi?: string;
 }
 
 export interface GeneratePageConfig {
   selectedSheet?: string;
   filterMoHinh?: string;
   filterPhongCach?: string;
+  /** Phase 3: filter by phan_loai (Local / Du lịch / ...) from metadata */
+  filterPhanLoai?: string;
+  /** Phase 3: filter by Huong_di (direction/area) from metadata */
+  filterHuongDi?: string;
   prioritizePartner?: boolean;
   onlyPartner?: boolean;
   partnerQuotaPerPage?: number;

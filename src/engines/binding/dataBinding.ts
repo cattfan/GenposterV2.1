@@ -39,11 +39,13 @@ export const TEXT_BINDING_OPTIONS: BindingFieldOption[] = [
   { value: "entity.address", label: "Địa chỉ", group: "Dữ liệu" },
   { value: "entity.phone", label: "Số điện thoại", group: "Dữ liệu" },
   { value: "entity.priceRange", label: "Giá", group: "Dữ liệu" },
+  { value: "entity.pricePerPerson", label: "Giá đầu người", group: "Dữ liệu" },
   { value: "entity.style", label: "Phong cách", group: "Dữ liệu" },
   { value: "entity.openingHours", label: "Giờ mở cửa", group: "Dữ liệu" },
   { value: "entity.categoryMain", label: "Mô hình / Bữa ăn", group: "Dữ liệu" },
   { value: "entity.categorySub", label: "Phong cách", group: "Dữ liệu" },
   { value: "entity.signatureDish", label: "Món ăn nổi bật", group: "Dữ liệu" },
+  { value: "entity.partnerName", label: "Tên đối tác", group: "Dữ liệu" },
 ];
 
 export const IMAGE_BINDING_OPTIONS: BindingFieldOption[] = [
@@ -268,7 +270,13 @@ export function readEntityTextValue(entity: Entity | undefined, path: string): s
   if (normalized.startsWith("entity.")) {
     const key = normalized.slice("entity.".length) as keyof Entity;
     const direct = toDisplayText(entity[key], undefined);
-    return direct || readMetadataTextValue(entity, String(key));
+    if (direct) return direct;
+    // Phase 5 polish: canonical "Phong cách" → prefer categorySub (from Phong_cach import) for backward templates that bind "style"
+    if (key === "style") {
+      const viaCategory = toDisplayText(entity.categorySub, undefined);
+      if (viaCategory) return viaCategory;
+    }
+    return readMetadataTextValue(entity, String(key));
   }
   return "";
 }

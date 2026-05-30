@@ -1078,6 +1078,8 @@ function DataPage() {
   const ASSET_GROUP_PAGE_SIZE = 10;
   const [entityPage, setEntityPage] = useState(0);
   const [assetGroupPage, setAssetGroupPage] = useState(0);
+  // Phase 4: search across name + all metadata for quick discovery of rich imported data
+  const [entitySearch, setEntitySearch] = useState("");
   const [driveCheckBusy, setDriveCheckBusy] = useState(false);
   const [driveCheckDone, setDriveCheckDone] = useState(0);
   const [driveCheckTotal, setDriveCheckTotal] = useState(0);
@@ -2282,7 +2284,10 @@ function DataPage() {
           <Card>
             <CardHeader>
               <CardTitle>Dữ liệu đã nhập</CardTitle>
-              <CardDescription>{entities.length} dòng dữ liệu đang lưu trong trình duyệt.</CardDescription>
+              <CardDescription>
+                {entities.length} dòng dữ liệu đang lưu trong trình duyệt.
+                <span className="ml-2 text-[10px] text-muted-foreground/70">Để 100% dữ liệu (giá/người, tên đối tác, mô tả…) → re-import sheet với bản mới nhất.</span>
+              </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
               {entities.length === 0 ? (
@@ -2296,6 +2301,20 @@ function DataPage() {
                 </div>
               ) : (
                 <>
+                {/* Phase 4: search box + extra rich columns (Món nổi bật, Mô tả, Giá/người, Hướng đi) */}
+                <div className="flex items-center gap-2 border-b bg-muted/20 px-3 py-2">
+                  <input
+                    type="text"
+                    value={entitySearch}
+                    onChange={(e) => {
+                      setEntitySearch(e.target.value);
+                      setEntityPage(0);
+                    }}
+                    placeholder="Tìm tên, mô tả, món ăn, khu vực..."
+                    className="h-8 w-72 rounded border bg-background px-2 text-sm"
+                  />
+                  <span className="text-[11px] text-muted-foreground">Tìm trong tất cả cột (kể cả metadata)</span>
+                </div>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -2305,12 +2324,26 @@ function DataPage() {
                       <TableHead>Phong cách</TableHead>
                       <TableHead>Địa chỉ</TableHead>
                       <TableHead>Đối tác</TableHead>
+                      <TableHead>Món nổi bật</TableHead>
+                      <TableHead>Mô tả</TableHead>
+                      <TableHead>Giá/người</TableHead>
+                      <TableHead>Hướng đi</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {entities
-                      .slice(entityPage * ENTITY_PAGE_SIZE, (entityPage + 1) * ENTITY_PAGE_SIZE)
-                      .map((entity) => (
+                    {(() => {
+                      const q = entitySearch.trim().toLowerCase();
+                      const filtered = !q
+                        ? entities
+                        : entities.filter((e) => {
+                            if ((e.name || "").toLowerCase().includes(q)) return true;
+                            const meta = e.metadata ? Object.values(e.metadata).join(" ").toLowerCase() : "";
+                            return meta.includes(q);
+                          });
+                      const pageSize = ENTITY_PAGE_SIZE;
+                      const page = entityPage;
+                      const pageEntities = filtered.slice(page * pageSize, (page + 1) * pageSize);
+                      return pageEntities.map((entity) => (
                       <TableRow key={entity.entityId}>
                         <TableCell className="font-medium">{entity.name}</TableCell>
                         <TableCell>
@@ -2326,42 +2359,66 @@ function DataPage() {
                         <TableCell>
                           {entity.partnerFlag ? <Badge>Đối tác</Badge> : <span />}
                         </TableCell>
+                        {/* Phase 4 extra rich columns (always visible for 100% exploitation) */}
+                        <TableCell className="max-w-[180px] truncate text-muted-foreground text-[12px]">
+                          {entity.metadata?.signatureDish || entity.metadata?.mon_an_noi_bat || entity.metadata?.["Món ăn nổi bật"] || ""}
+                        </TableCell>
+                        <TableCell className="max-w-[220px] truncate text-[12px] text-muted-foreground">
+                          {entity.metadata?.description || entity.metadata?.mo_ta || entity.metadata?.["Mô tả"] || ""}
+                        </TableCell>
+                        <TableCell className="text-[12px]">
+                          {entity.pricePerPerson || entity.metadata?.pricePerPerson || ""}
+                        </TableCell>
+                        <TableCell className="text-[12px] text-muted-foreground">
+                          {entity.metadata?.direction || entity.metadata?.huong_di || ""}
+                        </TableCell>
                       </TableRow>
-                    ))}
+                    ))})()}
                   </TableBody>
                 </Table>
-                {entities.length > ENTITY_PAGE_SIZE && (
-                  <div className="flex items-center justify-between gap-2 border-t bg-muted/30 px-4 py-2 text-xs">
-                    <span className="text-muted-foreground">
-                      Trang {entityPage + 1}/{Math.ceil(entities.length / ENTITY_PAGE_SIZE)} ·{" "}
-                      {entityPage * ENTITY_PAGE_SIZE + 1}-
-                      {Math.min((entityPage + 1) * ENTITY_PAGE_SIZE, entities.length)} của{" "}
-                      {entities.length}
-                    </span>
-                    <div className="flex gap-1">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setEntityPage((p) => Math.max(0, p - 1))}
-                        disabled={entityPage === 0}
-                      >
-                        Trước
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          setEntityPage((p) =>
-                            Math.min(Math.ceil(entities.length / ENTITY_PAGE_SIZE) - 1, p + 1),
-                          )
-                        }
-                        disabled={(entityPage + 1) * ENTITY_PAGE_SIZE >= entities.length}
-                      >
-                        Sau
-                      </Button>
+                {(() => {
+                  const q = entitySearch.trim().toLowerCase();
+                  const filtered = !q
+                    ? entities
+                    : entities.filter((e) => {
+                        if ((e.name || "").toLowerCase().includes(q)) return true;
+                        const meta = e.metadata ? Object.values(e.metadata).join(" ").toLowerCase() : "";
+                        return meta.includes(q);
+                      });
+                  const total = filtered.length;
+                  const pageSize = ENTITY_PAGE_SIZE;
+                  const maxPage = Math.max(0, Math.ceil(total / pageSize) - 1);
+                  const currentPage = Math.min(entityPage, maxPage);
+                  if (total <= pageSize) return null;
+                  const start = currentPage * pageSize + 1;
+                  const end = Math.min((currentPage + 1) * pageSize, total);
+                  return (
+                    <div className="flex items-center justify-between gap-2 border-t bg-muted/30 px-4 py-2 text-xs">
+                      <span className="text-muted-foreground">
+                        Trang {currentPage + 1}/{Math.ceil(total / pageSize)} · {start}-{end} của {total}
+                        {entitySearch && ` (lọc từ ${entities.length})`}
+                      </span>
+                      <div className="flex gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setEntityPage((p) => Math.max(0, Math.min(p - 1, maxPage)))}
+                          disabled={currentPage === 0}
+                        >
+                          Trước
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setEntityPage((p) => Math.min(maxPage, p + 1))}
+                          disabled={currentPage >= maxPage}
+                        >
+                          Sau
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
                 </>
               )}
             </CardContent>

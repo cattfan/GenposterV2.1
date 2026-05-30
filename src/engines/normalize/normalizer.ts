@@ -81,10 +81,26 @@ export function normalizeRows(rows: RawRow[], mapping: FieldMapping, sheetName?:
         metadata[k] = String(v).trim();
       }
     }
+
+    // Phase 1: capture raw partner column value (Doi_tac) before it is only used for bool flag
+    const partnerRaw = std.partnerFlag != null ? String(std.partnerFlag).trim() : "";
+    // Detect potential price collision for warning (both columns present in source)
+    if (std.priceRange && std.pricePerPerson) {
+      warnings.push(`Dòng ${idx + 1} (${name}): cả "Gia" và "Gia_dau_nguoi" đều có → đã tách thành priceRange + pricePerPerson (không mất dữ liệu)`);
+    }
     if (downloadableImageRefs.length > 0) {
       const currentImageRef = metadata.imageRef ? String(metadata.imageRef) : "";
       metadata.imageRef = [currentImageRef, ...downloadableImageRefs].filter(Boolean).join(" | ");
     }
+
+    // Phase 1: also surface pricePerPerson + partnerName (raw Doi_tac when name-like) in metadata for discoverability
+    if (std.pricePerPerson) {
+      metadata.pricePerPerson = String(std.pricePerPerson).trim();
+    }
+    if (partnerRaw && !parseBool(partnerRaw) && partnerRaw.length > 2) {
+      metadata.partnerName = partnerRaw;
+    }
+
     const entity: Entity = {
       entityId,
       name,
@@ -93,9 +109,11 @@ export function normalizeRows(rows: RawRow[], mapping: FieldMapping, sheetName?:
       address: std.address ? String(std.address).trim() : undefined,
       phone: std.phone ? String(std.phone).trim() : undefined,
       openingHours: std.openingHours ? String(std.openingHours).trim() : undefined,
-      style: std.style ? String(std.style).trim() : undefined,
+      style: std.style ? String(std.style).trim() : (std.categorySub ? String(std.categorySub).trim() : undefined),
       priceRange: std.priceRange ? String(std.priceRange).trim() : undefined,
+      pricePerPerson: std.pricePerPerson ? String(std.pricePerPerson).trim() : undefined,
       partnerFlag: parseBool(std.partnerFlag),
+      partnerName: partnerRaw && !parseBool(partnerRaw) && partnerRaw.length > 2 ? partnerRaw : undefined,
       partnerPriority: parseNumber(std.partnerPriority, 0),
       partnerType: (std.partnerType as Entity["partnerType"]) ?? "none",
       campaignTags: parseList(std.campaignTags),

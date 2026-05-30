@@ -89,6 +89,7 @@ import {
   normalizeSlotDisplayLabel,
 } from "@/features/generate/slotDisplayLabel";
 import { entityFieldOptionsForUi } from "@/engines/normalize/fieldRegistry";
+import { fieldLabelVi } from "@/engines/normalize/aliases";
 import { PackGenerateActions } from "@/features/generate/PackGenerateActions";
 import {
   clonePreviewPageDrafts,
@@ -462,6 +463,8 @@ export function PackTabContent({
       selectedSheet: ALL_VALUE,
       filterMoHinh: ALL_VALUE,
       filterPhongCach: ALL_VALUE,
+      filterPhanLoai: ALL_VALUE,
+      filterHuongDi: ALL_VALUE,
       prioritizePartner,
       onlyPartner,
       partnerQuotaPerPage: onlyPartner ? Number.MAX_SAFE_INTEGER : Math.max(1, partnerQuotaPerPage),
@@ -526,6 +529,8 @@ export function PackTabContent({
       selectedSheet: globalGenerateConfig.selectedSheet,
       filterMoHinh: globalGenerateConfig.filterMoHinh,
       filterPhongCach: globalGenerateConfig.filterPhongCach,
+      filterPhanLoai: globalGenerateConfig.filterPhanLoai,
+      filterHuongDi: globalGenerateConfig.filterHuongDi,
       pageConfigs: sourceNeutralPageConfigs,
     });
   }, [
@@ -857,11 +862,13 @@ export function PackTabContent({
   const textSlotFieldBindingValue = (slot: Slot) =>
     getEntityScopedTextBindingBasePath(slot.bindingPath) || "_static";
   const slotSourceConfig = (slot: Slot): ResolvedGeneratePageConfig => ({
-    ...activeGenerateConfig,
-    selectedSheet: slot.dataSourceConfig?.selectedSheet ?? ALL_VALUE,
-    filterMoHinh: slot.dataSourceConfig?.filterMoHinh ?? ALL_VALUE,
-    filterPhongCach: slot.dataSourceConfig?.filterPhongCach ?? ALL_VALUE,
-  });
+      ...activeGenerateConfig,
+      selectedSheet: slot.dataSourceConfig?.selectedSheet ?? ALL_VALUE,
+      filterMoHinh: slot.dataSourceConfig?.filterMoHinh ?? ALL_VALUE,
+      filterPhongCach: slot.dataSourceConfig?.filterPhongCach ?? ALL_VALUE,
+      filterPhanLoai: slot.dataSourceConfig?.filterPhanLoai ?? ALL_VALUE,
+      filterHuongDi: slot.dataSourceConfig?.filterHuongDi ?? ALL_VALUE,
+    });
   const sourceMoHinhOptions = (source: ResolvedGeneratePageConfig) => {
     const set = new Set<string>();
     entities.forEach((entity) => {
@@ -877,6 +884,28 @@ export function PackTabContent({
       if (entity.status !== "active") return;
       if (source.selectedSheet !== ALL_VALUE && entity.sheetName !== source.selectedSheet) return;
       if (entity.categorySub) set.add(entity.categorySub);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "vi"));
+  };
+
+  // Phase 3: collect distinct phan_loai (Local/Du lịch) and Huong_di (direction) from metadata
+  const sourcePhanLoaiOptions = (source: ResolvedGeneratePageConfig) => {
+    const set = new Set<string>();
+    entities.forEach((entity) => {
+      if (entity.status !== "active") return;
+      if (source.selectedSheet !== ALL_VALUE && entity.sheetName !== source.selectedSheet) return;
+      const v = entity.metadata?.phan_loai;
+      if (v != null && String(v).trim()) set.add(String(v).trim());
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "vi"));
+  };
+  const sourceHuongDiOptions = (source: ResolvedGeneratePageConfig) => {
+    const set = new Set<string>();
+    entities.forEach((entity) => {
+      if (entity.status !== "active") return;
+      if (source.selectedSheet !== ALL_VALUE && entity.sheetName !== source.selectedSheet) return;
+      const v = entity.metadata?.direction; // Huong_di normalized to "direction"
+      if (v != null && String(v).trim()) set.add(String(v).trim());
     });
     return Array.from(set).sort((a, b) => a.localeCompare(b, "vi"));
   };
@@ -968,6 +997,8 @@ export function PackTabContent({
       selectedSheet: merged.selectedSheet ?? ALL_VALUE,
       filterMoHinh: merged.filterMoHinh ?? ALL_VALUE,
       filterPhongCach: merged.filterPhongCach ?? ALL_VALUE,
+      filterPhanLoai: merged.filterPhanLoai ?? ALL_VALUE,
+      filterHuongDi: merged.filterHuongDi ?? ALL_VALUE,
     };
   }, [activeGenerateConfig, clusterSourceSlots]);
   const shouldShowClusterSourceControls = clusterSourceSlots.length > 0;
@@ -1172,8 +1203,10 @@ export function PackTabContent({
         if (patch.selectedSheet != null) {
           nextConfig.filterMoHinh = ALL_VALUE;
           nextConfig.filterPhongCach = ALL_VALUE;
+          nextConfig.filterPhanLoai = ALL_VALUE;
+          nextConfig.filterHuongDi = ALL_VALUE;
         }
-        (["selectedSheet", "filterMoHinh", "filterPhongCach"] as const).forEach((key) => {
+        (["selectedSheet", "filterMoHinh", "filterPhongCach", "filterPhanLoai", "filterHuongDi"] as const).forEach((key) => {
           if (nextConfig[key] === ALL_VALUE) delete nextConfig[key];
           if (!nextConfig[key]) delete nextConfig[key];
         });
@@ -1419,6 +1452,8 @@ export function PackTabContent({
   ) => {
     const moOptions = sourceMoHinhOptions(sourceConfig);
     const phongOptions = sourcePhongCachOptions(sourceConfig);
+    const phanLoaiOptions = sourcePhanLoaiOptions(sourceConfig);
+    const huongDiOptions = sourceHuongDiOptions(sourceConfig);
     return (
       <div className="grid gap-2 rounded-md border bg-background/70 p-2">
         {options?.title && (
@@ -1481,6 +1516,47 @@ export function PackTabContent({
             <SelectContent>
               <SelectItem value={ALL_VALUE}>Tất cả</SelectItem>
               {phongOptions.map((item) => (
+                <SelectItem key={item} value={item}>
+                  {item}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {/* Phase 3: new filters for phan_loai (Loại hình khách) and Huong_di (Hướng đi / Khu vực) */}
+        <div>
+          <Label className="text-xs">Loại hình khách</Label>
+          <Select
+            value={sourceConfig.filterPhanLoai ?? ALL_VALUE}
+            onValueChange={(value) => applySlotSourcePatch(slots, { filterPhanLoai: value })}
+            disabled={phanLoaiOptions.length === 0}
+          >
+            <SelectTrigger className="h-8" disabled={phanLoaiOptions.length === 0}>
+              <SelectValue placeholder="Tất cả loại hình" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_VALUE}>Tất cả</SelectItem>
+              {phanLoaiOptions.map((item) => (
+                <SelectItem key={item} value={item}>
+                  {item}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label className="text-xs">Hướng đi / Khu vực</Label>
+          <Select
+            value={sourceConfig.filterHuongDi ?? ALL_VALUE}
+            onValueChange={(value) => applySlotSourcePatch(slots, { filterHuongDi: value })}
+            disabled={huongDiOptions.length === 0}
+          >
+            <SelectTrigger className="h-8" disabled={huongDiOptions.length === 0}>
+              <SelectValue placeholder="Tất cả hướng đi" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_VALUE}>Tất cả</SelectItem>
+              {huongDiOptions.map((item) => (
                 <SelectItem key={item} value={item}>
                   {item}
                 </SelectItem>
@@ -1572,7 +1648,7 @@ export function PackTabContent({
             : filteredEntities.find((entity) => entity.metadata?.[key]);
         options.push({
           path,
-          label: key,
+          label: fieldLabelVi(key),
           sample: truncate(sampleEntity?.metadata?.[key]),
         });
       });
@@ -1627,6 +1703,8 @@ export function PackTabContent({
         selectedSheet: ALL_VALUE,
         filterMoHinh: ALL_VALUE,
         filterPhongCach: ALL_VALUE,
+        filterPhanLoai: ALL_VALUE,
+        filterHuongDi: ALL_VALUE,
         prioritizePartner: cfg.prioritizePartner,
         onlyPartner: cfg.onlyPartner,
         partnerQuotaPerPage: cfg.partnerQuotaPerPage,
@@ -1651,6 +1729,8 @@ export function PackTabContent({
             selectedSheet: ALL_VALUE,
             filterMoHinh: ALL_VALUE,
             filterPhongCach: ALL_VALUE,
+            filterPhanLoai: ALL_VALUE,
+            filterHuongDi: ALL_VALUE,
           });
           return {
             partnerQuota: pageCfg.partnerQuotaPerPage,
@@ -1738,6 +1818,8 @@ export function PackTabContent({
         selectedSheet: ALL_VALUE,
         filterMoHinh: ALL_VALUE,
         filterPhongCach: ALL_VALUE,
+        filterPhanLoai: ALL_VALUE,
+        filterHuongDi: ALL_VALUE,
         prioritizePartner,
         onlyPartner,
         partnerQuotaPerPage,
@@ -2145,6 +2227,8 @@ export function PackTabContent({
       selectedSheet: globalGenerateConfig.selectedSheet,
       filterMoHinh: globalGenerateConfig.filterMoHinh,
       filterPhongCach: globalGenerateConfig.filterPhongCach,
+      filterPhanLoai: globalGenerateConfig.filterPhanLoai,
+      filterHuongDi: globalGenerateConfig.filterHuongDi,
       pageConfigs: sourceNeutralPageConfigs,
     });
     if (job.pages.length === 0) {

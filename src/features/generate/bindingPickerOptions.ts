@@ -4,7 +4,11 @@ import {
   TEXT_BINDING_OPTIONS,
   getEntityScopedTextBindingBasePath,
 } from "@/engines/binding/dataBinding";
-import { entityFieldOptionsForUi } from "@/engines/normalize/fieldRegistry";
+import {
+  collectDynamicMetadataKeys,
+  entityFieldOptionsForUi,
+} from "@/engines/normalize/fieldRegistry";
+import { fieldLabelVi } from "@/engines/normalize/aliases";
 import type { Entity } from "@/models";
 
 export type BindingPickerGroup = "Cố định" | "Dữ liệu" | "Ảnh";
@@ -93,7 +97,6 @@ export function buildTextBindingPickerOptions(params: {
   const seen = new Set(options.map((option) => option.value));
   const registryOptions = entityFieldOptionsForUi(entities);
   for (const field of registryOptions) {
-    if (field.path.startsWith("entity.metadata.")) continue;
     if (seen.has(field.path)) continue;
     if (!fieldVisibleForEntities(field.path, entities, currentValue)) continue;
     seen.add(field.path);
@@ -101,6 +104,26 @@ export function buildTextBindingPickerOptions(params: {
       value: field.path,
       label: field.label,
       sample: field.sample ? truncate(field.sample) : undefined,
+      group: "Dữ liệu",
+    });
+  }
+
+  // Phase 2: also surface *dynamic* (unregistered) metadata columns from the actual imported data
+  // (e.g. "Mo_ta", "Huong_di", "Phan_loai", "Nguoi Fix", "Mon_an_noi_bat" if not aliased).
+  // Mirrors the logic used in the list/compose picker (PackTabContent.tsx).
+  const dynamicKeys = collectDynamicMetadataKeys(entities);
+  for (const key of dynamicKeys) {
+    const path = `entity.metadata.${key}`;
+    if (seen.has(path)) continue;
+    if (!fieldVisibleForEntities(path, entities, currentValue)) continue;
+    seen.add(path);
+    const niceLabel = fieldLabelVi(key);
+    options.push({
+      value: path,
+      label: niceLabel !== key ? niceLabel : key, // prefer Vietnamese label if we have one
+      sample: truncate(
+        entities.find((e) => e.metadata?.[key])?.metadata?.[key]
+      ),
       group: "Dữ liệu",
     });
   }

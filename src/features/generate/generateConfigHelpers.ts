@@ -18,6 +18,8 @@ export function resolveGeneratePageConfig(
     selectedSheet: pageConfig?.selectedSheet ?? globalConfig.selectedSheet,
     filterMoHinh: pageConfig?.filterMoHinh ?? globalConfig.filterMoHinh,
     filterPhongCach: pageConfig?.filterPhongCach ?? globalConfig.filterPhongCach,
+    filterPhanLoai: pageConfig?.filterPhanLoai ?? globalConfig.filterPhanLoai,
+    filterHuongDi: pageConfig?.filterHuongDi ?? globalConfig.filterHuongDi,
     prioritizePartner: pageConfig?.prioritizePartner ?? globalConfig.prioritizePartner,
     onlyPartner,
     partnerQuotaPerPage: onlyPartner
@@ -32,6 +34,13 @@ function entityMatchesGenerateSource(entity: Entity, config: ResolvedGeneratePag
   if (config.selectedSheet !== ALL_VALUE && entity.sheetName !== config.selectedSheet) return false;
   if (config.filterMoHinh !== ALL_VALUE && entity.categoryMain !== config.filterMoHinh) return false;
   if (config.filterPhongCach !== ALL_VALUE && entity.categorySub !== config.filterPhongCach) {
+    return false;
+  }
+  // Phase 3 new filters (values live in metadata for phan_loai / Huong_di → direction)
+  if (config.filterPhanLoai !== ALL_VALUE && entity.metadata?.phan_loai !== config.filterPhanLoai) {
+    return false;
+  }
+  if (config.filterHuongDi !== ALL_VALUE && entity.metadata?.direction !== config.filterHuongDi) {
     return false;
   }
   return true;
