@@ -731,6 +731,8 @@ export interface CombinedLayoutBlueprint {
   version: 2;
   visualBlueprint: VisualBlueprint;
   dataBlueprint?: DataBlueprint;
+  /** Layer 3 (Template Frame Synthesis) output — promoted to first-class field in Phase 2 of stabilization. */
+  layer3Frame?: TemplateFrameSpec;
 }
 
 /**
