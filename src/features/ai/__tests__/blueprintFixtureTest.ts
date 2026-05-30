@@ -8,7 +8,7 @@
 // để xác nhận exactRect / preferredBinding / textRunParts được ưu tiên (thinning heuristics).
 
 import { nanoid } from "nanoid";
-import type { BlueprintBlock, CombinedLayoutBlueprint } from "@/models";
+import type { BlueprintBlock, CombinedLayoutBlueprint, TemplateFrameSpec } from "@/models";
 import { repairCombinedLayoutBlueprint, isSupportedBindingPath, SUPPORTED_TEXT_BINDINGS, SUPPORTED_IMAGE_BINDINGS } from "../blueprintRepair";
 import { aiLayoutToTemplateWithQuality } from "../templateFromImage";
 
@@ -521,7 +521,7 @@ export function runAllFixtureTests() {
 // ── Layer 3 test: exactRect and preferredBinding from frame are respected ──
 function testLayer3FidelityPreference() {
   const bp = makeCoverBlueprint();
-  const mockFrame: import("@/models").TemplateFrameSpec = {
+  const mockFrame: TemplateFrameSpec = {
     version: 3,
     source: { visualBlueprint: bp.visualBlueprint },
     synthesis: {
@@ -536,7 +536,7 @@ function testLayer3FidelityPreference() {
     },
   };
 
-  const { template } = aiLayoutToTemplateWithQuality(bp, "L3 Test", { layer3Frame: mockFrame } as any);
+  const { template } = aiLayoutToTemplateWithQuality(bp, "L3 Test", { layer3Frame: mockFrame });
   const titleSlot = template.slots.find((s) => s.name === "title_1");
 
   // The exactRect from Layer 3 should have been used (thinning the old ratio math)
