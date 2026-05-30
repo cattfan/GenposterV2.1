@@ -761,18 +761,25 @@ export async function runVisionTemplatePipeline(input: {
         customInstructions: input.customInstructions,
         dataColumns: input.dataColumns,
       });
-      if (l3.ok) {
-        layer3Frame = l3.frame;
-      } else {
+    if (l3.ok) {
+      layer3Frame = l3.frame;
+      const conf = l3.frame.synthesis?.confidence;
+      if (typeof conf === "number" && conf < 0.6) {
         visualPass.visualBlueprint.warnings = [
           ...(visualPass.visualBlueprint.warnings ?? []),
-          `Layer 3 (frame synthesis) fallback: ${l3.error}`,
+          `Layer 3 confidence thấp (${conf.toFixed(2)}). Kết quả có thể cần chỉnh tay nhiều hơn.`,
+        ];
+      }
+    } else {
+        visualPass.visualBlueprint.warnings = [
+          ...(visualPass.visualBlueprint.warnings ?? []),
+          `Layer 3 (fidelity=${input.fidelity ?? "balanced"}) fallback: ${l3.error}. Template vẫn dùng L1+L2 heuristics.`,
         ];
       }
     } catch (e: any) {
       visualPass.visualBlueprint.warnings = [
         ...(visualPass.visualBlueprint.warnings ?? []),
-        `Layer 3 error: ${e?.message ?? e}`,
+        `Layer 3 (fidelity=${input.fidelity ?? "balanced"}) error: ${e?.message ?? e}. Template vẫn dùng L1+L2 heuristics.`,
       ];
     } finally {
       if (process.env.NODE_ENV !== "production") {
