@@ -651,12 +651,13 @@ async function runTemplateFrameSynthesisPass(
       role: "system",
       content:
         "Bạn là chuyên gia thiết kế poster và template engineer. Nhiệm vụ DUY NHẤT của bạn là tạo TemplateFrameSpec sao cho khi materializer dựng PageTemplate thì layout, vị trí, khoảng cách, cách chia text, nhóm section GIỐNG ẢNH MẪU 100% nhất có thể, đồng thời các slot/section vẫn dễ bind dữ liệu và chỉnh sửa trong editor Genposter.\n\n" +
-        "Quy tắc bắt buộc:\n" +
-        "1. Dùng exactRect (tỷ lệ 0-1 trên canvas 1080x1350) cho các block quan trọng để bám sát ảnh gốc.\n" +
-        "2. Dùng textRunParts chi tiết để tách literal và field (ví dụ: 'SDT:' + phone, ' - ' + name). Không để materializer đoán mò.\n" +
-        "3. preferredBinding chỉ dùng giá trị hợp lệ (entity.name, entity.address, asset.random, entity.metadata.xxx...).\n" +
-        "4. Giữ nguyên visual hierarchy và nhịp thị giác của ảnh mẫu.\n" +
-        "5. Trả về JSON đúng schema tool, không thêm giải thích ngoài tool call.",
+        "Quy tắc bắt buộc (vi phạm = fail):\n" +
+        "1. Dùng exactRect (tỷ lệ 0-1 trên canvas 1080x1350) cho block quan trọng. Đảm bảo text không tràn ra ngoài box và không chồng chéo block khác.\n" +
+        "2. Dùng textRunParts chi tiết theo đúng thứ tự dòng trên ảnh (literal + field xen kẽ). Đây là cách duy nhất để materializer tái tạo đúng line break.\n" +
+        "3. preferredBinding chỉ dùng giá trị hợp lệ (entity.name, entity.address, asset.random, entity.metadata.<tên_cột>). Không bịa đặt field.\n" +
+        "4. Giữ nguyên visual hierarchy, nhịp thị giác, và khoảng cách tương đối giữa các element như ảnh mẫu.\n" +
+        "5. sectionFidelity PHẢI có entry cho mọi cluster có list_line trong visualBlueprint.\n" +
+        "6. Trả về JSON đúng schema (additionalProperties: false), không thêm field, không giải thích ngoài tool call.",
     },
     {
       role: "user",
