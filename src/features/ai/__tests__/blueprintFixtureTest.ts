@@ -6,6 +6,9 @@
 //
 // Layer 3 (TemplateFrameSpec) được test bằng cách truyền layer3Frame vào aiLayoutToTemplateWithQuality
 // để xác nhận exactRect / preferredBinding / textRunParts được ưu tiên (thinning heuristics).
+//
+// Gating policy (Phase 3): fidelity="strict" bỏ qua L3 hoàn toàn trong runVisionTemplatePipeline.
+// "creative" chạy L3 + prompt mạnh nhất. Test gián tiếp qua real usage + fixture này.
 
 import { nanoid } from "nanoid";
 import type { BlueprintBlock, CombinedLayoutBlueprint, TemplateFrameSpec } from "@/models";
