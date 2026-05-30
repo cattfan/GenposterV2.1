@@ -368,75 +368,90 @@ const BUILD_TEMPLATE_FRAME_TOOL = {
   function: {
     name: "build_template_frame",
     description:
-      "Dựa trên ảnh gốc + visual blueprint (pass 1) + data blueprint (pass 2), hãy trả về TemplateFrameSpec giúp materializer dựng PageTemplate GIỐNG ẢNH MẪU NHẤT CÓ THỂ về mặt thị giác (vị trí chính xác, text run, spacing, nhóm section) nhưng vẫn là bộ khung reusable, dễ bind dữ liệu, dễ chỉnh trong editor. Ưu tiên exactRect và textRunParts chi tiết.",
+      "Dựa trên ảnh gốc + VisualBlueprint (pass 1) + DataBlueprint (pass 2), trả về TemplateFrameSpec để materializer tạo PageTemplate GIỐNG ẢNH MẪU 100% về mặt thị giác (vị trí, kích thước, text line breaks, spacing, alignment) nhưng vẫn là bộ khung editable + data-bindable trong Genposter. Bắt buộc dùng exactRect (tỷ lệ 0-1) cho block quan trọng và textRunParts chi tiết. Không thêm field ngoài schema.",
     parameters: {
       type: "object",
       properties: {
         templateFrame: {
           type: "object",
+          additionalProperties: false,
+          description: "Root output. Phải khớp chính xác TemplateFrameSpec interface.",
           properties: {
-            version: { const: 3 },
+            version: { const: 3, description: "Luôn là 3" },
             source: {
               type: "object",
+              additionalProperties: false,
+              description: "Echo lại input để trace. visualBlueprint bắt buộc.",
               properties: {
-                visualBlueprint: { type: "object" },
-                dataBlueprint: { type: "object" },
+                visualBlueprint: { type: "object", description: "Bản sao VisualBlueprint từ pass 1" },
+                dataBlueprint: { type: "object", description: "Bản sao DataBlueprint từ pass 2 (nếu có)" },
               },
               required: ["visualBlueprint"],
             },
             synthesis: {
               type: "object",
+              additionalProperties: false,
+              description: "Các quyết định fidelity cao cấp từ Layer 3. blockFidelity bắt buộc.",
               properties: {
                 blockFidelity: {
                   type: "array",
+                  description: "Một entry cho mỗi block quan trọng cần điều chỉnh vị trí/text so với heuristic.",
                   items: {
                     type: "object",
+                    additionalProperties: false,
                     properties: {
-                      blockName: { type: "string" },
+                      blockName: { type: "string", description: "PHẢI khớp chính xác name trong visualBlueprint.blocks" },
                       exactRect: {
                         type: "object",
+                        additionalProperties: false,
+                        description: "Vị trí chính xác theo tỷ lệ 0-1 trên canvas 1080x1350. Ưu tiên cho title, hero, group quan trọng.",
                         properties: {
-                          x: { type: "number" },
-                          y: { type: "number" },
-                          w: { type: "number" },
-                          h: { type: "number" },
-                          rotation: { type: "number" },
+                          x: { type: "number", description: "Left ratio 0-1" },
+                          y: { type: "number", description: "Top ratio 0-1" },
+                          w: { type: "number", description: "Width ratio 0-1 (tối thiểu 0.05)" },
+                          h: { type: "number", description: "Height ratio 0-1" },
+                          rotation: { type: "number", description: "Độ xoay (độ), thường 0" },
                         },
+                        required: ["x", "y", "w", "h"],
                       },
                       textRunParts: {
                         type: "array",
+                        description: "Chia text thành literal + field theo thứ tự xuất hiện trên ảnh. Giúp tránh lỗi parse.",
                         items: {
                           type: "object",
+                          additionalProperties: false,
                           properties: {
-                            kind: { enum: ["literal", "field"] },
-                            text: { type: "string" },
-                            bindingPath: { type: "string" },
-                            placeholder: { type: "string" },
+                            kind: { enum: ["literal", "field"], description: "literal = chữ cứng; field = bind dữ liệu" },
+                            text: { type: "string", description: "Nội dung literal (chỉ khi kind=literal)" },
+                            bindingPath: { type: "string", description: "Đường dẫn bind hợp lệ (chỉ khi kind=field)" },
+                            placeholder: { type: "string", description: "Gợi ý placeholder khi không có data" },
                           },
                           required: ["kind"],
                         },
                       },
-                      preferredBinding: { type: "string" },
-                      styleAnchor: { type: "object" },
-                      notes: { type: "string" },
+                      preferredBinding: { type: "string", description: "BindingPath ưu tiên cho block này (nếu khác heuristic)" },
+                      styleAnchor: { type: "object", description: "Gợi ý style (fontSize, weight, color...) để materializer tham khảo" },
+                      notes: { type: "string", description: "Ghi chú cho dev hoặc lý do chọn exactRect/textRunParts này" },
                     },
                     required: ["blockName"],
                   },
                 },
                 sectionFidelity: {
                   type: "array",
+                  description: "Gợi ý số lượng item tối đa cho mỗi cluster (list repeater).",
                   items: {
                     type: "object",
+                    additionalProperties: false,
                     properties: {
-                      clusterId: { type: "string" },
-                      suggestedMaxItems: { type: "number" },
-                      notes: { type: "string" },
+                      clusterId: { type: "string", description: "PHẢI khớp clusterId từ visualBlueprint" },
+                      suggestedMaxItems: { type: "number", description: "Số item tối đa khuyến nghị" },
+                      notes: { type: "string", description: "Lý do hoặc quan sát từ ảnh" },
                     },
                     required: ["clusterId"],
                   },
                 },
-                overallNotes: { type: "array", items: { type: "string" } },
-                confidence: { type: "number" },
+                overallNotes: { type: "array", items: { type: "string" }, description: "Các nhận xét tổng quát về layout (ví dụ: 'có 2 cột không đối xứng')" },
+                confidence: { type: "number", description: "0-1, độ tự tin của Layer 3 về các quyết định fidelity này" },
               },
               required: ["blockFidelity"],
             },
