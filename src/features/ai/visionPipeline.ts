@@ -625,7 +625,7 @@ async function runDataBlueprintPass(input: {
 }
 
 // ============================================================
-// Layer 3: Template Frame Synthesis Pass (NEW)
+// Layer 3: Template Frame Synthesis Pass (gated by fidelity since Phase 3)
 // ============================================================
 
 async function runTemplateFrameSynthesisPass(
@@ -723,40 +723,47 @@ export async function runVisionTemplatePipeline(input: {
     };
   }
 
-  // Layer 3 (always attempted for observability; full fidelity-based gating policy
-  // will be implemented in Phase 3 of stabilization plan)
+  // Layer 3 gating policy (Phase 3):
+  // - "strict":   skip entirely (fast, cheap, predictable; relies on L1+L2 + JS heuristics only)
+  // - "balanced": run L3 (current default behavior, good trade-off)
+  // - "creative": run L3 with maximum effort (strongest visual fidelity instructions)
+  //
+  // Graceful: when skipped or failed, materializer falls back cleanly (no layer3Frame).
+  const shouldRunLayer3 = (input.fidelity ?? "balanced") !== "strict";
+
   let layer3Frame: TemplateFrameSpec | undefined;
-  const l3Start = Date.now();
-  try {
-    const l3 = await runTemplateFrameSynthesisPass({
-      visualBlueprint: visualPass.visualBlueprint,
-      dataBlueprint: dataPass.dataBlueprint,
-      sourceImageDataUrl: input.imageDataUrl,
-      fidelity: input.fidelity,
-      customInstructions: input.customInstructions,
-      dataColumns: input.dataColumns,
-    });
-    if (l3.ok) {
-      layer3Frame = l3.frame;
-    } else {
-      // attach warning but do not fail the whole pipeline
+  if (shouldRunLayer3) {
+    const l3Start = Date.now();
+    try {
+      const l3 = await runTemplateFrameSynthesisPass({
+        visualBlueprint: visualPass.visualBlueprint,
+        dataBlueprint: dataPass.dataBlueprint,
+        sourceImageDataUrl: input.imageDataUrl,
+        fidelity: input.fidelity,
+        customInstructions: input.customInstructions,
+        dataColumns: input.dataColumns,
+      });
+      if (l3.ok) {
+        layer3Frame = l3.frame;
+      } else {
+        visualPass.visualBlueprint.warnings = [
+          ...(visualPass.visualBlueprint.warnings ?? []),
+          `Layer 3 (frame synthesis) fallback: ${l3.error}`,
+        ];
+      }
+    } catch (e: any) {
       visualPass.visualBlueprint.warnings = [
         ...(visualPass.visualBlueprint.warnings ?? []),
-        `Layer 3 (frame synthesis) fallback: ${l3.error}`,
+        `Layer 3 error: ${e?.message ?? e}`,
       ];
+    } finally {
+      if (process.env.NODE_ENV !== "production") {
+        const ms = Date.now() - l3Start;
+        console.debug(`[Layer3] synthesis took ${ms}ms (fidelity=${input.fidelity ?? "balanced"})`);
+      }
     }
-  } catch (e: any) {
-    visualPass.visualBlueprint.warnings = [
-      ...(visualPass.visualBlueprint.warnings ?? []),
-      `Layer 3 error: ${e?.message ?? e}`,
-    ];
-  } finally {
-    if (process.env.NODE_ENV !== "production") {
-      const ms = Date.now() - l3Start;
-      // Dev-only: helps validate latency risk of Layer 3
-      // (typical 3-12s depending on provider & image complexity)
-      console.debug(`[Layer3] synthesis took ${ms}ms (fidelity=${input.fidelity ?? "balanced"})`);
-    }
+  } else if (process.env.NODE_ENV !== "production") {
+    console.debug(`[Layer3] skipped (fidelity=strict)`);
   }
 
   const blueprint: CombinedLayoutBlueprint = {
