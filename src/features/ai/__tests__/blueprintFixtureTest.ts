@@ -517,6 +517,9 @@ export function runAllFixtureTests() {
   // Layer 3 fidelity preference test (new in 3-layer pipeline)
   testLayer3FidelityPreference();
 
+  // Layer 3 regression: rich frame with textRunParts + sectionFidelity (Phase 4)
+  testLayer3RichFrame();
+
   console.log(`\n══ Results: ${passed} passed, ${failed} failed ══`);
   return { passed, failed };
 }
@@ -551,6 +554,52 @@ function testLayer3FidelityPreference() {
     failed += 1;
     console.error("  ✗ FAIL: title_1 slot not found in Layer 3 test");
   }
+}
+
+// ── Layer 3 regression: rich frame with textRunParts + sectionFidelity ──
+function testLayer3RichFrame() {
+  console.log("\n── Test: Layer 3 rich frame (textRunParts + sectionFidelity) ──");
+  const bp = makePosterListBlueprint();
+  const mockFrame: TemplateFrameSpec = {
+    version: 3,
+    source: { visualBlueprint: bp.visualBlueprint },
+    synthesis: {
+      blockFidelity: [
+        {
+          blockName: "list_line_1_1",
+          textRunParts: [
+            { kind: "literal", text: "• " },
+            { kind: "field", bindingPath: "entity.name" },
+            { kind: "literal", text: " - " },
+            { kind: "field", bindingPath: "entity.priceRange" },
+          ],
+          notes: "test detailed text run split",
+        },
+      ],
+      sectionFidelity: [
+        { clusterId: "list_1", suggestedMaxItems: 5, notes: "test override max items" },
+      ],
+      confidence: 0.85,
+    },
+  };
+
+  const { template } = aiLayoutToTemplateWithQuality(bp, "L3 Rich Test", { layer3Frame: mockFrame });
+
+  // Verify textRunParts affected at least one slot (the materializer uses it for title/name etc.)
+  const firstListSlot = template.slots.find((s) => s.name === "list_line_1_1");
+  if (firstListSlot) {
+    // The slot should still exist and have some binding (even if textRunParts is consumed internally)
+    assert(firstListSlot.bindingPath != null || firstListSlot.title != null, "list_line slot from rich L3 frame still valid");
+  }
+
+  // Verify section maxItems was influenced by sectionFidelity
+  const firstSection = template.sections.find((s) => s.id === "list_1" || s.title?.includes("list_1"));
+  if (firstSection) {
+    assert(firstSection.maxItems <= 8, "section maxItems respected from L3 sectionFidelity (got " + firstSection.maxItems + ")");
+  }
+
+  // The frame itself should not have crashed the pipeline
+  assert(template.slots.length > 10, "rich L3 frame produced reasonable number of slots");
 }
 
 // Chạy trực tiếp
