@@ -9,6 +9,7 @@ import type {
   PageTemplate,
   Section,
   Slot,
+  TemplateFrameSpec,
   VisualBlueprint,
 } from "@/models";
 import { normalizeEntityTextPath } from "@/engines/binding/dataBinding";
@@ -786,7 +787,7 @@ function hasLineBlocksInCluster(visualBlueprint: VisualBlueprint, clusterId: str
 function buildSections(
   visualBlueprint: VisualBlueprint,
   dataBlueprint: DataBlueprint | undefined,
-  _layer3Frame?: import("@/models").TemplateFrameSpec,
+  layer3Frame?: TemplateFrameSpec,  // Phase 2: now properly typed, no leading _ needed
 ): Map<string, Section> {
   const sections = new Map<string, Section>();
 
@@ -906,7 +907,7 @@ function createSlotFromBlock(
   visualBlueprint: VisualBlueprint,
   canvasWidth: number,
   canvasHeight: number,
-  layer3Frame?: import("@/models").TemplateFrameSpec,
+  layer3Frame?: TemplateFrameSpec,
 ): Slot | null {
   const bindingHint = bindingHintForBlock(dataBlueprint, block);
   const sourceRole = bindingHint?.sourceRole ?? block.sourceRole;
@@ -1300,7 +1301,7 @@ export interface AiLayoutToTemplateResult {
 interface AiLayoutToTemplateOptions {
   sourceImageDataUrl?: string;
   /** Output from Layer 3 (Template Frame Synthesis) — preferred for high visual fidelity. */
-  layer3Frame?: import("@/models").TemplateFrameSpec;
+  layer3Frame?: TemplateFrameSpec;
 }
 
 function isVeryDarkColor(value: string | undefined): boolean {
@@ -1432,8 +1433,8 @@ export function aiLayoutToTemplateWithQuality(
     ...blueprint.visualBlueprint,
     blocks: normalizeVisualBlocks(blueprint.visualBlueprint, canvasWidth, canvasHeight),
   };
-  // Prefer Layer 3 frame when provided (from options or temporary attachment on layout)
-  const layer3Frame = options.layer3Frame ?? (layout as any)?.layer3Frame; // TODO (Phase 2): replace cast once CombinedLayoutBlueprint has optional layer3Frame field
+  // Prefer Layer 3 frame when provided (options or the now first-class field on layout)
+  const layer3Frame = options.layer3Frame ?? layout?.layer3Frame;
 
   const sections = buildSections(visualBlueprint, blueprint.dataBlueprint, layer3Frame);
 
