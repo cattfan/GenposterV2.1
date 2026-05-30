@@ -19,12 +19,12 @@ export async function aiGenerateTemplateFromImage(input: {
   preferVisibleLines?: boolean;
   dataColumns?: string[];
 }) {
-  // Layer 3 is automatically engaged inside the pipeline for all fidelities
-  // (with increasing emphasis on exact visual match for "creative").
+  // Layer 3 gating (Phase 3): "strict" skips for speed; "balanced"/"creative" run it.
+  // "creative" also receives max-strength visual fidelity instructions inside the L3 pass.
   return buildCombinedLayoutJson(input);
 }
 
-/** Convenience wrapper that forces the highest-fidelity 3-layer path. */
+/** Convenience wrapper that forces fidelity:"creative" (runs Layer 3 with max visual match instructions, slower). */
 export async function aiGenerateHighFidelityTemplateFromImage(
   input: Omit<Parameters<typeof aiGenerateTemplateFromImage>[0], "fidelity">,
 ) {
