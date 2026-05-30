@@ -8,7 +8,7 @@ import { AI_POSTER_FONT_FAMILIES } from "@/features/editor/fonts";
 import { callAi } from "./aiClient";
 import { serializeCombinedLayoutBlueprint } from "./blueprint";
 import type { LayoutFidelity } from "./templateLayers"; // canonical source (Phase 1 cleanup)
-import type { Layer3Input, Layer3Output } from "./templateLayers";
+import type { Layer3Input, Layer3Output, Layer4CriticInput, Layer4CriticOutput } from "./templateLayers";
 
 const SOURCE_ROLE_SCHEMA = {
   type: "string",
@@ -464,6 +464,37 @@ const BUILD_TEMPLATE_FRAME_TOOL = {
   },
 };
 
+const BUILD_FIDELITY_CRITIC_TOOL = {
+  type: "function" as const,
+  function: {
+    name: "critic_rectify",
+    description:
+      "Review một TemplateFrameSpec (từ Layer 3) + ảnh gốc. Trả về danh sách rectifications cụ thể để cải thiện visual fidelity (vị trí, text split, binding, style). Chỉ suggest thay đổi nếu thực sự làm giống ảnh hơn mà vẫn giữ tính editable.",
+    parameters: {
+      type: "object",
+      properties: {
+        rectifications: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              target: { enum: ["slot", "section", "style", "binding"], description: "Loại đối tượng cần sửa" },
+              blockNameOrCluster: { type: "string", description: "Tên block hoặc clusterId" },
+              change: { type: "string", description: "Mô tả thay đổi cụ thể, vd: 'move title_1 +12px y', 'split name_2 thành name + phone'" },
+              confidence: { type: "number", description: "0-1, độ tự tin của gợi ý này" },
+            },
+            required: ["target", "change", "confidence"],
+          },
+        },
+        overallNotes: { type: "string" },
+        shouldReSynthesize: { type: "boolean", description: "true nếu nên chạy lại Layer 3 với các fix này" },
+      },
+      required: ["rectifications", "shouldReSynthesize"],
+    },
+  },
+};
+
 function fidelityInstruction(fidelity: LayoutFidelity): string {
   switch (fidelity) {
     case "strict":
@@ -706,6 +737,65 @@ async function runTemplateFrameSynthesisPass(
   return { ok: true, frame };
 }
 
+// ============================================================
+// Layer 4: Fidelity Critic (Phase 5 scaffolding - stretch)
+// ============================================================
+
+export async function runFidelityCritic(
+  input: Layer4CriticInput,
+): Promise<Layer4CriticOutput> {
+  if (!input.sourceImageDataUrl) {
+    return { rectifications: [], overallNotes: "No source image for critic", shouldReSynthesize: false };
+  }
+
+  const messages: any[] = [
+    {
+      role: "system",
+      content:
+        "Bạn là chuyên gia thiết kế UI/UX và template engineer. Nhiệm vụ là review TemplateFrameSpec (kết quả của Layer 3) so với ảnh gốc và đề xuất các rectification cụ thể, nhỏ, có thể áp dụng để tăng visual fidelity mà vẫn giữ template dễ edit và bind dữ liệu.\n\n" +
+        "Quy tắc:\n" +
+        "- Chỉ suggest thay đổi nếu thật sự làm giống ảnh mẫu hơn đáng kể.\n" +
+        "- Ưu tiên thay đổi nhỏ (vị trí, split text, binding) thay vì redesign lớn.\n" +
+        "- Trả về JSON đúng schema tool critic_rectify.",
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text:
+            "TemplateFrameSpec cần review:\n" +
+            JSON.stringify(input.frame, null, 2) +
+            "\n\nHãy gọi critic_rectify với các gợi ý cải thiện (nếu có).",
+        },
+        {
+          type: "image_url",
+          image_url: { url: input.sourceImageDataUrl },
+        },
+      ],
+    },
+  ];
+
+  const result = await callAi({
+    useVisionModel: true,
+    messages,
+    tools: [BUILD_FIDELITY_CRITIC_TOOL],
+    tool_choice: { type: "function", function: { name: "critic_rectify" } },
+    temperature: 0.1,
+  });
+
+  if (!result.ok) {
+    return { rectifications: [], overallNotes: `Critic error: ${result.error}`, shouldReSynthesize: false };
+  }
+
+  const args = result.toolArgs as Partial<Layer4CriticOutput> | null;
+  return {
+    rectifications: args?.rectifications ?? [],
+    overallNotes: args?.overallNotes,
+    shouldReSynthesize: !!args?.shouldReSynthesize,
+  };
+}
+
 export async function runVisionTemplatePipeline(input: {
   imageDataUrl: string;
   fidelity?: LayoutFidelity;
@@ -789,6 +879,33 @@ export async function runVisionTemplatePipeline(input: {
     }
   } else if (process.env.NODE_ENV !== "production") {
     console.debug(`[Layer3] skipped (fidelity=strict)`);
+  }
+
+  // Optional Layer 4 critic (Phase 5 scaffolding - only for creative mode after successful L3)
+  if (input.fidelity === "creative" && layer3Frame) {
+    try {
+      const criticStart = Date.now();
+      const critic = await runFidelityCritic({
+        frame: layer3Frame,
+        sourceImageDataUrl: input.imageDataUrl,
+      });
+      if (critic.rectifications.length > 0) {
+        visualPass.visualBlueprint.warnings = [
+          ...(visualPass.visualBlueprint.warnings ?? []),
+          `Layer 4 critic: ${critic.rectifications.length} gợi ý cải thiện (shouldReSynthesize=${critic.shouldReSynthesize}). Xem log dev để chi tiết.`,
+        ];
+        if (process.env.NODE_ENV !== "production") {
+          console.debug("[Layer4] rectifications:", critic.rectifications, critic.overallNotes);
+        }
+      }
+      if (process.env.NODE_ENV !== "production") {
+        console.debug(`[Layer4] critic took ${Date.now() - criticStart}ms`);
+      }
+    } catch (e: any) {
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[Layer4] critic skipped:", e?.message ?? e);
+      }
+    }
   }
 
   const blueprint: CombinedLayoutBlueprint = {
