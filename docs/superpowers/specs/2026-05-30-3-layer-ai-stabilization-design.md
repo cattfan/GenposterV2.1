@@ -1,5 +1,7 @@
 # 2026-05-30 - Incremental Stabilization of 3-Layer AI Template Generation (gen mẫu)
 
+> **Status (30 May 2026)**: Phases 1–4 complete and pushed. Phase 5 (Layer 4 critic scaffolding) remains optional/stretch.
+
 ## 1. Context & Goal
 
 The 3-layer architecture for high visual fidelity template generation (L1: Visual Perception → L2: Semantic/Data → L3: Template Frame Synthesis) was implemented and reviewed.

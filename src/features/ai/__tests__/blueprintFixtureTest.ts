@@ -589,11 +589,11 @@ function testLayer3RichFrame() {
   const firstListSlot = template.slots.find((s) => s.name === "list_line_1_1");
   if (firstListSlot) {
     // The slot should still exist and have some binding (even if textRunParts is consumed internally)
-    assert(firstListSlot.bindingPath != null || firstListSlot.title != null, "list_line slot from rich L3 frame still valid");
+    assert(firstListSlot.bindingPath != null || firstListSlot.staticText != null, "list_line slot from rich L3 frame still valid");
   }
 
   // Verify section maxItems was influenced by sectionFidelity
-  const firstSection = template.sections.find((s) => s.id === "list_1" || s.title?.includes("list_1"));
+  const firstSection = template.sections.find((s) => s.sectionId === "list_1" || s.title.includes("list_1"));
   if (firstSection) {
     assert(firstSection.maxItems <= 8, "section maxItems respected from L3 sectionFidelity (got " + firstSection.maxItems + ")");
   }
