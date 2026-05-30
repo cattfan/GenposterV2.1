@@ -7,7 +7,7 @@ import type {
 import { AI_POSTER_FONT_FAMILIES } from "@/features/editor/fonts";
 import { callAi } from "./aiClient";
 import { serializeCombinedLayoutBlueprint } from "./blueprint";
-import type { LayoutFidelity } from "./aiFeatures";
+import type { LayoutFidelity } from "./templateLayers"; // canonical source (Phase 1 cleanup)
 import type { Layer3Input, Layer3Output } from "./templateLayers";
 
 const SOURCE_ROLE_SCHEMA = {
@@ -723,7 +723,8 @@ export async function runVisionTemplatePipeline(input: {
     };
   }
 
-  // Layer 3 (optional for now - will be driven by fidelity flag in later steps)
+  // Layer 3 (always attempted for observability; full fidelity-based gating policy
+  // will be implemented in Phase 3 of stabilization plan)
   let layer3Frame: TemplateFrameSpec | undefined;
   const l3Start = Date.now();
   try {
@@ -764,7 +765,7 @@ export async function runVisionTemplatePipeline(input: {
     dataBlueprint: dataPass.dataBlueprint,
   };
   if (layer3Frame) {
-    (blueprint as any).layer3Frame = layer3Frame; // temporary until public API updated
+    (blueprint as any).layer3Frame = layer3Frame; // TODO (Phase 2): replace with proper field on CombinedLayoutBlueprint
   }
 
   return { ok: true, blueprint };

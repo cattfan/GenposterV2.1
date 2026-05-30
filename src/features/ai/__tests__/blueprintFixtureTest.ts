@@ -2,6 +2,8 @@
 // Chạy: npx tsx src/features/ai/__tests__/blueprintFixtureTest.ts
 // Hoặc import và gọi runAllFixtureTests() từ dev console.
 //
+// Part of 3-layer stabilization (Phase 1 cleanup + later fidelity gating tests).
+//
 // Layer 3 (TemplateFrameSpec) được test bằng cách truyền layer3Frame vào aiLayoutToTemplateWithQuality
 // để xác nhận exactRect / preferredBinding / textRunParts được ưu tiên (thinning heuristics).
 

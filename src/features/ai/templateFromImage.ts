@@ -1433,7 +1433,7 @@ export function aiLayoutToTemplateWithQuality(
     blocks: normalizeVisualBlocks(blueprint.visualBlueprint, canvasWidth, canvasHeight),
   };
   // Prefer Layer 3 frame when provided (from options or temporary attachment on layout)
-  const layer3Frame = options.layer3Frame ?? (layout as any)?.layer3Frame;
+  const layer3Frame = options.layer3Frame ?? (layout as any)?.layer3Frame; // TODO (Phase 2): replace cast once CombinedLayoutBlueprint has optional layer3Frame field
 
   const sections = buildSections(visualBlueprint, blueprint.dataBlueprint, layer3Frame);
 

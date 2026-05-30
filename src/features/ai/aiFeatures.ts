@@ -8,9 +8,9 @@ import { buildCombinedLayoutJson } from "./visionPipeline";
 // 1. Generate page layout từ 1 ảnh (3-layer AI pipeline)
 // ============================================================
 
-// Fidelity levels. "creative" enables stronger Layer 3 (Template Frame Synthesis)
-// for maximum visual match to the source design image.
-export type LayoutFidelity = "strict" | "balanced" | "creative";
+// Fidelity levels re-exported from the single source of truth in templateLayers.ts
+// (the canonical place for all 3-layer contracts).
+export type { LayoutFidelity } from "./templateLayers";
 
 export async function aiGenerateTemplateFromImage(input: {
   imageDataUrl: string;
