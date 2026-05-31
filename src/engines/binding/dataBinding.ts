@@ -847,6 +847,12 @@ export function textVerticalFlexAlign(
 /** Clip-path CSS theo shapeKind, cho ảnh nằm trong shape. */
 export function shapeClipPath(shapeKind: NonNullable<Slot["shapeKind"]>): string | undefined {
   if (shapeKind === "triangle") return "polygon(50% 0%, 100% 100%, 0% 100%)";
+  if (shapeKind === "star") {
+    return "polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)";
+  }
+  if (shapeKind === "arrow") {
+    return "polygon(0% 30%, 60% 30%, 60% 0%, 100% 50%, 60% 100%, 60% 70%, 0% 70%)";
+  }
   return undefined;
 }
 

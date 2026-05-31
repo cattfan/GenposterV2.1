@@ -8,7 +8,7 @@
 // - Highlight row khi element đang selected
 // - Multi-select (Shift+click)
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   closestCenter,
@@ -26,6 +26,8 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  ChevronDown,
+  ChevronRight,
   Eye,
   EyeOff,
   GripVertical,
@@ -87,6 +89,10 @@ function elementLabel(element: DesignElement): string {
 interface SortableLayerRowProps {
   element: DesignElement;
   isSelected: boolean;
+  depth: number;
+  isGroup: boolean;
+  isExpanded: boolean;
+  onToggleExpand: (id: string) => void;
   onSelect: (id: string, multi: boolean) => void;
   onToggleHidden: (id: string) => void;
   onToggleLocked: (id: string) => void;
@@ -96,6 +102,10 @@ interface SortableLayerRowProps {
 function SortableLayerRow({
   element,
   isSelected,
+  depth,
+  isGroup,
+  isExpanded,
+  onToggleExpand,
   onSelect,
   onToggleHidden,
   onToggleLocked,
@@ -149,6 +159,33 @@ function SortableLayerRow({
       )}
       onClick={(e) => onSelect(element.elementId, e.shiftKey)}
     >
+      {/* Depth indent for nested groups */}
+      {depth > 0 && (
+        <span style={{ width: depth * 12 }} className="shrink-0" aria-hidden />
+      )}
+
+      {/* Expand/collapse chevron (groups only) */}
+      {isGroup ? (
+        <button
+          type="button"
+          className="shrink-0 text-muted-foreground"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleExpand(element.elementId);
+          }}
+          title={isExpanded ? "Thu gọn nhóm" : "Mở nhóm"}
+          aria-label={isExpanded ? "Thu gọn nhóm" : "Mở nhóm"}
+        >
+          {isExpanded ? (
+            <ChevronDown className="size-3.5" />
+          ) : (
+            <ChevronRight className="size-3.5" />
+          )}
+        </button>
+      ) : (
+        <span className="w-3.5 shrink-0" aria-hidden />
+      )}
+
       {/* Drag handle */}
       <button
         type="button"
@@ -239,11 +276,51 @@ export function LayersPanel({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+
   const selectedSet = new Set(selectedIds);
 
-  // Reverse: layers panel hiển thị top element ở trên (giống Canva/Figma).
-  const reversed = [...elements].reverse();
-  const ids = reversed.map((el) => el.elementId);
+  // Build a flat, render-able tree: top elements first (top of panel = top z),
+  // each group's children nested directly beneath it, indented by depth.
+  // Children that are collapsed are skipped. Elements with a parentId pointing
+  // to a non-existent element are treated as top-level (defensive).
+  const flatTree = useMemo(() => {
+    const byId = new Map(elements.map((el) => [el.elementId, el]));
+    const childrenOf = new Map<string | undefined, DesignElement[]>();
+    for (const el of elements) {
+      const key = el.parentId && byId.has(el.parentId) ? el.parentId : undefined;
+      const list = childrenOf.get(key) ?? [];
+      list.push(el);
+      childrenOf.set(key, list);
+    }
+
+    const result: Array<{ element: DesignElement; depth: number }> = [];
+    const walk = (parentKey: string | undefined, depth: number) => {
+      const siblings = childrenOf.get(parentKey) ?? [];
+      // Reverse so top-z renders at top of the panel (Canva/Figma convention).
+      const ordered = [...siblings].reverse();
+      for (const el of ordered) {
+        result.push({ element: el, depth });
+        const isGroup = el.kind === "group" || (childrenOf.get(el.elementId)?.length ?? 0) > 0;
+        if (isGroup && !collapsed.has(el.elementId)) {
+          walk(el.elementId, depth + 1);
+        }
+      }
+    };
+    walk(undefined, 0);
+    return result;
+  }, [elements, collapsed]);
+
+  const ids = flatTree.map((node) => node.element.elementId);
+
+  const toggleExpand = useCallback((id: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
@@ -268,6 +345,14 @@ export function LayersPanel({
     [selectedIds, selectedSet, onSelect],
   );
 
+  const childCount = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const el of elements) {
+      if (el.parentId) counts.set(el.parentId, (counts.get(el.parentId) ?? 0) + 1);
+    }
+    return counts;
+  }, [elements]);
+
   if (elements.length === 0) {
     return (
       <div className="p-3 text-center text-xs text-muted-foreground">
@@ -289,17 +374,25 @@ export function LayersPanel({
         onDragEnd={handleDragEnd}
       >
         <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-          {reversed.map((element) => (
-            <SortableLayerRow
-              key={element.elementId}
-              element={element}
-              isSelected={selectedSet.has(element.elementId)}
-              onSelect={handleSelect}
-              onToggleHidden={onToggleHidden}
-              onToggleLocked={onToggleLocked}
-              onRename={onRename}
-            />
-          ))}
+          {flatTree.map(({ element, depth }) => {
+            const isGroup =
+              element.kind === "group" || (childCount.get(element.elementId) ?? 0) > 0;
+            return (
+              <SortableLayerRow
+                key={element.elementId}
+                element={element}
+                depth={depth}
+                isGroup={isGroup}
+                isExpanded={!collapsed.has(element.elementId)}
+                onToggleExpand={toggleExpand}
+                isSelected={selectedSet.has(element.elementId)}
+                onSelect={handleSelect}
+                onToggleHidden={onToggleHidden}
+                onToggleLocked={onToggleLocked}
+                onRename={onRename}
+              />
+            );
+          })}
         </SortableContext>
       </DndContext>
     </div>

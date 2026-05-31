@@ -15,7 +15,9 @@ import {
   getDesignCanvasElement,
   getFitPageZoom,
   getNextZoom,
+  getSelectionBounds,
   getStageClientPoint,
+  getStageContentBox,
   getToolCursor,
   getZoomPanAtClientPoint,
   isPanToolActive,
@@ -102,13 +104,84 @@ export function useDesignViewport({
     editor.setPan(nextPan.panX, nextPan.panY);
   }, [activePage, editor, stageWrapRef]);
 
+  // Set zoom to an exact value (e.g. typed % or preset), anchored at the
+  // visible viewport center so the design stays put under the user's eyes.
+  const setZoomValue = useCallback(
+    (nextZoomRaw: number) => {
+      const nextZoom = Math.min(3, Math.max(0.1, nextZoomRaw));
+      const container = stageWrapRef.current;
+      const page = activePage;
+      if (!container || !page) {
+        editor.setZoom(nextZoom);
+        return;
+      }
+      const rect = container.getBoundingClientRect();
+      const nextPan = getZoomPanAtClientPoint({
+        container,
+        canvas: getDesignCanvasElement(container),
+        page,
+        currentZoom: zoom,
+        nextZoom,
+        panX: viewportPanX,
+        panY: viewportPanY,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2,
+      });
+      editor.setPan(nextPan.panX, nextPan.panY);
+      editor.setZoom(nextZoom);
+    },
+    [activePage, editor, stageWrapRef, viewportPanX, viewportPanY, zoom],
+  );
+
+  // Fit the current selection to the viewport (Canva's "fit to selection").
+  // Falls back to fit-page when nothing is selected.
+  const handleFitSelection = useCallback(() => {
+    const page = activePage;
+    const container = stageWrapRef.current;
+    if (!page || !container) return;
+    const bounds = getSelectionBounds(editor.selectedElements);
+    if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
+      handleResetZoom();
+      return;
+    }
+    const { contentWidth, contentHeight } = getStageContentBox(container);
+    const margin = 120;
+    const availW = Math.max(1, contentWidth - margin);
+    const availH = Math.max(1, contentHeight - margin);
+    const nextZoom = Math.min(
+      3,
+      Math.max(0.1, Math.min(availW / bounds.width, availH / bounds.height)),
+    );
+    const centerPan = getCenteredPagePan(page, container, nextZoom);
+    // Shift the centered-page pan so the selection center lands at viewport center.
+    const selCenterX = (bounds.x + bounds.width / 2) * nextZoom;
+    const selCenterY = (bounds.y + bounds.height / 2) * nextZoom;
+    const pageCenterX = (page.width * nextZoom) / 2;
+    const pageCenterY = (page.height * nextZoom) / 2;
+    editor.setZoom(nextZoom);
+    editor.setPan(
+      centerPan.panX + (pageCenterX - selCenterX),
+      centerPan.panY + (pageCenterY - selCenterY),
+    );
+  }, [activePage, editor, handleResetZoom, stageWrapRef]);
+
   const handleCanvasWheel = useCallback(
     (event: WheelEvent) => {
-      if (!event.ctrlKey && !event.metaKey) return;
-      event.preventDefault();
       const container = stageWrapRef.current;
       const page = activePage;
       if (!container || !page) return;
+      // Ctrl/Cmd + wheel = zoom (anchored at cursor). Plain wheel = pan the
+      // canvas naturally (vertical, or horizontal with Shift / trackpad deltaX),
+      // matching Canva's scroll behaviour.
+      if (!event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        const horizontal = event.shiftKey;
+        const dx = horizontal ? event.deltaY + event.deltaX : event.deltaX;
+        const dy = horizontal ? 0 : event.deltaY;
+        setEditorPan(viewportPanX - dx, viewportPanY - dy);
+        return;
+      }
+      event.preventDefault();
       const currentZoom = zoom;
       const nextZoom = getNextZoom(currentZoom, event.deltaY < 0 ? 1 : -1);
       const wrapRect = container.getBoundingClientRect();
@@ -242,6 +315,8 @@ export function useDesignViewport({
   return {
     handleZoomStep,
     handleResetZoom,
+    setZoomValue,
+    handleFitSelection,
     beginPan,
     updatePan,
     endPan,

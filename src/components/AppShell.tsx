@@ -100,7 +100,7 @@ function BrandMark({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "grid place-items-center rounded-xl bg-brand-gradient text-[color:var(--color-brand-ink)] shadow-sm",
+        "grid place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm",
         className,
       )}
     >
@@ -145,7 +145,7 @@ function NavLinks({
                 )}
               >
                 {active && !collapsed && (
-                  <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-brand-gradient" />
+                  <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary" />
                 )}
                 <Icon
                   className={cn(

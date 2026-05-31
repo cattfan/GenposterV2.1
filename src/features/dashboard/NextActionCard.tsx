@@ -4,14 +4,10 @@ import { cn } from "@/lib/utils";
 import type { NextAction } from "@/lib/dashboardSummary";
 
 const TONE_BG: Record<NextAction["tone"], string> = {
-  danger:
-    "from-rose-50 to-rose-100/40 border-rose-200 dark:from-rose-500/10 dark:to-rose-500/5 dark:border-rose-500/20",
-  warning:
-    "from-amber-50 to-amber-100/40 border-amber-200 dark:from-amber-500/10 dark:to-amber-500/5 dark:border-amber-500/20",
-  neutral:
-    "from-slate-50 to-slate-100/40 border-slate-200 dark:from-slate-500/10 dark:to-slate-500/5 dark:border-slate-500/20",
-  success:
-    "from-emerald-50 to-emerald-100/40 border-emerald-200 dark:from-emerald-500/10 dark:to-emerald-500/5 dark:border-emerald-500/20",
+  danger: "bg-rose-50 border-rose-200 dark:bg-rose-500/10 dark:border-rose-500/20",
+  warning: "bg-amber-50 border-amber-200 dark:bg-amber-500/10 dark:border-amber-500/20",
+  neutral: "bg-slate-50 border-slate-200 dark:bg-slate-500/10 dark:border-slate-500/20",
+  success: "bg-emerald-50 border-emerald-200 dark:bg-emerald-500/10 dark:border-emerald-500/20",
 };
 const TONE_LABEL: Record<NextAction["tone"], string> = {
   danger: "text-rose-700 dark:text-rose-300",
@@ -24,7 +20,7 @@ export function NextActionCard({ action }: { action: NextAction }) {
   return (
     <section
       className={cn(
-        "rounded-xl border bg-gradient-to-br p-5 shadow-sm",
+        "rounded-xl border p-5 shadow-sm",
         TONE_BG[action.tone],
       )}
       aria-label="Việc tiếp theo"

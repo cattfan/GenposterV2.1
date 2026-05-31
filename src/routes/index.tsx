@@ -1,11 +1,11 @@
 // src/routes/index.tsx
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Sparkles, UploadCloud, Download } from "lucide-react";
+import { Sparkles, UploadCloud, Download, Home } from "lucide-react";
 import { useLiveQuery } from "@/storage/useLiveQuery";
 import { db } from "@/storage/db";
 import { getSettings } from "@/storage/settings";
 import { Button } from "@/components/ui/button";
-import { PageContainer } from "@/components/PageHeader";
+import { PageContainer, PageHeader } from "@/components/PageHeader";
 import { buildDashboardSummary, type DashboardIssue } from "@/lib/dashboardSummary";
 import { NextActionCard } from "@/features/dashboard/NextActionCard";
 import { HealthChipRow } from "@/features/dashboard/HealthChipRow";
@@ -91,29 +91,32 @@ function Dashboard() {
 
   return (
     <PageContainer className="space-y-5">
-      <header className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Tổng quan</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {dashboard.issues.length > 0 ? `${dashboard.issues.length} việc cần xử lý` : "Mọi thứ OK"}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button asChild variant="outline" size="sm">
-            <Link to="/data"><UploadCloud className="size-4" />Nhập dữ liệu</Link>
-          </Button>
-          {driveCount > 0 && (
+      <PageHeader
+        icon={<Home className="size-5" />}
+        title="Tổng quan"
+        description={
+          dashboard.issues.length > 0
+            ? `${dashboard.issues.length} việc cần xử lý`
+            : "Mọi thứ OK"
+        }
+        actions={
+          <>
             <Button asChild variant="outline" size="sm">
-              <Link to="/data" search={{ tab: "images" }}>
-                <Download className="size-4" />Tải ảnh từ sheet
-              </Link>
+              <Link to="/data"><UploadCloud className="size-4" />Nhập dữ liệu</Link>
             </Button>
-          )}
-          <Button asChild size="sm">
-            <Link to="/generate"><Sparkles className="size-4" />Tạo nội dung</Link>
-          </Button>
-        </div>
-      </header>
+            {driveCount > 0 && (
+              <Button asChild variant="outline" size="sm">
+                <Link to="/data" search={{ tab: "images" }}>
+                  <Download className="size-4" />Tải ảnh từ sheet
+                </Link>
+              </Button>
+            )}
+            <Button asChild size="sm">
+              <Link to="/generate"><Sparkles className="size-4" />Tạo nội dung</Link>
+            </Button>
+          </>
+        }
+      />
 
       <NextActionCard action={dashboard.nextAction} />
 

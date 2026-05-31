@@ -268,6 +268,13 @@ const DesignElementNode = memo(
         element.style?.fit === "stretch" ? "fill" : (element.style?.fit ?? "cover")
       ) as CSSProperties["objectFit"];
       const filter = buildCssFilter(element.style);
+      const maskShape = element.style?.maskShape;
+      const maskClipPath =
+        maskShape && maskShape !== "rectangle" && maskShape !== "circle"
+          ? shapeClipPath(maskShape)
+          : undefined;
+      const maskRadius =
+        maskShape === "circle" ? "50%" : (element.style?.borderRadius ?? 0) * scale;
 
       return (
         <div
@@ -275,7 +282,8 @@ const DesignElementNode = memo(
           style={{
             ...style,
             overflow: "hidden",
-            borderRadius: (element.style?.borderRadius ?? 0) * scale,
+            borderRadius: maskRadius,
+            clipPath: maskClipPath,
           }}
         >
           {usableSrc ? (

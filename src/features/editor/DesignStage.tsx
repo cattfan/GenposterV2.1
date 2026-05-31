@@ -1012,6 +1012,139 @@ export function DesignStage({
                       }}
                     />
                   ))}
+                  {/* Multi-selection rotation knob: rotates the whole group
+                      around the bounding-box center (position + rotation). */}
+                  <button
+                    onPointerDown={(event) => {
+                      if (event.button !== 0) return;
+                      event.stopPropagation();
+                      const canvas = (event.currentTarget as HTMLElement).closest(
+                        "[data-design-canvas]",
+                      ) as HTMLElement | null;
+                      const centerX = (bounds.x + bounds.width / 2) * scale;
+                      const centerY = (bounds.y + bounds.height / 2) * scale;
+                      const startPoint = getCanvasPoint(
+                        canvas,
+                        scale,
+                        event.clientX,
+                        event.clientY,
+                        0,
+                        0,
+                      );
+                      const startAngle = Math.atan2(
+                        startPoint.y - centerY,
+                        startPoint.x - centerX,
+                      );
+                      const origElements = selectedIds
+                        .map((id) => elements.find((e) => e.elementId === id))
+                        .filter((e): e is DesignElement => !!e);
+                      const previewCache = createPreviewNodeCache(canvas, selectedIds);
+                      let latestPayloads: ResizePayload[] = [];
+                      setActiveTransformKind("resize");
+                      const scheduleRotate = createRafScheduler(
+                        (move: { clientX: number; clientY: number; shiftKey: boolean }) => {
+                          const point = getCanvasPoint(
+                            canvas,
+                            scale,
+                            move.clientX,
+                            move.clientY,
+                            0,
+                            0,
+                          );
+                          const currentAngle = Math.atan2(
+                            point.y - centerY,
+                            point.x - centerX,
+                          );
+                          let deltaDeg = ((currentAngle - startAngle) * 180) / Math.PI;
+                          deltaDeg = snapRotation(Math.round(deltaDeg), move) - 0;
+                          const rad = (deltaDeg * Math.PI) / 180;
+                          const cos = Math.cos(rad);
+                          const sin = Math.sin(rad);
+                          const groupCx = bounds.x + bounds.width / 2;
+                          const groupCy = bounds.y + bounds.height / 2;
+                          latestPayloads = origElements.map((el) => {
+                            const elCx = el.x + el.width / 2;
+                            const elCy = el.y + el.height / 2;
+                            const relX = elCx - groupCx;
+                            const relY = elCy - groupCy;
+                            const rotX = relX * cos - relY * sin;
+                            const rotY = relX * sin + relY * cos;
+                            const nextCx = groupCx + rotX;
+                            const nextCy = groupCy + rotY;
+                            return {
+                              elementId: el.elementId,
+                              patch: {
+                                x: nextCx - el.width / 2,
+                                y: nextCy - el.height / 2,
+                                rotation: (el.rotation ?? 0) + deltaDeg,
+                              },
+                            };
+                          });
+                          for (const el of origElements) {
+                            const nodes =
+                              previewCache.elementNodes.get(el.elementId) ?? [];
+                            const elLeft = el.x * scale;
+                            const elTop = el.y * scale;
+                            for (const node of nodes) {
+                              const baseTransform =
+                                node.dataset.previewBaseTransform ?? node.style.transform;
+                              node.dataset.previewBaseTransform = baseTransform;
+                              markPreviewNode(node, "transform");
+                              node.style.transformOrigin = `${centerX - elLeft}px ${centerY - elTop}px`;
+                              node.style.transform = `rotate(${deltaDeg}deg) ${baseTransform}`.trim();
+                            }
+                          }
+                        },
+                      );
+                      const onMove = (moveEvent: PointerEvent) => {
+                        scheduleRotate({
+                          clientX: moveEvent.clientX,
+                          clientY: moveEvent.clientY,
+                          shiftKey: moveEvent.shiftKey,
+                        });
+                      };
+                      const onEnd = () => {
+                        scheduleRotate.flush();
+                        resetPreviewMarkers(canvas, { restoreTransform: true });
+                        for (const node of previewCache.elementNodes.values()) {
+                          node.forEach((n) => (n.style.transformOrigin = ""));
+                        }
+                        if (latestPayloads.length > 0) onResizeMany(latestPayloads);
+                        onResizeCommit();
+                        setActiveTransformKind(null);
+                      };
+                      const onCancel = () => {
+                        scheduleRotate.cancel();
+                        resetPreviewMarkers(canvas, { restoreTransform: true });
+                        for (const node of previewCache.elementNodes.values()) {
+                          node.forEach((n) => (n.style.transformOrigin = ""));
+                        }
+                        onResizeCommit();
+                        setActiveTransformKind(null);
+                      };
+                      startPointerSession(event, { onMove, onEnd, onCancel });
+                    }}
+                    style={{
+                      position: "absolute",
+                      left: "50%",
+                      top: -52,
+                      width: 28,
+                      height: 28,
+                      marginLeft: -14,
+                      borderRadius: 9999,
+                      border: "1px solid rgba(124,58,237,0.9)",
+                      background: "#ffffff",
+                      boxShadow: "0 0 0 1px rgba(124,58,237,0.16), 0 1px 4px rgba(15,23,42,0.14)",
+                      display: "grid",
+                      placeItems: "center",
+                      cursor: "grab",
+                      pointerEvents: "auto",
+                      zIndex: 24,
+                    }}
+                    title="Xoay nhóm"
+                  >
+                    <RotateCw className="size-4 text-primary" />
+                  </button>
                 </div>
               ) : null}
 

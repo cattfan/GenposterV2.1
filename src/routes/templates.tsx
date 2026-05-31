@@ -44,7 +44,7 @@ import {
 } from "@/features/ai/aiFeatures";
 import { aiLayoutToTemplateWithQuality } from "@/features/ai/templateFromImage";
 import { buildComboFromAiResult, persistCombo } from "@/features/ai/comboFromImages";
-import { PageContainer } from "@/components/PageHeader";
+import { PageContainer, PageHeader } from "@/components/PageHeader";
 import { EmptyState, SkeletonList } from "@/components/ux";
 import { PackBuilder } from "@/features/packs/PackBuilder";
 import { PackPagePreview } from "@/features/packs/PackPagePreview";
@@ -792,32 +792,29 @@ function TemplatesPage() {
         hidden
         onChange={importPortableTemplateBundle}
       />
-      <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-accent text-accent-foreground">
-            <Package className="size-5" />
-          </div>
-          <div className="min-w-0">
-            <h1 className="text-3xl font-bold tracking-tight">Khuôn mẫu</h1>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 xl:shrink-0">
-          <Button variant="outline" onClick={() => portableImportRef.current?.click()}>
-            <FileUp className="size-4 mr-2" /> Nhập khuôn
-          </Button>
-          {editing && (
-            <Button variant="outline" onClick={() => exportPackTemplate(editing)}>
-              <FileDown className="size-4 mr-2" /> Xuất bộ
+      <PageHeader
+        icon={<Package className="size-5" />}
+        title="Khuôn mẫu"
+        description="Tạo và quản lý bộ khuôn nhiều trang cho từng chiến dịch."
+        actions={
+          <>
+            <Button variant="outline" onClick={() => portableImportRef.current?.click()}>
+              <FileUp className="size-4 mr-2" /> Nhập khuôn
             </Button>
-          )}
-          <Button variant="outline" onClick={onPickComboImages} disabled={aiBusy}>
-            <Layers className="size-4 mr-2" /> AI tạo ảnh
-          </Button>
-          <Button onClick={createNewPack}>
-            <Plus className="size-4 mr-2" /> Tạo bộ mới
-          </Button>
-        </div>
-      </div>
+            {editing && (
+              <Button variant="outline" onClick={() => exportPackTemplate(editing)}>
+                <FileDown className="size-4 mr-2" /> Xuất bộ
+              </Button>
+            )}
+            <Button variant="outline" onClick={onPickComboImages} disabled={aiBusy}>
+              <Layers className="size-4 mr-2" /> AI tạo ảnh
+            </Button>
+            <Button onClick={createNewPack}>
+              <Plus className="size-4 mr-2" /> Tạo bộ mới
+            </Button>
+          </>
+        }
+      />
 
       <Dialog open={singleOpen} onOpenChange={(o) => !aiBusy && setSingleOpen(o)}>
         <DialogContent className="max-w-2xl">

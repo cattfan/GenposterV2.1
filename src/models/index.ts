@@ -180,7 +180,7 @@ export interface Slot {
   staticText?: string;
   textRuns?: DesignTextRun[];
   staticImage?: string;
-  shapeKind?: "rectangle" | "circle" | "triangle" | "line" | "divider" | "badge";
+  shapeKind?: "rectangle" | "circle" | "triangle" | "line" | "divider" | "badge" | "star" | "arrow";
   bindingPath?: string;
   fieldParts?: BlueprintFieldPart[];
   allowedAssetRoles?: AssetRole[];
@@ -262,7 +262,7 @@ export interface ElementStyle extends SlotStyle {
   strokeLinecap?: "butt" | "round" | "square";
   strokeLinejoin?: "miter" | "round" | "bevel";
   tint?: string;
-  maskShape?: "rectangle" | "circle" | "triangle";
+  maskShape?: "rectangle" | "circle" | "triangle" | "star" | "arrow";
 }
 
 export interface DesignTextRun {

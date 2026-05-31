@@ -36,6 +36,7 @@ import {
   LockOpen,
   Minus,
   MousePointer2,
+  MoveRight,
   PanelLeft,
   PanelRight,
   Plus,
@@ -43,9 +44,15 @@ import {
   RotateCw,
   ScanLine,
   Save,
+  Scissors,
   Shapes,
+  Slash,
+  Square,
+  Circle,
   SquareDashed,
+  Star,
   Table2,
+  Triangle,
   Trash2,
   Type,
   Ungroup,
@@ -142,7 +149,14 @@ import {
   sanitizeAndCaptureBounds,
   saveSymbol,
 } from "./symbols";
+import { ELEMENT_PRESETS, type ElementPreset } from "./elementPresets";
+import {
+  filterBundledAssets,
+  type BundledAsset,
+  type BundledAssetCategory,
+} from "./bundledAssets";
 import { TextToolbar } from "./TextToolbar";
+import { PagesStrip } from "./PagesStrip";
 import {
   applyTextRunStyle,
   parseRichTextEditorContent,
@@ -192,6 +206,40 @@ const EMPTY_FONT_ASSETS: FontAsset[] = [];
 const EMPTY_PAGE_TEMPLATES: PageTemplate[] = [];
 const EMPTY_SYMBOLS: SymbolDefinition[] = [];
 const ICON_PICKER_RESULT_LIMIT = 360;
+
+/** Shape tiles for the Insert tab (Canva-style icon grid). */
+const SHAPE_ITEMS: Array<{
+  kind: "rectangle" | "circle" | "line" | "triangle" | "star" | "arrow" | "badge" | "divider";
+  label: string;
+  Icon: React.ComponentType<{ className?: string }>;
+}> = [
+  { kind: "rectangle", label: "Chữ nhật", Icon: Square },
+  { kind: "circle", label: "Tròn", Icon: Circle },
+  { kind: "triangle", label: "Tam giác", Icon: Triangle },
+  { kind: "line", label: "Đường", Icon: Minus },
+  { kind: "star", label: "Sao", Icon: Star },
+  { kind: "arrow", label: "Mũi tên", Icon: MoveRight },
+  { kind: "badge", label: "Huy hiệu", Icon: Shapes },
+  { kind: "divider", label: "Vạch ngăn", Icon: Slash },
+];
+
+/**
+ * Decode a GenPoster element payload from OS-clipboard text. Returns the
+ * element graph when the text is our JSON marker, otherwise null (so the
+ * caller can fall back to the internal clipboard).
+ */
+function decodeClipboardElements(text: string): DesignElement[] | null {
+  if (!text || !text.includes("__genposter")) return null;
+  try {
+    const parsed = JSON.parse(text) as { __genposter?: string; elements?: unknown };
+    if (parsed.__genposter === "elements" && Array.isArray(parsed.elements)) {
+      return parsed.elements as DesignElement[];
+    }
+  } catch {
+    /* not our payload */
+  }
+  return null;
+}
 const LETTER_SPACING_MIN = -5;
 const LETTER_SPACING_MAX = 32;
 const LETTER_SPACING_STEP = 0.5;
@@ -282,6 +330,8 @@ export function DesignWorkspace({
   const [leftTab, setLeftTab] = useState("insert");
   const [rightTab, setRightTab] = useState("properties");
   const [assetSearch, setAssetSearch] = useState("");
+  const [bundledCategory, setBundledCategory] = useState<BundledAssetCategory>("illustration");
+  const [bundledSearch, setBundledSearch] = useState("");
   const [symbolSearch, setSymbolSearch] = useState("");
   const [symbolTagFilter, setSymbolTagFilter] = useState<string | null>(null);
   const [iconSearch, setIconSearch] = useState("");
@@ -295,6 +345,8 @@ export function DesignWorkspace({
   const [snapTargetIds, setSnapTargetIds] = useState<string[]>([]);
   const [tool, setTool] = useState<DesignTool>("select");
   const [spacePressed, setSpacePressed] = useState(false);
+  const [zoomInput, setZoomInput] = useState<string | null>(null);
+  const [bgRemovalBusy, setBgRemovalBusy] = useState(false);
   const [marqueeRect, setMarqueeRect] = useState<{
     x: number;
     y: number;
@@ -461,6 +513,8 @@ export function DesignWorkspace({
   const {
     handleZoomStep,
     handleResetZoom,
+    setZoomValue,
+    handleFitSelection,
     beginPan,
     updatePan,
     endPan,
@@ -711,8 +765,11 @@ export function DesignWorkspace({
     });
   };
 
-  const insertShape = (shapeKind: "rectangle" | "circle" | "triangle" | "line" = "rectangle") => {
+  const insertShape = (
+    shapeKind: "rectangle" | "circle" | "triangle" | "line" | "divider" | "badge" | "star" | "arrow" = "rectangle",
+  ) => {
     if (!activePage) return;
+    const isLineLike = shapeKind === "line" || shapeKind === "divider";
     editor.insertElement({
       elementId: nanoid(),
       pageId: activePage.pageId,
@@ -720,16 +777,16 @@ export function DesignWorkspace({
       name: "Hình",
       x: 160,
       y: 180,
-      width: shapeKind === "line" ? 320 : 240,
-      height: shapeKind === "line" ? 20 : 180,
+      width: isLineLike ? 320 : 240,
+      height: isLineLike ? 20 : 180,
       zIndex: editor.activeElements.length,
       shapeKind,
       text: "",
       textRuns: [],
       style: {
-        fill: shapeKind === "line" ? "#0f172a" : "#f97316",
+        fill: isLineLike ? "#0f172a" : "#f97316",
         borderRadius: shapeKind === "circle" ? 9999 : 18,
-        strokeWidth: shapeKind === "line" ? 4 : undefined,
+        strokeWidth: isLineLike ? 4 : undefined,
         fontFamily: "Be Vietnam Pro",
         fontSize: 32,
         fontWeight: 700,
@@ -851,6 +908,31 @@ export function DesignWorkspace({
     });
   };
 
+  // Insert a bundled (offline) SVG asset as an svg element so it reuses the
+  // existing SVG render + tint path. currentColor-based graphics are tintable.
+  const insertBundledAsset = (asset: BundledAsset) => {
+    if (!activePage) return;
+    const x = Math.round(activePage.width / 2 - asset.width / 2);
+    const y = Math.round(activePage.height / 2 - asset.height / 2);
+    editor.insertElement({
+      elementId: nanoid(),
+      pageId: activePage.pageId,
+      kind: "svg",
+      name: asset.name,
+      x,
+      y,
+      width: asset.width,
+      height: asset.height,
+      zIndex: editor.activeElements.length,
+      svgContent: asset.svg,
+      style: {
+        tint: "#0f172a",
+        color: "#0f172a",
+      },
+    });
+    toast.success(`Đã thêm "${asset.name}"`);
+  };
+
   // Import a File/Blob as an image asset (saves to Dexie + adds element).
   // Reused by manual upload, drag-drop, and clipboard paste.
   const importImageFile = async (
@@ -941,6 +1023,72 @@ export function DesignWorkspace({
     input.click();
   };
 
+  // Replace the image of the selected image element in place, keeping its
+  // position, size, crop and style (Canva's "replace image").
+  const replaceSelectedImage = () => {
+    if (!primary || primary.kind !== "image") return;
+    const targetId = primary.elementId;
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.onchange = async (event) => {
+      const file = (event.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      const asset = await importImageFile(file, { insert: false });
+      editor.updateElements(
+        [targetId],
+        {
+          src: asset.sourceValue,
+          assetId: asset.assetId,
+          // Reset crop so the new image is not clipped by the old crop box.
+          crop: undefined,
+        } as Partial<DesignElement>,
+      );
+      toast.success("Đã thay ảnh");
+    };
+    input.click();
+  };
+
+  // Remove the background of the selected image, fully client-side (WASM).
+  // The model weights download from a CDN on first use; the image never leaves
+  // the browser, matching the app's local-first design.
+  const removeSelectedImageBackground = async () => {
+    if (!primary || primary.kind !== "image" || bgRemovalBusy) return;
+    const targetId = primary.elementId;
+    const resolvedSrc = await resolveImageSrcAsync(primary.src);
+    if (!resolvedSrc) {
+      toast.error("Không tìm thấy ảnh nguồn để xử lý");
+      return;
+    }
+    setBgRemovalBusy(true);
+    const toastId = toast.loading("Đang xoá nền ảnh (lần đầu cần tải mô hình)...");
+    try {
+      const { removeBackground } = await import("@imgly/background-removal");
+      const resultBlob = await removeBackground(resolvedSrc);
+      const asset = await importImageFile(
+        new File([resultBlob], `${primary.name ?? "image"}-nobg.png`, { type: "image/png" }),
+        { insert: false, name: `${primary.name ?? "image"}-nobg` },
+      );
+      editor.updateElements(
+        [targetId],
+        {
+          src: asset.sourceValue,
+          assetId: asset.assetId,
+          // Cover fit can crop the cut-out subject; contain keeps it whole.
+          style: { ...(primary.style ?? {}), fit: "contain" },
+        } as Partial<DesignElement>,
+      );
+      toast.success("Đã xoá nền ảnh", { id: toastId });
+    } catch (error) {
+      toast.error(
+        `Không xoá được nền: ${error instanceof Error ? error.message : String(error)}`,
+        { id: toastId },
+      );
+    } finally {
+      setBgRemovalBusy(false);
+    }
+  };
+
   const deleteAsset = async (asset: AssetItem) => {
     await db.assetLibrary.delete(asset.assetId);
     editor.setAssetIds(editor.state.assetIds.filter((id) => id !== asset.assetId));
@@ -1006,6 +1154,34 @@ export function DesignWorkspace({
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Không lưu được symbol");
     }
+  };
+
+  // Insert a built-in element preset (Canva-style quick element). Multi-element
+  // presets are wrapped in a group so they move as a unit.
+  const insertPreset = (preset: ElementPreset) => {
+    if (!activePage) return;
+    const anchor = {
+      x: Math.round(activePage.width / 2 - 240),
+      y: Math.round(activePage.height / 2 - 130),
+    };
+    const drafts = preset.build(anchor);
+    let zIndex = editor.activeElements.length;
+    const insertedIds: string[] = [];
+    for (const draft of drafts) {
+      const elementId = nanoid();
+      insertedIds.push(elementId);
+      editor.insertElement({
+        ...draft,
+        elementId,
+        pageId: activePage.pageId,
+        zIndex: zIndex++,
+      } as DesignElement);
+    }
+    if (insertedIds.length > 0) {
+      editor.setSelection(insertedIds, insertedIds.at(-1) ?? null);
+      if (insertedIds.length > 1) editor.groupSelection();
+    }
+    toast.success(`Đã thêm "${preset.label}"`);
   };
 
   const insertSymbolInstance = (symbol: SymbolDefinition) => {
@@ -1407,11 +1583,36 @@ export function DesignWorkspace({
       if (mod && lower === "c") {
         event.preventDefault();
         currentEditor.copySelection();
+        // Also mirror selection to the OS clipboard so it survives across
+        // documents/tabs. Encoded as JSON with a recognizable marker.
+        const sel = currentEditor.selectedElements;
+        if (sel.length > 0 && typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+          const payload = JSON.stringify({ __genposter: "elements", elements: sel });
+          navigator.clipboard.writeText(payload).catch(() => {
+            /* clipboard write blocked (permissions/focus) — internal clipboard still works */
+          });
+        }
         return;
       }
       if (mod && lower === "v") {
         event.preventDefault();
-        currentEditor.pasteClipboard();
+        // Try the OS clipboard first (cross-document paste). Fall back to the
+        // internal clipboard when it has no GenPoster element payload.
+        if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
+          navigator.clipboard
+            .readText()
+            .then((text) => {
+              const decoded = decodeClipboardElements(text);
+              if (decoded && decoded.length > 0) {
+                currentEditor.pasteElements(decoded);
+              } else {
+                currentEditor.pasteClipboard();
+              }
+            })
+            .catch(() => currentEditor.pasteClipboard());
+        } else {
+          currentEditor.pasteClipboard();
+        }
         return;
       }
       if (mod && lower === "d") {
@@ -2089,9 +2290,71 @@ export function DesignWorkspace({
               </TooltipTrigger>
               <TooltipContent>Thu nhỏ · Ctrl/Cmd + −</TooltipContent>
             </Tooltip>
-            <div className="w-14 text-center text-xs font-medium tabular-nums">
-              {formatZoom(zoom)}
-            </div>
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="w-14 rounded text-center text-xs font-medium tabular-nums hover:bg-accent"
+                  aria-label="Đặt mức thu phóng"
+                >
+                  {formatZoom(zoom)}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="center" className="w-44 p-2">
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const parsed = parseFloat((zoomInput ?? "").replace("%", ""));
+                    if (!Number.isNaN(parsed)) setZoomValue(parsed / 100);
+                    setZoomInput(null);
+                  }}
+                  className="flex items-center gap-1"
+                >
+                  <Input
+                    value={zoomInput ?? String(Math.round(zoom * 100))}
+                    onChange={(e) => setZoomInput(e.target.value)}
+                    onFocus={() => setZoomInput(String(Math.round(zoom * 100)))}
+                    onBlur={() => setZoomInput(null)}
+                    className="h-8"
+                    inputMode="numeric"
+                    aria-label="Mức thu phóng (%)"
+                  />
+                  <span className="text-xs text-muted-foreground">%</span>
+                </form>
+                <div className="mt-2 grid grid-cols-3 gap-1">
+                  {[50, 100, 150, 200, 300].map((preset) => (
+                    <Button
+                      key={preset}
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-1 text-xs tabular-nums"
+                      onClick={() => setZoomValue(preset / 100)}
+                    >
+                      {preset}%
+                    </Button>
+                  ))}
+                </div>
+                <div className="mt-1 space-y-1 border-t pt-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 w-full justify-start px-2 text-xs"
+                    onClick={handleResetZoom}
+                  >
+                    Vừa trang
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 w-full justify-start px-2 text-xs"
+                    disabled={editor.selectedElements.length === 0}
+                    onClick={handleFitSelection}
+                  >
+                    Vừa vùng chọn
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -2503,123 +2766,86 @@ export function DesignWorkspace({
                   <TabsTrigger value="pages">Trang</TabsTrigger>
                 </TabsList>
                 <TabsContent value="insert" className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-                  <div className="space-y-2 pt-4">
-                    <Button className="w-full justify-start" variant="outline" onClick={insertText}>
-                      <Type className="mr-2 size-4" /> Chữ
-                    </Button>
-                    <Button
-                      className="w-full justify-start"
-                      variant="outline"
-                      onClick={insertImageFrame}
-                    >
-                      <ImageIcon className="mr-2 size-4" /> Ảnh
-                    </Button>
-                    <Button
-                      className="w-full justify-start"
-                      variant="outline"
-                      onClick={() => insertShape("rectangle")}
-                    >
-                      <Shapes className="mr-2 size-4" /> Chữ nhật
-                    </Button>
-                    <Button
-                      className="w-full justify-start"
-                      variant="outline"
-                      onClick={() => insertShape("circle")}
-                    >
-                      <Shapes className="mr-2 size-4" /> Tròn
-                    </Button>
-                    <Button
-                      className="w-full justify-start"
-                      variant="outline"
-                      onClick={() => insertShape("line")}
-                    >
-                      <Minus className="mr-2 size-4" /> Đường
-                    </Button>
-                    <Button
-                      className="w-full justify-start"
-                      variant="outline"
-                      onClick={insertTable}
-                    >
-                      <Table2 className="mr-2 size-4" /> Bảng
-                    </Button>
-                    <div className="flex flex-col gap-3 rounded-xl border bg-card p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <Label className="text-xs uppercase text-muted-foreground">
-                          Biểu tượng
-                        </Label>
-                        <span className="text-xs tabular-nums text-muted-foreground">
-                          {extendedIconsLoading ? "..." : filteredIconAssets.length}
-                        </span>
+                  <div className="space-y-5 pt-4">
+                    {/* Cơ bản: Chữ + Ảnh dạng tile lớn */}
+                    <div className="space-y-2">
+                      <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Cơ bản
+                      </Label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={insertText}
+                          className="flex flex-col items-center justify-center gap-1.5 rounded-xl border bg-card py-5 transition hover:border-primary hover:bg-accent"
+                        >
+                          <Type className="size-6 text-foreground" />
+                          <span className="text-xs font-medium">Chữ</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={insertImageFrame}
+                          className="flex flex-col items-center justify-center gap-1.5 rounded-xl border bg-card py-5 transition hover:border-primary hover:bg-accent"
+                        >
+                          <ImageIcon className="size-6 text-foreground" />
+                          <span className="text-xs font-medium">Ảnh</span>
+                        </button>
                       </div>
-                      <Input
-                        value={iconSearch}
-                        onChange={(event) => setIconSearch(event.target.value)}
-                        placeholder="Tìm biểu tượng: địa điểm, ghim, điện thoại, cafe..."
-                      />
-                      <ToggleGroup
-                        type="single"
-                        value={iconVariantFilter}
-                        onValueChange={(value) => {
-                          if (value) setIconVariantFilter(value as IconVariantFilter);
-                        }}
-                        variant="outline"
-                        size="sm"
-                        className="grid grid-cols-4"
+                    </div>
+
+                    {/* Hình khối: lưới icon */}
+                    <div className="space-y-2">
+                      <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Hình khối
+                      </Label>
+                      <div className="grid grid-cols-4 gap-2">
+                        {SHAPE_ITEMS.map(({ kind, label, Icon }) => (
+                          <button
+                            key={kind}
+                            type="button"
+                            onClick={() => insertShape(kind)}
+                            className="flex aspect-square flex-col items-center justify-center gap-1 rounded-lg border bg-card transition hover:border-primary hover:bg-accent"
+                            title={label}
+                            aria-label={label}
+                          >
+                            <Icon className="size-5 text-foreground" />
+                            <span className="text-[9px] text-muted-foreground">{label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Mẫu nhanh */}
+                    <div className="space-y-2">
+                      <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Mẫu nhanh
+                      </Label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {ELEMENT_PRESETS.map((preset) => (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => insertPreset(preset)}
+                            className="rounded-lg border bg-card px-2 py-3 text-center text-xs font-medium transition-colors hover:border-primary hover:bg-accent"
+                            title={`Thêm "${preset.label}"`}
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Khác */}
+                    <div className="space-y-2">
+                      <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Khác
+                      </Label>
+                      <button
+                        type="button"
+                        onClick={insertTable}
+                        className="flex w-full items-center gap-2.5 rounded-lg border bg-card px-3 py-2.5 text-sm font-medium transition hover:border-primary hover:bg-accent"
                       >
-                        <ToggleGroupItem value="all" aria-label="Tất cả biểu tượng">
-                          Tất cả
-                        </ToggleGroupItem>
-                        <ToggleGroupItem value="line" aria-label="Biểu tượng nét">
-                          Nét
-                        </ToggleGroupItem>
-                        <ToggleGroupItem value="solid" aria-label="Biểu tượng đặc">
-                          Đặc
-                        </ToggleGroupItem>
-                        <ToggleGroupItem value="color" aria-label="Biểu tượng màu">
-                          Màu
-                        </ToggleGroupItem>
-                      </ToggleGroup>
-                      {extendedIconsLoading ? (
-                        <div className="text-xs text-muted-foreground">
-                          Đang tải thêm biểu tượng kiểu Canva...
-                        </div>
-                      ) : null}
-                      {iconResultsAreLimited ? (
-                        <div className="text-xs text-muted-foreground">
-                          Đang hiển thị {visibleIconAssets.length} biểu tượng đầu tiên. Gõ từ khóa
-                          để lọc nhanh hơn.
-                        </div>
-                      ) : null}
-                      <ScrollArea className="h-64 rounded-lg border bg-background p-2">
-                        {visibleIconAssets.length > 0 ? (
-                          <div className="grid grid-cols-6 gap-1.5 pr-2">
-                            {visibleIconAssets.map((asset) => (
-                              <button
-                                key={asset.assetId}
-                                type="button"
-                                onClick={() => {
-                                  setSelectedIconId(asset.assetId);
-                                  insertAsset(asset);
-                                }}
-                                className={
-                                  "flex aspect-square items-center justify-center rounded-md border bg-card transition " +
-                                  (asset.assetId === selectedIconId
-                                    ? "border-primary bg-primary/5 text-primary"
-                                    : "hover:border-primary/50 hover:bg-muted")
-                                }
-                                title={asset.name}
-                                aria-label={`Thêm ${asset.name}`}
-                              >
-                                <IconAssetGlyph asset={asset} className="block size-5" />
-                              </button>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
-                            Không có icon phù hợp.
-                          </div>
-                        )}
-                      </ScrollArea>
+                        <Table2 className="size-4 text-foreground" /> Bảng
+                      </button>
                     </div>
                   </div>
                 </TabsContent>
@@ -2641,6 +2867,83 @@ export function DesignWorkspace({
                     </div>
                     <div className="text-xs text-muted-foreground">
                       Tìm biểu tượng có sẵn hoặc ảnh bạn đã tải lên.
+                    </div>
+
+                    {/* Bundled offline asset library (illustrations + stickers) */}
+                    <div className="space-y-2 rounded-xl border bg-card p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <Label className="text-xs uppercase text-muted-foreground">
+                          Kho asset
+                        </Label>
+                        <div className="flex gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setBundledCategory("illustration")}
+                            className={cn(
+                              "rounded-full border px-2 py-0.5 text-[10px] transition-colors",
+                              bundledCategory === "illustration"
+                                ? "border-primary bg-primary/10 text-primary"
+                                : "border-border text-muted-foreground hover:border-primary/60",
+                            )}
+                          >
+                            Minh hoạ
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setBundledCategory("sticker")}
+                            className={cn(
+                              "rounded-full border px-2 py-0.5 text-[10px] transition-colors",
+                              bundledCategory === "sticker"
+                                ? "border-primary bg-primary/10 text-primary"
+                                : "border-border text-muted-foreground hover:border-primary/60",
+                            )}
+                          >
+                            Sticker
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setBundledCategory("decor")}
+                            className={cn(
+                              "rounded-full border px-2 py-0.5 text-[10px] transition-colors",
+                              bundledCategory === "decor"
+                                ? "border-primary bg-primary/10 text-primary"
+                                : "border-border text-muted-foreground hover:border-primary/60",
+                            )}
+                          >
+                            Trang trí
+                          </button>
+                        </div>
+                      </div>
+                      <Input
+                        value={bundledSearch}
+                        onChange={(event) => setBundledSearch(event.target.value)}
+                        placeholder="Tìm trong kho asset..."
+                        className="h-8 text-xs"
+                      />
+                      {(() => {
+                        const results = filterBundledAssets(bundledCategory, bundledSearch);
+                        if (results.length === 0) {
+                          return (
+                            <div className="rounded border border-dashed px-2 py-3 text-center text-[11px] text-muted-foreground">
+                              Không tìm thấy asset khớp "{bundledSearch}"
+                            </div>
+                          );
+                        }
+                        return (
+                          <div className="grid grid-cols-3 gap-2">
+                            {results.map((asset) => (
+                              <button
+                                key={asset.id}
+                                type="button"
+                                onClick={() => insertBundledAsset(asset)}
+                                className="aspect-square overflow-hidden rounded-lg border bg-background p-1.5 transition hover:border-primary"
+                                title={asset.name}
+                                dangerouslySetInnerHTML={{ __html: asset.svg }}
+                              />
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {/* Icon search results inline (Canva-style) */}
@@ -3122,9 +3425,10 @@ export function DesignWorkspace({
             </aside>
           ) : null}
 
+          <div className="flex min-h-0 min-w-0 flex-col">
           <div
             ref={stageWrapRef}
-            className="design-stage-scroll min-h-0 min-w-0 overflow-auto px-8 pb-12 pt-24"
+            className="design-stage-scroll min-h-0 min-w-0 flex-1 overflow-auto px-8 pb-12 pt-24"
             onPointerDown={handleStageWrapPointerDown}
             onMouseMove={handleStageWrapMouseMove}
             onDragOver={(event) => {
@@ -3314,6 +3618,73 @@ export function DesignWorkspace({
             </div>
           </div>
 
+          {/* Horizontal pages strip under the canvas (Canva-style) */}
+          {hasPackPages ? (
+            <PagesStrip
+              items={packPages.map((pageTemplate, index) => ({
+                id: pageTemplate.pageTemplateId,
+                label: packPageLabel(index),
+                active:
+                  activeTemplateId === pageTemplate.pageTemplateId ||
+                  editor.document.sourcePageTemplateId === pageTemplate.pageTemplateId,
+                thumbnail: (
+                  <PageRenderer
+                    template={pageTemplate}
+                    entities={[]}
+                    assets={[]}
+                    scale={Math.min(
+                      66 / pageTemplate.canvas.width,
+                      66 / pageTemplate.canvas.height,
+                    )}
+                  />
+                ),
+              }))}
+              onSelect={(id) => onOpenTemplatePage?.(id)}
+              onAdd={onCreatePackPage ? () => void onCreatePackPage() : undefined}
+              onDuplicate={
+                onDuplicatePackPage ? (id) => void onDuplicatePackPage(id) : undefined
+              }
+              onDelete={onDeletePackPage ? (id) => void onDeletePackPage(id) : undefined}
+              onReorder={
+                onReorderPackPage
+                  ? (fromId, toIndex) => onReorderPackPage(fromId, toIndex)
+                  : undefined
+              }
+              canDelete={packPages.length > 1}
+            />
+          ) : allowMultiplePages ? (
+            <PagesStrip
+              items={editor.state.pageOrder.map((pageId) => {
+                const page = editor.state.pagesById[pageId];
+                return {
+                  id: pageId,
+                  label: page?.name ?? "Trang",
+                  active: editor.state.activePageId === pageId,
+                  thumbnail: (
+                    <div
+                      className="size-full"
+                      style={{ background: page?.background ?? "#ffffff" }}
+                    />
+                  ),
+                };
+              })}
+              onSelect={(id) => editor.setActivePage(id)}
+              onAdd={() => editor.addPage()}
+              onDuplicate={(id) => {
+                editor.setActivePage(id);
+                editor.duplicateActivePage();
+              }}
+              onDelete={(id) => editor.removePage(id)}
+              onReorder={(fromId, toIndex) => {
+                const currentIndex = editor.state.pageOrder.indexOf(fromId);
+                if (currentIndex < 0) return;
+                editor.movePage(fromId, toIndex - currentIndex);
+              }}
+              canDelete={editor.state.pageOrder.length > 1}
+            />
+          ) : null}
+          </div>
+
           {rightOpen ? (
             <aside className="min-h-0 min-w-0 overflow-hidden border-l">
               <Tabs value={rightTab} onValueChange={setRightTab} className="flex h-full flex-col">
@@ -3473,10 +3844,33 @@ export function DesignWorkspace({
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => editor.copySelection()}
+                              onClick={() =>
+                                editor.updateSelectedElements({
+                                  style: {
+                                    ...(primary.style ?? {}),
+                                    flipH: !primary.style?.flipH,
+                                  },
+                                } as Partial<DesignElement>)
+                              }
                             >
-                              <Copy className="mr-2 size-4" /> Sao chép
+                              <FlipHorizontal className="mr-2 size-4" /> Lật ngang
                             </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() =>
+                                editor.updateSelectedElements({
+                                  style: {
+                                    ...(primary.style ?? {}),
+                                    flipV: !primary.style?.flipV,
+                                  },
+                                } as Partial<DesignElement>)
+                              }
+                            >
+                              <FlipVertical className="mr-2 size-4" /> Lật dọc
+                            </Button>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
                             <Button
                               size="sm"
                               variant="outline"
@@ -3865,6 +4259,55 @@ export function DesignWorkspace({
                                   commitElementStyle(primary.elementId, { fill: color })
                                 }
                               />
+                            ) : null}
+                            {primary.kind === "image" ? (
+                              <div className="space-y-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="w-full"
+                                  onClick={replaceSelectedImage}
+                                >
+                                  <ImageIcon className="mr-2 size-4" /> Thay ảnh
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="w-full"
+                                  disabled={bgRemovalBusy}
+                                  onClick={removeSelectedImageBackground}
+                                >
+                                  <Scissors className="mr-2 size-4" />
+                                  {bgRemovalBusy ? "Đang xoá nền..." : "Xoá nền"}
+                                </Button>
+                                <Label className="text-xs">Mặt nạ (mask)</Label>
+                                <Select
+                                  value={primary.style?.maskShape ?? "rectangle"}
+                                  onValueChange={(value) =>
+                                    editor.updateElements(
+                                      [primary.elementId],
+                                      {
+                                        style: {
+                                          ...(primary.style ?? {}),
+                                          maskShape:
+                                            value as NonNullable<DesignElement["style"]>["maskShape"],
+                                        },
+                                      } as Partial<DesignElement>,
+                                    )
+                                  }
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="rectangle">Chữ nhật</SelectItem>
+                                    <SelectItem value="circle">Tròn</SelectItem>
+                                    <SelectItem value="triangle">Tam giác</SelectItem>
+                                    <SelectItem value="star">Ngôi sao</SelectItem>
+                                    <SelectItem value="arrow">Mũi tên</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
                             ) : null}
                             {primary.kind === "image" ? (
                               <div className="space-y-2">

@@ -37,7 +37,7 @@ export function PageHeader({
     >
       <div className="flex items-start gap-3 min-w-0">
         {icon ? (
-          <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-brand-gradient text-[color:var(--color-brand-ink)] shadow-sm">
+          <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm">
             {icon}
           </div>
         ) : null}

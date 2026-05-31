@@ -794,6 +794,31 @@ export function useDesignEditor(document: DesignDocument) {
     [commitDocument, state.activePageId, state.clipboard],
   );
 
+  // Paste an externally-provided element graph (e.g. decoded from the OS
+  // clipboard, copied from another document/tab). Re-IDs and stacks on top.
+  const pasteElements = useCallback(
+    (elements: DesignElement[], offset = 24) => {
+      if (!elements || elements.length === 0) return;
+      const duplicated = duplicateElementGraph(
+        cloneDesignElements(elements),
+        offset,
+        state.activePageId,
+      );
+      commitDocument(
+        (next) => {
+          next.elements.push(...stackDuplicatedElementsOnTop(duplicated.elements, next.elements));
+        },
+        {
+          nextSelection: {
+            ids: duplicated.rootIds,
+            primaryId: duplicated.rootIds.at(-1) ?? null,
+          },
+        },
+      );
+    },
+    [commitDocument, state.activePageId],
+  );
+
   const orderSelection = useCallback(
     (mode: "forward" | "backward" | "front" | "back", ids?: string[]) => {
       setState((prev) => {
@@ -986,6 +1011,7 @@ export function useDesignEditor(document: DesignDocument) {
     updateSelectedElements,
     copySelection,
     pasteClipboard,
+    pasteElements,
     deleteSelection,
     duplicateSelection,
     orderSelection,
