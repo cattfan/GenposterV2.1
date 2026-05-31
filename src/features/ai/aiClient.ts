@@ -50,7 +50,7 @@ export function defaultAiConfig(preset: AiProviderPreset = "deepseek"): AiProvid
   };
 }
 
-interface GatewayMessage {
+export interface GatewayMessage {
   role: "system" | "user" | "assistant";
   content:
     | string

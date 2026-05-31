@@ -5,7 +5,7 @@ import type {
   TemplateFrameSpec,
 } from "@/models";
 import { AI_POSTER_FONT_FAMILIES } from "@/features/editor/fonts";
-import { callAi } from "./aiClient";
+import { callAi, type GatewayMessage } from "./aiClient";
 import { serializeCombinedLayoutBlueprint } from "./blueprint";
 import type { LayoutFidelity } from "./templateLayers"; // canonical source (Phase 1 cleanup)
 import type { Layer3Input, Layer3Output, Layer4CriticInput, Layer4CriticOutput } from "./templateLayers";
@@ -677,7 +677,7 @@ async function runDataBlueprintPass(input: {
 async function runTemplateFrameSynthesisPass(
   input: Layer3Input,
 ): Promise<{ ok: true; frame: TemplateFrameSpec } | { ok: false; error: string }> {
-  const messages: any[] = [
+  const messages: GatewayMessage[] = [
     {
       role: "system",
       content:
@@ -748,7 +748,7 @@ export async function runFidelityCritic(
     return { rectifications: [], overallNotes: "No source image for critic", shouldReSynthesize: false };
   }
 
-  const messages: any[] = [
+  const messages: GatewayMessage[] = [
     {
       role: "system",
       content:
@@ -866,10 +866,10 @@ export async function runVisionTemplatePipeline(input: {
           `Layer 3 (fidelity=${input.fidelity ?? "balanced"}) fallback: ${l3.error}. Template vẫn dùng L1+L2 heuristics.`,
         ];
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       visualPass.visualBlueprint.warnings = [
         ...(visualPass.visualBlueprint.warnings ?? []),
-        `Layer 3 (fidelity=${input.fidelity ?? "balanced"}) error: ${e?.message ?? e}. Template vẫn dùng L1+L2 heuristics.`,
+        `Layer 3 (fidelity=${input.fidelity ?? "balanced"}) error: ${e instanceof Error ? e.message : String(e)}. Template vẫn dùng L1+L2 heuristics.`,
       ];
     } finally {
       if (process.env.NODE_ENV !== "production") {
@@ -901,9 +901,9 @@ export async function runVisionTemplatePipeline(input: {
       if (process.env.NODE_ENV !== "production") {
         console.debug(`[Layer4] critic took ${Date.now() - criticStart}ms`);
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (process.env.NODE_ENV !== "production") {
-        console.debug("[Layer4] critic skipped:", e?.message ?? e);
+        console.debug("[Layer4] critic skipped:", e instanceof Error ? e.message : String(e));
       }
     }
   }
