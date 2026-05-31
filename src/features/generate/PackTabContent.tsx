@@ -136,6 +136,21 @@ import {
   usePackBindOverrides,
   type PackBindOverrides,
 } from "@/features/generate/usePackBindOverrides";
+
+/** Undo/redo snapshot: BOTH the preview drafts and the bind overrides, so
+ *  Ctrl+Z restores data-source edits AND field-binding edits together. */
+type DraftHistorySnapshot = {
+  drafts: PreviewPageDrafts;
+  packOv: PackBindOverrides;
+};
+
+function clonePackBindOverrides(packOv: PackBindOverrides): PackBindOverrides {
+  const next: PackBindOverrides = {};
+  for (const [pageId, ov] of Object.entries(packOv)) {
+    next[pageId] = { ...ov };
+  }
+  return next;
+}
 import { usePackDraftAutosave } from "@/features/generate/usePackDraftAutosave";
 import { isSlotInsideSelectionContainer } from "@/features/generate/selectionGeometry";
 import {
@@ -284,7 +299,7 @@ export function PackTabContent({
   const [showSafeFrame, setShowSafeFrame] = useState(false);
   // Hiển thị pill tên trường trên mỗi khối đã bind. Mặc định bật để user
   // luôn biết khối nào gắn gì; tắt khi muốn xem preview clean.
-  const [showFieldBadges, setShowFieldBadges] = useState(true);
+  const [showFieldBadges, setShowFieldBadges] = useState(false);
   const [formatClipboard, setFormatClipboard] = useState<SlotFormatClipboard | null>(null);
   const [captionBusy, setCaptionBusy] = useState(false);
   const [rewriteBusy, setRewriteBusy] = useState(false);
@@ -317,8 +332,9 @@ export function PackTabContent({
   const lastClosedPresetIdRef = useRef<string>("");
   const stickyPreviewPinsByPageRef = useRef<Map<string, Map<string, StickyGroupPin>>>(new Map());
   const previewPageDraftsRef = useRef<PreviewPageDrafts>({});
-  const previewDraftPastRef = useRef<PreviewPageDrafts[]>([]);
-  const previewDraftFutureRef = useRef<PreviewPageDrafts[]>([]);
+  const packOvRef = useRef<PackBindOverrides>({});
+  const previewDraftPastRef = useRef<DraftHistorySnapshot[]>([]);
+  const previewDraftFutureRef = useRef<DraftHistorySnapshot[]>([]);
   const undoPreviewPageDraftsRef = useRef<() => void>(() => {});
   const redoPreviewPageDraftsRef = useRef<() => void>(() => {});
   const [previewDraftHistoryVersion, setPreviewDraftHistoryVersion] = useState(0);
@@ -400,7 +416,7 @@ export function PackTabContent({
     if (options.history !== false) {
       previewDraftPastRef.current = [
         ...previewDraftPastRef.current,
-        clonePreviewPageDrafts(prev),
+        { drafts: clonePreviewPageDrafts(prev), packOv: clonePackBindOverrides(packOvRef.current) },
       ].slice(-DRAFT_HISTORY_LIMIT);
       previewDraftFutureRef.current = [];
       touchPreviewDraftHistory();
@@ -423,9 +439,13 @@ export function PackTabContent({
     previewDraftPastRef.current = previewDraftPastRef.current.slice(0, -1);
     previewDraftFutureRef.current = [
       ...previewDraftFutureRef.current,
-      clonePreviewPageDrafts(previewPageDraftsRef.current),
+      {
+        drafts: clonePreviewPageDrafts(previewPageDraftsRef.current),
+        packOv: clonePackBindOverrides(packOvRef.current),
+      },
     ].slice(-DRAFT_HISTORY_LIMIT);
-    setPreviewDraftsNoHistory(clonePreviewPageDrafts(previous));
+    setPreviewDraftsNoHistory(clonePreviewPageDrafts(previous.drafts));
+    setPackOverrides(clonePackBindOverrides(previous.packOv));
     touchPreviewDraftHistory();
   };
 
@@ -435,9 +455,13 @@ export function PackTabContent({
     previewDraftFutureRef.current = previewDraftFutureRef.current.slice(0, -1);
     previewDraftPastRef.current = [
       ...previewDraftPastRef.current,
-      clonePreviewPageDrafts(previewPageDraftsRef.current),
+      {
+        drafts: clonePreviewPageDrafts(previewPageDraftsRef.current),
+        packOv: clonePackBindOverrides(packOvRef.current),
+      },
     ].slice(-DRAFT_HISTORY_LIMIT);
-    setPreviewDraftsNoHistory(clonePreviewPageDrafts(next));
+    setPreviewDraftsNoHistory(clonePreviewPageDrafts(next.drafts));
+    setPackOverrides(clonePackBindOverrides(next.packOv));
     touchPreviewDraftHistory();
   };
 
@@ -609,6 +633,10 @@ export function PackTabContent({
   useEffect(() => {
     previewPageDraftsRef.current = previewPageDrafts;
   }, [previewPageDrafts]);
+
+  useEffect(() => {
+    packOvRef.current = packOv;
+  }, [packOv]);
 
   useEffect(() => {
     if (Object.keys(previewPageDraftsRef.current).length === 0) return;
