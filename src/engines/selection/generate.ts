@@ -218,6 +218,8 @@ function generateEntityBindJob(
   selectedSheet: string | undefined,
   filterMoHinh: string | undefined,
   filterPhongCach: string | undefined,
+  filterPhanLoai: string | undefined,
+  filterHuongDi: string | undefined,
   pageConfigs: Record<string, GeneratePageConfig>,
 ): GenerationJob {
   const pageMap = new Map(pageTemplates.map((p) => [p.pageTemplateId, p]));

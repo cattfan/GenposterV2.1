@@ -2361,16 +2361,16 @@ function DataPage() {
                         </TableCell>
                         {/* Phase 4 extra rich columns (always visible for 100% exploitation) */}
                         <TableCell className="max-w-[180px] truncate text-muted-foreground text-[12px]">
-                          {entity.metadata?.signatureDish || entity.metadata?.mon_an_noi_bat || entity.metadata?.["Món ăn nổi bật"] || ""}
+                          {String(entity.metadata?.signatureDish || entity.metadata?.mon_an_noi_bat || entity.metadata?.["Món ăn nổi bật"] || "")}
                         </TableCell>
                         <TableCell className="max-w-[220px] truncate text-[12px] text-muted-foreground">
-                          {entity.metadata?.description || entity.metadata?.mo_ta || entity.metadata?.["Mô tả"] || ""}
+                          {String(entity.metadata?.description || entity.metadata?.mo_ta || entity.metadata?.["Mô tả"] || "")}
                         </TableCell>
                         <TableCell className="text-[12px]">
-                          {entity.pricePerPerson || entity.metadata?.pricePerPerson || ""}
+                          {String(entity.pricePerPerson || entity.metadata?.pricePerPerson || "")}
                         </TableCell>
                         <TableCell className="text-[12px] text-muted-foreground">
-                          {entity.metadata?.direction || entity.metadata?.huong_di || ""}
+                          {String(entity.metadata?.direction || entity.metadata?.huong_di || "")}
                         </TableCell>
                       </TableRow>
                     ))})()}

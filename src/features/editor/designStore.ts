@@ -626,7 +626,7 @@ export function useDesignEditor(document: DesignDocument) {
   }, [commitDocument, state.activePageId, state.pagesById]);
 
   const movePage = useCallback(
-    (pageId: string, direction: -1 | 1) => {
+    (pageId: string, direction: number) => {
       commitDocument((next) => {
         const index = next.pages.findIndex((page) => page.pageId === pageId);
         if (index < 0) return;

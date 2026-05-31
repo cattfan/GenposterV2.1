@@ -329,6 +329,8 @@ export interface GeneratePresetConfig {
   selectedSheet?: string;
   filterMoHinh?: string;
   filterPhongCach?: string;
+  filterPhanLoai?: string;
+  filterHuongDi?: string;
   prioritizePartner?: boolean;
   onlyPartner?: boolean;
   partnerQuotaPerPage?: number;
