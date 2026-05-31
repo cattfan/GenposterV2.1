@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   ClipboardPaste,
@@ -40,7 +40,7 @@ import { TextRewritePanel } from "@/features/generate/TextRewritePanel";
 import type { SlotFormatClipboard } from "@/features/generate/slotFormatClipboard";
 import type { SourceControlsRenderer } from "./generatePanelProps";
 import { cn } from "@/lib/utils";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 
 export interface BindPanelTextSlotRow {
   slot: Slot;
@@ -318,17 +318,23 @@ function BindSlotSourcePanel({
   description,
   renderSourceControls,
   sourceConfig,
+  exactScope,
 }: {
   slots: Slot[];
   title: string;
   description?: string;
   renderSourceControls: SourceControlsRenderer;
   sourceConfig: Parameters<SourceControlsRenderer>[1];
+  exactScope?: boolean;
 }) {
   return (
     <div className="grid gap-2 rounded-md border bg-background/70 p-2">
       <div className="text-xs font-medium">{title}</div>
-      {renderSourceControls(slots, sourceConfig, description ? { description } : undefined)}
+      {renderSourceControls(
+        slots,
+        sourceConfig,
+        description ? { description, exactScope } : { exactScope },
+      )}
     </div>
   );
 }
@@ -370,6 +376,44 @@ function BindPanelBody(props: Props) {
     onClearBindings,
   } = props;
 
+  // Per-field source override: which text slots show their own source block.
+  // Auto-open any slot whose saved source config differs from the cluster's
+  // shared source (so previously-customized fields stay visible).
+  const autoOverrideIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (!clusterSourceConfig) return ids;
+    const keys = [
+      "selectedSheet",
+      "filterMoHinh",
+      "filterPhongCach",
+      "filterPhanLoai",
+      "filterHuongDi",
+    ] as const;
+    for (const row of textSlots) {
+      const cfg = slotSourceConfig(row.slot);
+      const differs = keys.some(
+        (key) => (cfg[key] ?? allValue) !== (clusterSourceConfig[key] ?? allValue),
+      );
+      if (differs) ids.add(row.slot.slotId);
+    }
+    return ids;
+  }, [textSlots, slotSourceConfig, clusterSourceConfig, allValue]);
+
+  const [manualOverrideIds, setManualOverrideIds] = useState<Set<string>>(() => new Set());
+  const overrideSlotIds = useMemo(() => {
+    const merged = new Set(autoOverrideIds);
+    manualOverrideIds.forEach((id) => merged.add(id));
+    return merged;
+  }, [autoOverrideIds, manualOverrideIds]);
+  const toggleOverrideSlot = (slotId: string) => {
+    setManualOverrideIds((prev) => {
+      const next = new Set(prev);
+      if (overrideSlotIds.has(slotId)) next.delete(slotId);
+      else next.add(slotId);
+      return next;
+    });
+  };
+
   return (
     <div className="flex flex-col gap-3">
 
@@ -400,22 +444,56 @@ function BindPanelBody(props: Props) {
               Khung chữ ({textSlots.length})
             </div>
           ) : null}
-          {textSlots.map((row, index) => (
-            <BindSlotRow key={row.slot.slotId} title={`${index + 1}. ${row.label}`}>
-              <BindingFieldPicker
-                value={row.bindingValue}
-                options={row.pickerOptions}
-                onSelect={(value) => onTextBindingChange(row.slot, value)}
-              />
-              <BindSlotSourcePanel
-                slots={[row.slot]}
-                title="Nguồn dữ liệu"
-                description="Cấu hình này áp dụng cho trường đang chọn trong cụm."
-                renderSourceControls={renderSourceControls}
-                sourceConfig={slotSourceConfig(row.slot)}
-              />
-            </BindSlotRow>
-          ))}
+
+          {/* Shared data-source for the whole cluster — rendered ONCE so the
+              5-filter block is not duplicated per text frame. */}
+          {shouldShowClusterSourceControls &&
+          !hasMultipleSelectedClusters &&
+          clusterSourceConfig ? (
+            <BindSlotSourcePanel
+              slots={clusterSourceSlots}
+              title="Nguồn dữ liệu (áp dụng cho cả cụm)"
+              description="Đặt một lần, áp dụng cho mọi khung chữ trong cụm này."
+              renderSourceControls={renderSourceControls}
+              sourceConfig={clusterSourceConfig}
+            />
+          ) : null}
+
+          {textSlots.map((row, index) => {
+            const overrideOpen = overrideSlotIds.has(row.slot.slotId);
+            return (
+              <BindSlotRow key={row.slot.slotId} title={`${index + 1}. ${row.label}`}>
+                <BindingFieldPicker
+                  value={row.bindingValue}
+                  options={row.pickerOptions}
+                  onSelect={(value) => onTextBindingChange(row.slot, value)}
+                />
+                <button
+                  type="button"
+                  onClick={() => toggleOverrideSlot(row.slot.slotId)}
+                  className="flex items-center gap-1 self-start text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                  aria-expanded={overrideOpen}
+                >
+                  {overrideOpen ? (
+                    <ChevronDown className="size-3" />
+                  ) : (
+                    <ChevronRight className="size-3" />
+                  )}
+                  Tùy chỉnh nguồn riêng
+                </button>
+                {overrideOpen ? (
+                  <BindSlotSourcePanel
+                    slots={[row.slot]}
+                    title="Nguồn riêng cho khung này"
+                    description="Chỉ áp dụng cho khung chữ này, không ảnh hưởng cả cụm."
+                    renderSourceControls={renderSourceControls}
+                    sourceConfig={slotSourceConfig(row.slot)}
+                    exactScope
+                  />
+                ) : null}
+              </BindSlotRow>
+            );
+          })}
         </div>
       ) : null}
 

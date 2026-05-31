@@ -46,6 +46,8 @@ export interface GenerateInput {
   selectedSheet?: string;
   filterMoHinh?: string;
   filterPhongCach?: string;
+  filterPhanLoai?: string;
+  filterHuongDi?: string;
   pageConfigs?: Record<string, GeneratePageConfig>;
 }
 
@@ -67,6 +69,8 @@ export function generatePackJob(input: GenerateInput): GenerationJob {
     selectedSheet,
     filterMoHinh,
     filterPhongCach,
+    filterPhanLoai,
+    filterHuongDi,
     pageConfigs = {},
   } = input;
 
@@ -86,6 +90,8 @@ export function generatePackJob(input: GenerateInput): GenerationJob {
       selectedSheet,
       filterMoHinh,
       filterPhongCach,
+      filterPhanLoai,
+      filterHuongDi,
       pageConfigs,
     );
   }
@@ -253,6 +259,8 @@ function generateEntityBindJob(
       selectedSheet: pageConfig?.selectedSheet ?? selectedSheet ?? "__all__",
       filterMoHinh: pageConfig?.filterMoHinh ?? filterMoHinh ?? "__all__",
       filterPhongCach: pageConfig?.filterPhongCach ?? filterPhongCach ?? "__all__",
+      filterPhanLoai: pageConfig?.filterPhanLoai ?? filterPhanLoai ?? "__all__",
+      filterHuongDi: pageConfig?.filterHuongDi ?? filterHuongDi ?? "__all__",
       prioritizePartner: pageConfig?.prioritizePartner ?? prioritizePartner,
       onlyPartner: pageOnlyPartner,
       partnerQuotaPerPage: pageOnlyPartner
@@ -272,6 +280,18 @@ function generateEntityBindJob(
     if (config.filterPhongCach !== "__all__" && entity.categorySub !== config.filterPhongCach) {
       return false;
     }
+    if (
+      config.filterPhanLoai !== "__all__" &&
+      String(entity.metadata?.phan_loai ?? "") !== config.filterPhanLoai
+    ) {
+      return false;
+    }
+    if (
+      config.filterHuongDi !== "__all__" &&
+      String(entity.metadata?.direction ?? "") !== config.filterHuongDi
+    ) {
+      return false;
+    }
     return true;
   };
 
@@ -285,9 +305,11 @@ function generateEntityBindJob(
     const cached = pageOrderCache.get(templateId);
     if (cached) return cached;
     const config = resolvePageConfig(templateId);
-    const scopedEntityPool = templateHasSlotSourceConfig(pageMap.get(templateId))
-      ? entityPool.slice()
-      : entityPool.filter((entity) => matchesPageSource(entity, config));
+    // Page/global source filter is ALWAYS the base pool. Per-cluster slot
+    // filters (dataSourceConfig) narrow this further inside
+    // buildEntityBindingTargets, so the two layer instead of being mutually
+    // exclusive. A cluster without its own filter still respects the page filter.
+    const scopedEntityPool = entityPool.filter((entity) => matchesPageSource(entity, config));
     const source = config.onlyPartner
       ? scopedEntityPool.filter((entity) => entity.partnerFlag)
       : scopedEntityPool.slice();

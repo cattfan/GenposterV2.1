@@ -50,12 +50,12 @@ export function GenerateWorkspaceShell({
 
       {/* Desktop: 3-column grid */}
       <div className="hidden grid-cols-12 gap-4 lg:grid">
-        <aside className="col-span-3 max-h-[calc(100vh-2rem)] self-start overflow-hidden lg:sticky lg:top-4">
-          <ScrollArea className="h-full max-h-[calc(100vh-2rem)] pr-3">{configPanel}</ScrollArea>
+        <aside className="col-span-3 h-[calc(100vh-2rem)] self-start overflow-hidden lg:sticky lg:top-4">
+          <ScrollArea className="h-full pr-3">{configPanel}</ScrollArea>
         </aside>
         <main className="col-span-6 min-w-0">{canvasPanel}</main>
-        <aside className="col-span-3 max-h-[calc(100vh-2rem)] self-start overflow-hidden lg:sticky lg:top-4">
-          <ScrollArea className="h-full max-h-[calc(100vh-2rem)] pr-3">{bindPanel}</ScrollArea>
+        <aside className="col-span-3 h-[calc(100vh-2rem)] self-start overflow-hidden lg:sticky lg:top-4">
+          <ScrollArea className="h-full pr-3">{bindPanel}</ScrollArea>
         </aside>
       </div>
 

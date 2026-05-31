@@ -1177,6 +1177,7 @@ export function PackTabContent({
   const applySlotSourcePatch = (
     slots: Slot[],
     patch: Partial<NonNullable<Slot["dataSourceConfig"]>>,
+    options?: { exactScope?: boolean },
   ) => {
     if (!activePage) return;
     const pageTemplateId = activePage.pageTemplateId;
@@ -1188,8 +1189,12 @@ export function PackTabContent({
       if (!current) return prev;
 
       const isBindable = (slot: Slot) => getSlotBindMode(slot, current) !== null;
+      // exactScope: write only the passed slots (per-field override). Default:
+      // expand to the whole cluster scope (shared source behaviour).
       const targetIds = new Set(
-        resolveClusterSourceScopeSlots(current, slots, isBindable).map((slot) => slot.slotId),
+        options?.exactScope
+          ? slots.map((slot) => slot.slotId)
+          : resolveClusterSourceScopeSlots(current, slots, isBindable).map((slot) => slot.slotId),
       );
       patchedTargetIds = targetIds;
 
@@ -1448,12 +1453,13 @@ export function PackTabContent({
   const renderSourceControls = (
     slots: Slot[],
     sourceConfig: ResolvedGeneratePageConfig,
-    options?: { title?: string; description?: string },
+    options?: { title?: string; description?: string; exactScope?: boolean },
   ) => {
     const moOptions = sourceMoHinhOptions(sourceConfig);
     const phongOptions = sourcePhongCachOptions(sourceConfig);
     const phanLoaiOptions = sourcePhanLoaiOptions(sourceConfig);
     const huongDiOptions = sourceHuongDiOptions(sourceConfig);
+    const scope = options?.exactScope ? { exactScope: true } : undefined;
     return (
       <div className="grid gap-2 rounded-md border bg-background/70 p-2">
         {options?.title && (
@@ -1468,7 +1474,7 @@ export function PackTabContent({
           <Label className="text-xs">Sheet</Label>
           <Select
             value={sourceConfig.selectedSheet}
-            onValueChange={(sheetName) => applySlotSourcePatch(slots, { selectedSheet: sheetName })}
+            onValueChange={(sheetName) => applySlotSourcePatch(slots, { selectedSheet: sheetName }, scope)}
           >
             <SelectTrigger className="h-8">
               <SelectValue />
@@ -1487,7 +1493,7 @@ export function PackTabContent({
           <Label className="text-xs">Mô hình</Label>
           <Select
             value={sourceConfig.filterMoHinh}
-            onValueChange={(value) => applySlotSourcePatch(slots, { filterMoHinh: value })}
+            onValueChange={(value) => applySlotSourcePatch(slots, { filterMoHinh: value }, scope)}
             disabled={moOptions.length === 0}
           >
             <SelectTrigger className="h-8" disabled={moOptions.length === 0}>
@@ -1507,7 +1513,7 @@ export function PackTabContent({
           <Label className="text-xs">Phong cách</Label>
           <Select
             value={sourceConfig.filterPhongCach}
-            onValueChange={(value) => applySlotSourcePatch(slots, { filterPhongCach: value })}
+            onValueChange={(value) => applySlotSourcePatch(slots, { filterPhongCach: value }, scope)}
             disabled={phongOptions.length === 0}
           >
             <SelectTrigger className="h-8" disabled={phongOptions.length === 0}>
@@ -1528,7 +1534,7 @@ export function PackTabContent({
           <Label className="text-xs">Loại hình khách</Label>
           <Select
             value={sourceConfig.filterPhanLoai ?? ALL_VALUE}
-            onValueChange={(value) => applySlotSourcePatch(slots, { filterPhanLoai: value })}
+            onValueChange={(value) => applySlotSourcePatch(slots, { filterPhanLoai: value }, scope)}
             disabled={phanLoaiOptions.length === 0}
           >
             <SelectTrigger className="h-8" disabled={phanLoaiOptions.length === 0}>
@@ -1548,7 +1554,7 @@ export function PackTabContent({
           <Label className="text-xs">Hướng đi / Khu vực</Label>
           <Select
             value={sourceConfig.filterHuongDi ?? ALL_VALUE}
-            onValueChange={(value) => applySlotSourcePatch(slots, { filterHuongDi: value })}
+            onValueChange={(value) => applySlotSourcePatch(slots, { filterHuongDi: value }, scope)}
             disabled={huongDiOptions.length === 0}
           >
             <SelectTrigger className="h-8" disabled={huongDiOptions.length === 0}>

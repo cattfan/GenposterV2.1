@@ -21,6 +21,7 @@ import { GlobalCommandPaletteHost } from "@/components/CommandPalette";
 import { ShortcutsDialog, useShortcutsDialogHotkey } from "@/components/ux";
 import { getSettings } from "@/storage/settings";
 import { ensureExtendedFontsLoaded } from "@/features/editor/fonts";
+import { registerAllCustomFonts } from "@/features/editor/customFonts";
 
 const THEME_STORAGE_KEY = "cpg_theme_mode";
 
@@ -190,6 +191,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     // ở route Editor. Cần thiết để Pack/Generate/Templates preview render
     // đúng font khi import JSON từ máy khác.
     ensureExtendedFontsLoaded();
+    // Register custom/imported fonts app-wide so bundled-pack fonts render on
+    // every route (Templates / Generate / preview / export), not just in the editor.
+    void registerAllCustomFonts();
   }, []);
 
   // Load persisted collapsed state after mount (client-only).

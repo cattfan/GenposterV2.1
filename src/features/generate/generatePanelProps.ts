@@ -7,7 +7,7 @@ export type ResolvedGeneratePageConfig = Required<GeneratePageConfig>;
 export type SourceControlsRenderer = (
   slots: import("@/models").Slot[],
   sourceConfig: ResolvedGeneratePageConfig,
-  options?: { title?: string; description?: string },
+  options?: { title?: string; description?: string; exactScope?: boolean },
 ) => ReactNode;
 
 export interface GeneratePageTabItem {

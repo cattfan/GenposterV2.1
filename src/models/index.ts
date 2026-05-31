@@ -198,6 +198,8 @@ export interface Slot {
     selectedSheet?: string;
     filterMoHinh?: string;
     filterPhongCach?: string;
+    filterPhanLoai?: string;
+    filterHuongDi?: string;
   };
 }
 

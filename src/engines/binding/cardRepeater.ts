@@ -58,9 +58,13 @@ function entityMatchesSlotSource(entity: Entity, slot: Slot): boolean {
   const selectedSheet = slotSourceValue(config.selectedSheet);
   const filterMoHinh = slotSourceValue(config.filterMoHinh);
   const filterPhongCach = slotSourceValue(config.filterPhongCach);
+  const filterPhanLoai = slotSourceValue(config.filterPhanLoai);
+  const filterHuongDi = slotSourceValue(config.filterHuongDi);
   if (selectedSheet && entity.sheetName !== selectedSheet) return false;
   if (filterMoHinh && entity.categoryMain !== filterMoHinh) return false;
   if (filterPhongCach && entity.categorySub !== filterPhongCach) return false;
+  if (filterPhanLoai && String(entity.metadata?.phan_loai ?? "") !== filterPhanLoai) return false;
+  if (filterHuongDi && String(entity.metadata?.direction ?? "") !== filterHuongDi) return false;
   return true;
 }
 
